@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { FeatureContext } from "../features/types";
-import { resolveSeries } from "../palette";
+import { PALETTE, resolveSeries } from "../palette";
 import { compactTokens, formatPercent } from "../format";
 import { glyph, SPARK_LEVELS } from "../glyphs";
 
@@ -28,7 +28,7 @@ export interface TimeSeriesOptions {
 /** Recorded buckets share one scale; null stays a gap and narrow views follow the selected point. */
 export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], rows: readonly TimelineRow[], width: number, selected: number, options: TimeSeriesOptions = {}): string[] {
 	const w = Math.max(1, Math.floor(width));
-	if (!axis.length || !rows.length) return wrapTextWithAnsi(ctx.theme.fg("dim", "No recorded chart observations in this range."), w);
+	if (!axis.length || !rows.length) return wrapTextWithAnsi(ctx.theme.fg(PALETTE.muted, "No recorded chart observations in this range."), w);
 	const preset = ctx.theme.getSymbolPreset();
 	const format = options.format ?? (options.percent ? value => formatPercent(value, 0) : compactTokens);
 	const active = rows.filter(row => !options.hidden?.has(row.key));
@@ -53,11 +53,13 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 	const start = Math.max(0, Math.min(axis.length - slots, selected - Math.floor(slots / 2)));
 	const cellWidth = Math.max(1, Math.floor(available / slots));
 	const plotWidth = slots * cellWidth;
+	const markWidth = Math.min(3, Math.max(1, cellWidth - 1));
+	const inset = Math.floor((cellWidth - markWidth) / 2);
 	const height = Math.max(3, Math.min(10, Math.floor(options.height ?? 6)));
 	const date = new Date(axis[selected]).toISOString().slice(5, 16).replace("T", " ");
-	const lines = wrapTextWithAnsi(ctx.theme.fg("dim", `${options.unit ? options.unit + " · " : ""}${date} UTC · ${start + 1}–${start + slots}/${axis.length} buckets`), w);
-	if (!active.length) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", "All series hidden; select a legend and toggle visibility to restore it."), w));
-	else if (!measured || max === 0) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", measured ? "No positive measured values in this range." : "No readings in the visible series; gaps are not zero."), w));
+	const lines = wrapTextWithAnsi(ctx.theme.fg(PALETTE.muted, `${options.unit ? options.unit + " · " : ""}${date} UTC · ${start + 1}–${start + slots}/${axis.length} buckets`), w);
+	if (!active.length) lines.push(...wrapTextWithAnsi(ctx.theme.fg(PALETTE.muted, "All series hidden; select a legend and toggle visibility to restore it."), w));
+	else if (!measured || max === 0) lines.push(...wrapTextWithAnsi(ctx.theme.fg(PALETTE.muted, measured ? "No positive measured values in this range." : "No readings in the visible series; gaps are not zero."), w));
 	else {
 		const grid = Array.from({ length: height }, () => Array<string>(plotWidth).fill(" "));
 		for (let slot = 0; slot < slots; slot++) {
@@ -81,7 +83,7 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 					if (coverage <= 0) continue;
 					const level = Math.max(0, Math.min(SPARK_LEVELS - 1, Math.ceil(coverage / (high - low) * SPARK_LEVELS) - 1));
 					const mark = ctx.theme.fg(color, glyph(preset, "sparkRamp", level));
-					for (let x = slot * cellWidth; x < (slot + 1) * cellWidth; x++) grid[y][x] = mark;
+					for (let x = slot * cellWidth + inset; x < slot * cellWidth + inset + markWidth; x++) grid[y][x] = mark;
 				}
 			} else {
 				for (let r = 0; r < rows.length; r++) {
@@ -91,28 +93,29 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 					if (value === null || value === undefined) continue;
 					const y = height - 1 - Math.max(0, Math.min(height - 1, Math.round(value / max * (height - 1))));
 					const mark = ctx.theme.fg(colors[row.colorIndex ?? r], glyph(preset, options.cumulative ? "pointFilled" : "pointHollow"));
-					if (options.cumulative) for (let x = slot * cellWidth; x < (slot + 1) * cellWidth; x++) grid[y][x] = mark;
-					else grid[y][slot * cellWidth + Math.floor((cellWidth - 1) / 2)] = mark;
+					const x = slot * cellWidth + Math.floor((cellWidth - 1) / 2);
+					grid[y][x] = mark;
 				}
 			}
 		}
 		for (let y = 0; y < height; y++) {
 			const label = y === 0 ? format(max) : y === height - 1 ? format(0) : y === Math.floor((height - 1) / 2) ? format(max * (height - 1 - y) / (height - 1)) : "";
-			lines.push(ctx.theme.fg("dim", truncateToWidth(label, yWidth).padStart(yWidth) + " " + glyph(preset, "plotSpine")) + grid[y].join(""));
+			lines.push(ctx.theme.fg(PALETTE.muted, truncateToWidth(label, yWidth).padStart(yWidth) + " " + glyph(preset, "plotSpine")) + grid[y].join(""));
 		}
 		lines.push(" ".repeat(yWidth + 2 + (selected - start) * cellWidth + Math.floor((cellWidth - 1) / 2)) + ctx.theme.fg("accent", glyph(preset, "plotCursor")));
 	}
 	const first = new Date(axis[start]).toISOString().slice(5, 16).replace("T", " ");
 	const last = new Date(axis[start + slots - 1]).toISOString().slice(5, 16).replace("T", " ");
-	lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", `${first} → ${last} UTC`), w));
+	lines.push(...wrapTextWithAnsi(ctx.theme.fg(PALETTE.muted, `${first} → ${last} UTC`), w));
 	if (options.legend !== false) for (let r = 0; r < rows.length; r++) {
 		const row = rows[r], hidden = options.hidden?.has(row.key);
 		const value = row.values[selected];
-		const detail = (options.formatValue?.(row.key, value, selected) ?? (value === null || value === undefined ? "—" : format(value))) + (row.legendValue === undefined ? "" : ` · ${row.legendValue}`);
-		const prefix = `${row.key === options.selectedKey ? glyph(preset, "rowCursor") : " "} ${ctx.theme.fg(hidden ? "dim" : colors[row.colorIndex ?? r], glyph(preset, "legendKey"))} `;
-		const label = truncateToWidth((hidden ? "off " : "") + row.label, Math.max(1, w - visibleWidth(prefix) - visibleWidth(detail) - 2));
-		const line = prefix + label + " ".repeat(Math.max(1, w - visibleWidth(prefix + label) - visibleWidth(detail))) + detail;
-		lines.push(hidden ? ctx.theme.fg("dim", line) : line);
+		const detail = hidden ? "hidden" : (options.formatValue?.(row.key, value, selected) ?? (value === null || value === undefined ? "—" : format(value))) + (row.legendValue === undefined ? "" : ` · ${row.legendValue}`);
+		const prefix = `${row.key === options.selectedKey ? glyph(preset, "rowCursor") : " "} ${ctx.theme.fg(hidden ? PALETTE.muted : colors[row.colorIndex ?? r], glyph(preset, "legendKey"))} `;
+		const labelWidth = Math.max(1, Math.min(36, w - visibleWidth(prefix) - visibleWidth(detail) - 2));
+		const label = truncateToWidth(row.label, labelWidth);
+		const line = prefix + label + " ".repeat(Math.max(2, labelWidth - visibleWidth(label) + 2)) + ctx.theme.bold(detail);
+		lines.push(hidden ? ctx.theme.fg(PALETTE.muted, line) : line);
 	}
 	return lines.map(line => truncateToWidth(line, w));
 }

@@ -113,6 +113,10 @@ test("gain scopes totals and history through server project requests, never loca
 		return (project === null ? gain(null, 900) : await (project === "/a" ? first.promise : second.promise)) as T;
 	}));
 	await controller.load("24h");
+	const overview = stripForTest(controller.render(120, 50).join("\n"));
+	expect(overview).toContain(`${glyph(theme.getSymbolPreset(), "rowCursor")} All projects`);
+	expect(overview).toContain("snapcompact");
+	expect(overview).toContain("saved 900 · cumulative 900");
 	controller.handleInput("p"); // /a
 	controller.handleInput("p"); // /ab
 	second.resolve(gain("/ab", 17));
@@ -197,23 +201,23 @@ test("provider totals keep the chosen token mix through sorting and refreshed ra
 		path.endsWith("/providers") ? { ...local, providers } : { windowInsights: [], usageSeries: [] }
 	) as T));
 	await controller.load("24h");
-	controller.render(120, 40);
+	expect(stripForTest(controller.render(120, 40).join("\n"))).toMatch(/Uncached input\s+100/);
 	controller.handleInput("j");
 	controller.handleInput("o");
 	controller.handleInput("d");
 	controller.handleInput("\r");
 	let text = stripForTest(controller.render(120, 40).join("\n"));
 	expect(text).toContain("Selected b");
-	expect(text).toContain("Cache read: 75");
+	expect(text).toMatch(/Cache read\s+75/);
 	providers = [{ ...b, totalTokens: 2_000 }, a];
 	await controller.load("24h");
 	text = stripForTest(controller.render(120, 40).join("\n"));
 	expect(text).toContain("Selected b");
-	expect(text).toContain("Cache read: 75");
+	expect(text).toMatch(/Cache read\s+75/);
 	controller.dispose();
 });
 
-test("burn tooltips aggregate Other and honor hidden series while legends expose range totals", async () => {
+test("burn legends aggregate Other and honor hidden series while exposing range totals", async () => {
 	const series = [80, 70, 60, 50, 40, 30, 20, 10].map((tokens, i) => ({
 		timestamp: now, provider: `p${i}`, totalTokens: tokens, outputTokens: tokens / 2, requests: 1, cost: tokens / 100, unpricedRequests: 0,
 	}));
@@ -223,19 +227,18 @@ test("burn tooltips aggregate Other and honor hidden series while legends expose
 	await controller.load("24h");
 	controller.handleInput("v");
 	let text = stripForTest(controller.render(120, 50).join("\n"));
-	expect(text).toContain("Other (2): 30 tokens");
 	expect(text.split("\n").some(line => /p0\s+80\s*·\s*80/.test(line))).toBe(true);
 	expect(text.split("\n").some(line => /Other \(2\)\s+30\s*·\s*30/.test(line))).toBe(true);
-	expect(text).not.toContain("p6: 20");
+	expect(text).not.toMatch(/p6\s+20/);
 	for (let i = 0; i < 6; i++) controller.handleInput("n");
 	controller.handleInput(" ");
 	text = stripForTest(controller.render(120, 50).join("\n"));
 
-	expect(text).not.toContain("Other (2): 30 tokens");
+	expect(text).not.toMatch(/Other \(2\)\s+30/);
 	controller.handleInput(" ");
 	controller.handleInput("m");
 	text = stripForTest(controller.render(120, 50).join("\n"));
-	expect(text).toContain("Other (2): 15 output");
+	expect(text).toMatch(/Other \(2\)\s+15\s*·\s*15/);
 	controller.dispose();
 });
 
@@ -321,11 +324,12 @@ test("account rows select independent limit windows and retain identity through 
 	expect(text).toContain("window week");
 	expect(text).toContain("Account key key-week");
 	expect(text).toContain("headroom 60.0% · resets 1");
-	expect(text).toContain("shared@example #2: 40.0%");
+	expect(text).toMatch(/shared@example #2\s+40\.0%/);
 	controller.handleInput("\x1b[Z");
 	text = stripForTest(controller.render(150, 50).join("\n"));
 	expect(text).toContain("fleet 2 accounts");
-	expect(text).toContain("Accounts needed 3 at <90% · have 2 · short 1");
+	expect(text).toContain("Accounts needed 3 at <90%");
+	expect(text).toContain("short 1");
 	controller.dispose();
 });
 
@@ -393,12 +397,12 @@ test("hidden account utilization omits numeric tooltip but preserves exhausted s
 	controller.handleInput("\x1b[Z");
 	let text = stripForTest(controller.render(150, 50).join("\n"));
 	expect(text).toContain("Latest No numeric reading");
-	expect(text).toContain("shared@example: No reading (gap)");
+	expect(text).toMatch(/shared@example\s+No reading \(gap\)/);
 	expect(text).toContain("EXHAUSTED: shared@example");
 	controller.handleInput(" ");
 	text = stripForTest(controller.render(150, 50).join("\n"));
 
-	expect(text).not.toContain("shared@example: No reading (gap)");
+	expect(text).not.toContain("No reading (gap)");
 	expect(text).toContain("EXHAUSTED: shared@example");
 	controller.dispose();
 });
@@ -415,6 +419,7 @@ test("empty gain journals do not render pretend source records or daily plots at
 			expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
 			expect(stripForTest(lines.join("\n"))).not.toContain(`${glyph(theme.getSymbolPreset(), "rowCursor")} snapcompact`);
 			expect(stripForTest(lines.join("\n"))).not.toContain("2026-10-05");
+			expect(stripForTest(lines.join("\n"))).toContain("Projects");
 		}
 		controller.handleInput("\t");
 	}

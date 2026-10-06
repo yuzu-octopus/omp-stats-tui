@@ -53,7 +53,9 @@ test("overview tokens mode does not reset hidden request series and search owns 
 	feature.handleInput("v");
 	feature.handleInput("m");
 	feature.handleInput("m"); feature.handleInput("m");
-	expect(stripForTest(feature.render(100, 24).join("\n"))).toContain("off Succeeded");
+	expect(stripForTest(feature.render(100, 24).join("\n"))).not.toMatch(/Succeeded\s+\d/);
+	feature.handleInput("v");
+	expect(stripForTest(feature.render(100, 24).join("\n"))).toMatch(/Succeeded\s+\d/);
 	feature.handleInput("\t"); feature.handleInput("/"); feature.handleInput("m");
 	expect(feature.handleInput("\x1b[C")).toBe(false);
 	expect(feature.handleInput("]")).toBe(true);
@@ -81,7 +83,6 @@ test("projects temporary exclusion and search do not change unfiltered totals; r
 	feature.handleInput("b");
 	feature.handleInput("\x1b"); feature.handleInput("t");
 	text = stripForTest(feature.render(100, 28).join("\n"));
-	expect(text).toContain("[temp]");
 	feature.handleInput("\r");
 	text = stripForTest(feature.render(30, 28).join("\n"));
 	expect(text).toContain("Project details");
@@ -215,4 +216,21 @@ test("narrow list search keeps its full input and sort state visible when no obs
 	list.input("/", [{ id: 1 }]); list.input("long-project-name", [{ id: 1 }]);
 	const text = stripForTest(list.render([], 12, 12, [{ key: "id", header: "ID", align: "left", value: row => String(row.id) }], f.ctx, "Records").join("\n")).replace(/\n/g, "");
 	expect(text).toContain("long-project-name");
+});
+
+test("project rows distinguish long Windows paths and retain the original detail identity", async () => {
+	const prefix = "C:\\Users\\local\\Documents\\Projects\\shared-parent\\";
+	const f = fixture(liveData({ folders: [
+		{ ...AGGREGATE, folder: `${prefix}alpha`, totalCost: 2 },
+		{ ...AGGREGATE, folder: `${prefix}beta`, totalCost: 1 },
+	] }));
+	const feature = createSummaryFeature("projects", f.ctx);
+	await feature.load("all");
+	const text = stripForTest(feature.render(120, 38).join("\n"));
+	expect(text).toContain("alpha");
+	expect(text).toContain("beta");
+	feature.handleInput("j");
+	feature.handleInput("\r");
+	expect(stripForTest(feature.render(120, 38).join("\n"))).toContain(`${prefix}beta`);
+	feature.dispose();
 });

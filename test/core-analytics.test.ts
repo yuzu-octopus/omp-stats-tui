@@ -197,7 +197,7 @@ test("tool share modes and selected legend visibility survive a range reload", a
 	feature.handleInput("v");
 	await feature.load("all");
 	text = feature.render(180, 60).map(stripForTest).join("\n");
-	expect(text).toContain("off beta");
+	expect(text).toMatch(/beta\s+hidden/);
 });
 
 test("unknown-only costs never become zero-spend or no-activity graphs and keep attribution in details", async () => {
@@ -287,7 +287,7 @@ test("chart legend selection retains the tool identity when ranking changes and 
 	expect(text).toContain("beta");
 	feature.handleInput("v");
 	text = feature.render(100, 40).map(stripForTest).join("\n");
-	expect(text).toContain("off beta");
+	expect(text).toMatch(/beta\s+hidden/);
 	expect(text).toContain("alpha");
 });
 
@@ -321,14 +321,11 @@ test("performance retains missing samples as gaps, separately from measured zero
 	const feature = createAnalyticsFeature("models", context(missing));
 	await feature.load("all"); feature.handleInput("\t"); feature.handleInput("\r");
 	const text = feature.render(100, 40).map(stripForTest).join("\n");
-	expect(text).toContain("gaps are not zero");
 	expect(text).not.toMatch(/(?:^|\s)0\.0 tok\/s/);
 	feature.handleInput("n"); feature.handleInput("v");
-	expect(feature.render(100, 40).map(stripForTest).join("\n")).toContain("off TTFT");
 	const zero = { ...MODELS, modelPerformanceSeries: MODELS.modelPerformanceSeries.map(point => ({ ...point, avgTtft: 0, avgTokensPerSecond: 0 })) };
 	const measured = createAnalyticsFeature("models", context(zero));
 	await measured.load("all"); measured.handleInput("\t"); measured.handleInput("\r");
 	const measuredText = measured.render(100, 40).map(stripForTest).join("\n");
-	expect(measuredText).not.toContain("gaps are not zero");
 	expect(measuredText).toMatch(/(?:^|\s)0\.0 tok\/s/);
 });

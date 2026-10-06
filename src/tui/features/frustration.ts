@@ -5,7 +5,7 @@ import { formatCost, formatElapsed, formatInteger, formatPercent } from "../form
 import { resolveSeries, SELECTION_BG } from "../palette";
 import { activeModelClass, classTotals, familyKey, filterFrustrationRows, fraction, FRUSTRATION_SORTS, layerFraction, MIN_MESSAGES, mostlyRegex, sortFrustrationRows, type FrustrationLayer, type FrustrationSort } from "./frustration-data";
 import type { FeatureContext, FeatureController } from "./types";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "./presentation";
+import { dashboardPanels, dataTable, emptyState, focusTabs, metricGrid, sectionHeading } from "./presentation";
 import { glyph } from "../glyphs";
 
 // Upstream's server.ts and client/api.ts require this exact explicit-action header.
@@ -224,7 +224,7 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 					{ label: "Judge coverage", value: rate(overall.judged, overall.messages), hint: `regex ${formatInteger(overall.messages - overall.judged)}` },
 				]));
 			}
-			if (loading) add(fg("dim", data ? "Refreshing cached metrics…" : "Loading cached metrics…"));
+			if (loading) add(fg("muted", data ? "Refreshing cached metrics…" : "Loading cached metrics…"));
 			if (error) add(fg("error", `${data ? "Cached data retained; refresh failed: " : "Unable to read metrics: "}${error}`));
 			if (dataRange && dataRange !== range) add(fg("warning", `Stale ${dataRange} metrics · requested ${range}${loading ? " loading" : ""}`));
 			if (job) {
@@ -233,11 +233,11 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 				if (job.state === "running") {
 					const completed = Math.min(1, fraction(job.done + job.failed, job.total));
 					const cells = Math.max(1, Math.min(20, w - 10));
-					add(Array.from({ length: cells }, (_, i) => fg(i < completed * cells ? "success" : "dim", glyph(ctx.theme.getSymbolPreset(), i < completed * cells ? "barFill" : "barEmpty"))).join("") + ` ${formatPercent(completed)}`);
+					add(Array.from({ length: cells }, (_, i) => fg(i < completed * cells ? "success" : "muted", glyph(ctx.theme.getSymbolPreset(), i < completed * cells ? "barFill" : "barEmpty"))).join("") + ` ${formatPercent(completed)}`);
 					add(`${job.concurrency} in flight${job.startedAt !== null && job.done > 0 ? ` · ${(job.done / Math.max(1, (ctx.now() - job.startedAt) / 1000)).toFixed(1)}/s` : ""} · x ${cancelling ? "cancelling…" : "cancel run"}${job.judge ? ` · ${job.judge}` : ""}`);
-				} else add(fg("dim", `j quote/confirm paid classification${job.judge ? ` · ${job.judge}` : ""}`));
+				} else add(fg("muted", `j quote/confirm paid classification${job.judge ? ` · ${job.judge}` : ""}`));
 				if (job.error) add(fg("error", job.error));
-			} else add(fg("dim", "j quote prerequisites · no paid calls on load"));
+			} else add(fg("muted", "j quote prerequisites · no paid calls on load"));
 			if (data && !data.judgeAvailable) add(fg("warning", "Regex + cached verdicts · judge not registered · j prerequisites"));
 			if (actionError) add(fg("error", actionError));
 			if (copyNotice) add(fg("success", copyNotice));
@@ -245,10 +245,9 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 			const { active, families, familyMessages, smallCount, regexCount, chartRows, rows } = population();
 			const selected = rows[selectedIndex];
 			lines.push(...focusTabs(ctx, w, ["Versions", "Families"], focus === "versions" ? 0 : 1));
-			add(fg("dim", w < 60
+			add(fg("muted", w < 60
 				? `Class ${active} [c] · ${showSmall ? "all samples" : "≥50 msgs"} [m] · regex ${hideRegex ? "off" : "on"} [h]`
 				: `Class ${active} [c] · ${showSmall ? "including" : "excluding"} <50 messages (${smallCount} versions) [m] · regex ${hideRegex ? "hidden" : "shown"} (${regexCount}) [h]`));
-			add(fg("dim", focus === "families" ? "Tab versions · ↑/↓ family · Space toggle" : w < 60 ? "↑/↓ select · Enter details · Tab families" : `↑/↓ version · Enter details · Tab families · o/O ${sort} ${descending ? "↓" : "↑"} · v reveal`));
 			if (selected) {
 				add(ctx.theme.bold(fg("accent", `Point ${selectedIndex + 1}/${rows.length}: ${selected.label} · ${formatInteger(selected.messages)} messages${mostlyRegex(selected) ? " · mostly regex" : ""}`)));
 				add(w < 60
@@ -265,66 +264,92 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 				}
 			}
 			const colors = resolveSeries(Math.max(1, families.length), ctx.theme);
-			if (focus === "families") {
-				const slots = Math.max(3, Math.min(10, height - lines.length - 3));
-				const start = Math.max(0, Math.min(Math.max(0, families.length - slots), familyCursor - Math.floor(slots / 2)));
-				lines.push(...dataTable(ctx, w, "Families", [
-					{ key: "family", header: "Family", align: "left" }, { key: "messages", header: "Msgs", align: "right" },
-					{ key: "visible", header: "Shown", align: "right", priority: 1 },
-				], families.slice(start, start + slots).map((family, index) => ({
-					family: fg(colors[(start + index) % colors.length], family), messages: formatInteger(familyMessages.get(family) ?? 0),
-					visible: hiddenFamilies.has(family) ? "off" : "on",
-				})), familyCursor - start));
-				add(fg("dim", `Class messages: ${[...classTotals(data.byModel)].map(([key, messages]) => `${key} ${formatInteger(messages)}`).join(" · ")}`));
-				if (!families.length) add("No model families in this range.");
-				return lines;
-			}
-			if (!rows.length) { add(data.byModel.length ? "No model versions match the filters. c/m/h and family Space change filters." : "No user messages with prose in this range. Try a longer range."); return lines; }
-			if (chartRows.every(row => row.messages > 0 && row.annoyed === 0)) add(fg("dim", "No frustrated messages for these models; all annoyance rates are zero."));
-			lines.push(sectionHeading(ctx, w, "Rates by version", "catalog order · not time", true));
-			const chartIndex = Math.max(0, chartRows.findIndex(row => row.key === selectedKey));
-			const slots = Math.max(1, Math.min(chartRows.length, Math.floor(Math.max(2, w - 9) / 2)));
-			const chartStart = Math.max(0, Math.min(chartRows.length - slots, chartIndex - Math.floor(slots / 2)));
-			const plot = chartRows.slice(chartStart, chartStart + slots);
-			const barWidth = Math.max(1, Math.min(8, Math.floor((w - 9) / slots) - 1));
-			const preset = ctx.theme.getSymbolPreset();
-			const plotHeight = Math.max(3, Math.min(6, Math.floor(height / 6), height - lines.length - 8));
-			const peak = Math.max(0.05, ...plot.map(row => LAYERS.reduce((sum, layer) => sum + (hiddenLayers.has(layer) ? 0 : layerFraction(row, layer)), 0)), ...(trend ? plot.map(row => fraction(row.atAssistant, row.messages)) : []));
-			for (let y = plotHeight - 1; y >= 0; y--) {
-				const threshold = ((y + 0.5) / plotHeight) * peak;
-				let marks = "";
-				for (const [index, row] of plot.entries()) {
-					if (row.messages === 0) {
-						marks += fg("dim", y === 0 ? "–" + " ".repeat(barWidth) : " ".repeat(barWidth + 1));
-						continue;
-					}
-					let top = 0;
-					let mark = " ";
-					let layerToken: "error" | "warning" | "muted" = "muted";
-					for (const layer of LAYERS) {
-						if (hiddenLayers.has(layer)) continue;
-						top += layerFraction(row, layer);
-						if (mark === " " && threshold <= top) { mark = glyph(preset, "barFill"); layerToken = layer === "angry" ? "error" : layer === "assistant" ? "warning" : "muted"; }
-					}
-					const familyIndex = families.indexOf(familyKey(row));
-					if (mostlyRegex(row) && mark !== " " && y % 2 === 0) mark = "/";
-					const trendY = Math.min(plotHeight - 1, Math.floor(fraction(row.atAssistant, row.messages) / peak * plotHeight));
-					const middle = Math.floor(barWidth / 2);
-					let cell = trend && y === trendY
-						? fg(layerToken, mark.repeat(middle)) + ctx.theme.bold(fg("text", "*")) + fg(layerToken, mark.repeat(barWidth - middle - 1))
-						: fg(layerToken, mark.repeat(barWidth));
-					const next = plot[index + 1];
-					const connectorY = next && next.messages > 0 ? Math.min(plotHeight - 1, Math.floor((fraction(row.atAssistant, row.messages) + fraction(next.atAssistant, next.messages)) / (2 * peak) * plotHeight)) : -1;
-					cell += trend && y === connectorY ? fg("text", glyph(preset, "trendFlat")) : fg(colors[Math.max(0, familyIndex) % colors.length], row.key === selectedKey ? glyph(preset, "columnGap") : y === 0 ? glyph(preset, "heatEmpty") : " ");
-					marks += row.key === selectedKey ? ctx.theme.bg(SELECTION_BG.band, cell) : cell;
-				}
-				lines.push(truncateToWidth(`${formatPercent(((y + 1) / plotHeight) * peak, 1).padStart(6)} ${glyph(preset, "columnGap")} ${marks}`, w));
-			}
-			lines.push(truncateToWidth("  0.0%   " + plot.map(row => " ".repeat(Math.floor(barWidth / 2)) + fg(row.key === selectedKey ? "accent" : "dim", glyph(preset, row.key === selectedKey ? "trendUp" : "heatEmpty")) + " ".repeat(barWidth - Math.floor(barWidth / 2))).join(""), w));
-			add(fg("dim", `Versions ${chartStart + 1}–${chartStart + plot.length}/${chartRows.length}: ${plot[0].label} → ${plot[plot.length - 1].label}`));
-			add(LAYERS.map((layer, index) => fg(hiddenLayers.has(layer) ? "dim" : layer === "angry" ? "error" : layer === "assistant" ? "warning" : "muted", `${index + 1} ${hiddenLayers.has(layer) ? "off" : "on"} ${LAYER_LABELS[layer]}`)).join(" · ") + ` · 4 trend ${trend ? "on" : "off"}`);
+			const classRows = data.byModel.filter(row => active === "*" || row.modelClass === active);
+			const classMessages = classRows.reduce((sum, row) => sum + row.messages, 0);
+			const classJudged = classRows.reduce((sum, row) => sum + row.judged, 0);
+			lines.push(...dashboardPanels(ctx, w, [
+				{
+					title: "Rates by version", meta: "catalog order · not time", active: focus === "versions",
+					render: innerWidth => {
+						if (!rows.length) return emptyState(ctx, innerWidth,
+							data!.byModel.length ? "No model versions match the filters" : "No user messages with prose",
+							data!.byModel.length
+								? `${formatInteger(classMessages)} messages available in class ${active}; ${rate(classJudged, classMessages)} judge coverage. ${showSmall ? "Small samples included" : `${smallCount} versions below ${MIN_MESSAGES} messages excluded`}; ${hideRegex ? `${regexCount} mostly-regex versions hidden` : "regex + cached verdicts included"}. ${families.filter(family => hiddenFamilies.has(family)).length} families hidden.`
+								: "There are no indexed user messages with prose in this range. No rate can be estimated from an empty sample.",
+							data!.byModel.length ? "m include small samples · c class · h regex · Tab/Space families" : "Choose a longer range or sync recorded transcripts");
+						const chart: string[] = [];
+						const chartAdd = (text: string) => chart.push(...wrapTextWithAnsi(text, innerWidth));
+						if (chartRows.every(row => row.messages > 0 && row.annoyed === 0)) chartAdd(fg("muted", "No frustrated messages for these models; all annoyance rates are zero."));
+						const chartIndex = Math.max(0, chartRows.findIndex(row => row.key === selectedKey));
+						const slots = Math.max(1, Math.min(chartRows.length, Math.floor(Math.max(2, innerWidth - 9) / 2)));
+						const chartStart = Math.max(0, Math.min(chartRows.length - slots, chartIndex - Math.floor(slots / 2)));
+						const plot = chartRows.slice(chartStart, chartStart + slots);
+						const barWidth = Math.max(1, Math.min(8, Math.floor((innerWidth - 9) / slots) - 1));
+						const preset = ctx.theme.getSymbolPreset();
+						const plotHeight = Math.max(3, Math.min(6, Math.floor(height / 6)));
+						const peak = Math.max(0.05, ...plot.map(row => LAYERS.reduce((sum, layer) => sum + (hiddenLayers.has(layer) ? 0 : layerFraction(row, layer)), 0)), ...(trend ? plot.map(row => fraction(row.atAssistant, row.messages)) : []));
+						for (let y = plotHeight - 1; y >= 0; y--) {
+							const threshold = ((y + 0.5) / plotHeight) * peak;
+							let marks = "";
+							for (const [index, row] of plot.entries()) {
+								if (row.messages === 0) {
+									marks += fg("muted", y === 0 ? "–" + " ".repeat(barWidth) : " ".repeat(barWidth + 1));
+									continue;
+								}
+								let top = 0;
+								let mark = " ";
+								let layerToken: "error" | "warning" | "muted" = "muted";
+								for (const layer of LAYERS) {
+									if (hiddenLayers.has(layer)) continue;
+									top += layerFraction(row, layer);
+									if (mark === " " && threshold <= top) { mark = glyph(preset, "barFill"); layerToken = layer === "angry" ? "error" : layer === "assistant" ? "warning" : "muted"; }
+								}
+								const familyIndex = families.indexOf(familyKey(row));
+								if (mostlyRegex(row) && mark !== " " && y % 2 === 0) mark = "/";
+								const trendY = Math.min(plotHeight - 1, Math.floor(fraction(row.atAssistant, row.messages) / peak * plotHeight));
+								const middle = Math.floor(barWidth / 2);
+								let cell = trend && y === trendY
+									? fg(layerToken, mark.repeat(middle)) + ctx.theme.bold(fg("text", "*")) + fg(layerToken, mark.repeat(barWidth - middle - 1))
+									: fg(layerToken, mark.repeat(barWidth));
+								const next = plot[index + 1];
+								const connectorY = next && next.messages > 0 ? Math.min(plotHeight - 1, Math.floor((fraction(row.atAssistant, row.messages) + fraction(next.atAssistant, next.messages)) / (2 * peak) * plotHeight)) : -1;
+								cell += trend && y === connectorY ? fg("text", glyph(preset, "trendFlat")) : fg(colors[Math.max(0, familyIndex) % colors.length], row.key === selectedKey ? glyph(preset, "columnGap") : y === 0 ? glyph(preset, "heatEmpty") : " ");
+								marks += row.key === selectedKey ? ctx.theme.bg(SELECTION_BG.band, cell) : cell;
+							}
+							chart.push(truncateToWidth(`${formatPercent(((y + 1) / plotHeight) * peak, 1).padStart(6)} ${glyph(preset, "columnGap")} ${marks}`, innerWidth));
+						}
+						chart.push(truncateToWidth("  0.0%   " + plot.map(row => " ".repeat(Math.floor(barWidth / 2)) + fg(row.key === selectedKey ? "accent" : "muted", glyph(preset, row.key === selectedKey ? "trendUp" : "heatEmpty")) + " ".repeat(barWidth - Math.floor(barWidth / 2))).join(""), innerWidth));
+						chartAdd(fg("muted", `Versions ${chartStart + 1}–${chartStart + plot.length}/${chartRows.length}: ${plot[0].label} → ${plot[plot.length - 1].label}`));
+						chartAdd(LAYERS.map((layer, index) => fg(hiddenLayers.has(layer) ? "muted" : layer === "angry" ? "error" : layer === "assistant" ? "warning" : "muted", `${index + 1} ${hiddenLayers.has(layer) ? "off" : "on"} ${LAYER_LABELS[layer]}`)).join(" · ") + ` · 4 trend ${trend ? "on" : "off"}`);
+						return chart;
+					},
+				},
+				{
+					title: "Families & coverage", meta: focus === "families" ? "↑/↓ family · Space toggle" : "Tab to filter", active: focus === "families",
+					render: innerWidth => {
+						const slots = Math.max(3, Math.min(6, families.length));
+						const start = Math.max(0, Math.min(Math.max(0, families.length - slots), familyCursor - Math.floor(slots / 2)));
+						return [
+							...dataTable(ctx, innerWidth, "", [
+								{ key: "family", header: "Family", align: "left" }, { key: "messages", header: "Msgs", align: "right" },
+								{ key: "visible", header: "Shown", align: "right", priority: 1 },
+							], families.slice(start, start + slots).map((family, index) => ({
+								family: fg(colors[(start + index) % colors.length], family), messages: formatInteger(familyMessages.get(family) ?? 0),
+								visible: hiddenFamilies.has(family) ? "off" : "on",
+							})), focus === "families" ? familyCursor - start : undefined),
+							"",
+							`${formatInteger(classMessages)} class messages · ${rate(classJudged, classMessages)} judged`,
+							fg("muted", `${formatInteger(classMessages - classJudged)} regex-only messages; cached verdicts retained.`),
+							fg("muted", `Class messages: ${[...classTotals(data!.byModel)].map(([key, messages]) => `${key} ${formatInteger(messages)}`).join(" · ")}`),
+							fg("muted", "Rates describe recorded messages, not model quality. Small samples can vary sharply."),
+							...(!families.length ? ["No model families in this range."] : []),
+						].flatMap(line => wrapTextWithAnsi(line, innerWidth));
+					},
+				},
+			]));
+			if (!rows.length || focus === "families") return lines;
 			const reachable = Math.min(rows.length, revealed);
-			const pageSize = Math.max(3, Math.min(12, height - lines.length - 3));
+			const pageSize = Math.max(3, Math.min(12, height - lines.length - 4));
 			const tableStart = Math.max(0, Math.min(Math.max(0, reachable - pageSize), selectedIndex - Math.floor(pageSize / 2)));
 			lines.push(...dataTable(ctx, w, "Versions", [
 				{ key: "identity", header: "Model version", align: "left" }, { key: "assistant", header: "Assist", align: "right" },
@@ -334,7 +359,7 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 				identity: `${row.label}${mostlyRegex(row) ? " /" : ""}`, assistant: rate(row.atAssistant, row.messages),
 				messages: formatInteger(row.messages), angry: rate(row.angry, row.messages), judged: rate(row.judged, row.messages), annoyed: rate(row.annoyed, row.messages),
 			})), selectedIndex - tableStart));
-			add(fg("dim", `${reachable}/${rows.length} revealed · ${families.length} families · / mostly regex · v more`));
+			add(fg("muted", `${reachable}/${rows.length} revealed · ↑/↓ version · Enter details · o/O ${sort} ${descending ? "↓" : "↑"} · v more · / mostly regex`));
 			return lines;
 		},
 		handleInput(input) {

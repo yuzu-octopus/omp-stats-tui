@@ -1,41 +1,14 @@
 /**
- * `src/tui/footer.ts` — the panel's key hints, hand-rolled for the ANSI path.
- *
- * WHY HAND-ROLLED. `hintsRow` returns a `NativeNode`, so it is unusable
- * anywhere but the native renderer (F20: `native/overlay.ts:42-51`). `/usage`
- * builds its own hint string and renders it as a single dim span
- * (`overlays/usage-dashboard.ts:926`: `this.#footer.setLines([theme.fg("dim", hint)])`),
- * joining the pieces with `" · "`. `/settings` does the same for its ANSI twin
- * (`overlays/settings-selector.ts:107-145`, `settingsHintsNode`). This module is
- * that same shape, built from `formatKeyHints` so every keycap matches the rest
- * of the host UI rather than being spelled by hand.
- *
- * ONE TONE, NOT TWO. The row is wrapped ONCE in `theme.fg("dim", …)`. The
- * earlier split — dim keys beside muted labels — was this module's own idea,
- * and it is now wrong twice over: it is not what `/usage` does, and a footer is
- * a chrome line, not content. A hint row that competes with the data above it
- * is a chrome line nobody reads. Keycaps and labels are therefore the same
- * weight, and the only thing that separates two hints is the separator.
- *
- * `[`/`]` is the screen switch outside text entry; Ctrl+P/Ctrl+N is available
- * during search. Controllers own Tab/Shift+Tab focus and contextual arrows.
- * The range uses `r`/`R` outside text entry, so search terms remain literal.
- *
- * WHY THE HINTS ARE DATA. A footer built by concatenating strings is a footer
- * that drifts from the keymap: a key gets rebound, the hint does not, and the
- * panel advertises something it no longer does. {@link hintsFor} returns the keys
- * as `KeyName`s, so a test can round-trip every one of them through
- * `panelAction` and fail when a hint names an unbound key.
- *
- * PURE. The hint SET is a function of state; the colouring comes from an
- * injected `Theme`, so the module holds no singleton and loads before theme
- * init. No terminal reads, no data access, no timers.
+ * ANSI footer: host-formatted keycaps, readable neutral ink and state-owned hints.
+ * Close survives width pressure; contextual route controls remain controller-owned.
+ * Theme is injected so this module does not read an uninitialized host singleton.
  */
 
 import { formatKeyHints } from "@oh-my-pi/pi-coding-agent";
 import type { KeyName } from "@oh-my-pi/pi-coding-agent";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { PALETTE } from "./palette";
 
 /** One hint: the keys that do it, and what they do. */
 export interface PanelHint {
@@ -95,9 +68,8 @@ export function hintsFor(mode: HintMode): readonly PanelHint[] {
 /**
  * The footer row.
  *
- * ONE `dim` SPAN for the whole row, `/usage`-style. Hints are separated by a
- * `borderMuted` dot — one step quieter than the text it divides — and every
- * keycap renders through `formatKeyHints` so it looks like a keycap everywhere
+ * One readable muted span; decorative separators stay a step quieter.
+ * Every keycap renders through `formatKeyHints` so it looks like a keycap everywhere
  * else in the host.
  *
  * Hints are dropped WHOLE, never truncated. A hint that ends mid-word is worse
@@ -142,7 +114,7 @@ export function footerHints(
 	if (tail !== undefined) candidates.push([tail]);
 
 	for (const parts of candidates) {
-		const row = theme.fg("dim", parts.map(hint => `${formatKeyHints(hint.keys)} ${hint.label}`).join(separator));
+		const row = theme.fg(PALETTE.muted, parts.map(hint => `${formatKeyHints(hint.keys)} ${hint.label}`).join(separator));
 		if (visibleWidth(row) <= width) return [row];
 	}
 	// Nothing fits: drop the row entirely rather than emit a truncated word.

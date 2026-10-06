@@ -1,11 +1,11 @@
 import { matchesKey, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import { formatDurationMs, formatEstimatedCost, formatInteger } from "@oh-my-pi/omp-stats/client/data/formatters";
+import { formatEstimatedCost, formatInteger } from "@oh-my-pi/omp-stats/client/data/formatters";
 import type { SessionSummary, SessionTrace, TraceToolStat } from "@oh-my-pi/omp-stats/shared-types";
 import type { Range } from "../../data/ranges";
 import type { FeatureContext, FeatureController } from "./types";
 import { ancestors, buildScale, clampViewport, fit, localWindow, overviewViewport, remapViewport, resizeOverview, revealSpan, rowForEntry, spanCells, transcriptRows, visibleTracks, zoomViewport, type AxisMode, type TraceRow, type TraceScale, type Viewport } from "./traces/model";
-import { bounded, clean, renderEntry, renderTimeline, rowLabel, sessionIdentity } from "./traces/render";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "./presentation";
+import { bounded, clean, renderEntry, renderTimeline, rowLabel, sessionIdentity, traceDuration } from "./traces/render";
+import { dashboardPanels, dataTable, emptyState, focusTabs, metricGrid, panel, sectionHeading } from "./presentation";
 import { SPAN_COLORS } from "../palette";
 
 type Focus = "timeline" | "transcript" | "tools" | "children" | "minimap";
@@ -60,7 +60,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 				default: return row.startedAt;
 			}
 		};
-		return sessions.filter(row => !needle || `${row.title ?? ""} ${row.folder} ${row.file.split("/").pop()} ${row.models.join(" ")}`.toLowerCase().includes(needle))
+		return sessions.filter(row => !needle || `${row.title ?? ""} ${row.folder} ${row.file.split(/[\\/]/).pop()} ${row.models.join(" ")}`.toLowerCase().includes(needle))
 			.sort((a, b) => {
 				const av = value(a), bv = value(b);
 				const result = typeof av === "string" && typeof bv === "string" ? av.localeCompare(bv) : Number(av) - Number(bv);
@@ -263,7 +263,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 			const w = Math.max(1, width);
 			const lines: string[] = [];
 			const add = (text: string) => lines.push(...wrapTextWithAnsi(text, w));
-			const hint = (text: string) => add(ctx.theme.fg("dim", text));
+			const hint = (text: string) => add(ctx.theme.fg("muted", text));
 			if (notice) add(ctx.theme.fg("warning", clean(notice)));
 			if (error) add(ctx.theme.fg("error", `Trace read failed: ${clean(error)} · u retry`));
 			if (loading) hint(state?.trace || sessions.length ? "Refreshing recorded data…" : "Loading recorded data…");
@@ -285,29 +285,45 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 					{ label: "Requests", value: sessionsLoaded ? formatInteger(totals.requests) : "–", hint: sessionsLoaded ? `${totals.children} children included` : "waiting for recorded totals" },
 					{ label: "Cost", value: sessionsLoaded ? formatEstimatedCost(totals.cost, totals.unpriced) : "–", hint: "matching candidates only" },
 				]));
-				hint(`↑/↓ select · Enter open · / search · o sort · D reverse · l reveal · + fetch · y copy · u refresh`);
 				hint(`At most 300 recent root candidates · ${Math.min(revealed, all.length)} revealed · ${all.length} matching · ${listSort} ${listDescending ? "↓" : "↑"}`);
 				if (listSearch) add(`Filter: ${clean(listSearch)} · x clear`);
-				const window = localWindow(shown, Math.max(0, index), Math.max(3, height - lines.length - 6));
-				lines.push(...dataTable(ctx, w, "", [
-					{ key: "identity", header: "Session", align: "left" },
-					{ key: "requests", header: "Req", align: "right" },
-					{ key: "duration", header: "Wall", align: "right", priority: 1 },
-					{ key: "cost", header: "Cost", align: "right", priority: 2 },
-					{ key: "children", header: "Child", align: "right", priority: 3 },
-				], window.rows.map(row => ({
-					identity: sessionIdentity(row.title, row.file, row.folder), requests: formatInteger(row.requests),
-					duration: formatDurationMs(row.endedAt - row.startedAt), cost: formatEstimatedCost(row.costTotal, row.unpricedRequests),
-					children: formatInteger(row.subagents),
-				})), index - window.offset));
+				const window = localWindow(shown, Math.max(0, index), Math.max(3, height - lines.length - 7));
 				const selected = all.find(row => row.file === sessionSelected);
-				if (selected) {
-					add(ctx.theme.fg("accent", clean(`Session: ${sessionIdentity(selected.title, selected.file, selected.folder)}`)));
-					hint(clean(`${selected.folder} · ${selected.models.join(", ") || "no recorded models"}`));
-					hint(clean(`${selected.toolCalls} tools · ${formatInteger(selected.totalTokens)} tokens · ${selected.unpricedRequests} unpriced · ${new Date(selected.startedAt).toISOString()}`));
-					hint(clean(`File: ${selected.file}`));
-				}
-				if (!all.length && !loading && !error) add(listSearch ? "No matching sessions; x clears the search." : "No indexed root sessions; s syncs recorded transcripts.");
+				lines.push(...dashboardPanels(ctx, w, [
+					{
+						title: "Recorded sessions", meta: "↑/↓ select · Enter open", active: true,
+						render: innerWidth => all.length ? dataTable(ctx, innerWidth, "", [
+							{ key: "identity", header: "Session", align: "left" },
+							{ key: "requests", header: "Req", align: "right" },
+							{ key: "duration", header: "Wall", align: "right", priority: 1 },
+							{ key: "cost", header: "Cost", align: "right", priority: 2 },
+							{ key: "children", header: "Child", align: "right", priority: 3 },
+						], window.rows.map(row => ({
+							identity: sessionIdentity(row.title, row.file, row.folder), requests: formatInteger(row.requests),
+							duration: traceDuration(row.endedAt - row.startedAt), cost: formatEstimatedCost(row.costTotal, row.unpricedRequests),
+							children: formatInteger(row.subagents),
+						})), index - window.offset) : emptyState(ctx, innerWidth, loading ? "Reading recorded sessions" : error ? "Sessions unavailable" : listSearch ? "No matching sessions" : "No indexed root sessions",
+							loading ? "The recorded session index is loading." : error ? "The recorded index could not be read." : listSearch ? "No recorded candidates match this search." : "Sync recorded transcripts to populate this index.",
+							loading ? undefined : error ? "u retry" : listSearch ? "x clear search" : "s sync"),
+					},
+					{
+						title: "Selected session", meta: selected ? "recorded identity" : "selection context",
+						render: innerWidth => selected ? [
+							ctx.theme.bold(ctx.theme.fg("text", sessionIdentity(selected.title, selected.file, selected.folder))),
+							"",
+							`Wall ${traceDuration(selected.endedAt - selected.startedAt)} · ${formatInteger(selected.requests)} requests`,
+							`${formatInteger(selected.toolCalls)} tools · ${formatInteger(selected.subagents)} child agents`,
+							`${formatInteger(selected.totalTokens)} tokens · ${formatEstimatedCost(selected.costTotal, selected.unpricedRequests)} · ${selected.unpricedRequests} unpriced`,
+							"",
+							ctx.theme.fg("muted", `Started ${new Date(selected.startedAt).toISOString()}`),
+							ctx.theme.fg("muted", `Project: ${clean(selected.folder)}`),
+							ctx.theme.fg("text", `Models: ${clean(selected.models.join(", ") || "no recorded models")}`),
+							"",
+							ctx.theme.fg("muted", `File: ${clean(selected.file)}`),
+						].flatMap(line => wrapTextWithAnsi(line, innerWidth)) : emptyState(ctx, innerWidth, "No session selected", "Select a recorded session to inspect its duration, models and source journal."),
+					},
+				]));
+				hint("/ search · o sort · D reverse · l reveal · + fetch · y copy · u refresh");
 				return bounded(lines, w);
 			}
 			lines.push(sectionHeading(ctx, w, sessionIdentity(state.trace?.title, state.file, state.trace?.cwd), history.length ? `nested ${history.length} · b back` : "b back", true));
@@ -315,19 +331,19 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 			if (!trace) return bounded(lines, w);
 			const summary = trace.summary;
 			lines.push(...metricGrid(ctx, w, [
-				{ label: "Wall time", value: formatDurationMs(summary.wallMs), hint: `${summary.turns} turns · ${summary.subagents} agents`, emphasis: "primary" },
+				{ label: "Wall time", value: traceDuration(summary.wallMs), hint: `${summary.turns} turns · ${summary.subagents} agents`, emphasis: "primary" },
 				{ label: "Requests", value: formatInteger(summary.requests), hint: `${summary.toolCalls} tools · ${formatInteger(summary.totalTokens)} tok` },
 				{ label: "Cost", value: formatEstimatedCost(summary.costTotal, summary.unpricedRequests), hint: `${summary.unpricedRequests} unpriced` },
 			]));
-			hint(`Model ${formatDurationMs(summary.modelMs)} · Tool ${formatDurationMs(summary.toolMs)} · Idle ${formatDurationMs(summary.idleMs)}`);
+			hint(`Model ${traceDuration(summary.modelMs)} · Tool ${traceDuration(summary.toolMs)} · Idle ${traceDuration(summary.idleMs)}`);
 			lines.push(...focusTabs(ctx, w, ["Timeline", "Events", "Tools", "Tracks", "Minimap"], FOCI.indexOf(state.focus)));
 			const selected = selectedRow();
-			if (selected) add(ctx.theme.bold(ctx.theme.fg(selected.span?.isError ? "error" : "accent", clean(`Selected: ${rowLabel(selected, trace.startedAt)}`))));
+			if (selected) add(ctx.theme.bold(ctx.theme.fg(selected.span?.isError ? "error" : selected.span ? SPAN_COLORS[selected.span.kind] : "text", clean(`Selected: ${rowLabel(selected, trace.startedAt)}`))));
 			if (state.search || state.toolFilter) add(`Search: ${clean(state.search) || "all"} · ${rows().filter(row => row.span).length} spans · Tool: ${clean(state.toolFilter) || "all"} · x clear`);
 			if (detail && (selected || unmappedTarget)) {
 				hint("Esc trace · j raw JSON · y copy · o child · O child file");
 				if (unmappedTarget) add(clean(`Journal entry ${unmappedTarget.id} · ${unmappedTarget.file} · no recorded span timing`));
-				lines.push(...renderEntry(unmappedTarget ? null : selected ?? null, entry, entryLoading, entryError, raw, w));
+				lines.push(...panel(ctx, w, "Journal entry", renderEntry(unmappedTarget ? null : selected ?? null, entry, entryLoading, entryError, raw, Math.max(1, w - 4), ctx.theme), { meta: raw ? "raw JSON visible" : "recorded content", active: true }));
 				return bounded(lines, w);
 			}
 			if (state.focus === "timeline" || state.focus === "minimap") {
@@ -348,7 +364,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 					{ key: "duration", header: "Wall", align: "right", priority: 1 }, { key: "track", header: "Track", align: "left", priority: 2 },
 				], window.rows.map(row => ({
 					event: ctx.theme.fg(row.span?.isError ? "error" : row.span ? SPAN_COLORS[row.span.kind] : "muted", clean(`${row.span?.isError ? "ERROR · " : ""}${row.span?.label ?? row.marker?.label}${row.span?.unterminated ? " · pending" : ""}`)),
-					at: `+${formatDurationMs(row.time - trace.startedAt)}`, duration: row.span ? formatDurationMs(row.span.end - row.span.start) : "–", track: clean(row.track.id),
+					at: `+${traceDuration(row.time - trace.startedAt)}`, duration: row.span ? traceDuration(row.span.end - row.span.start) : "–", track: clean(row.track.id),
 				})), index - window.offset));
 				if (!all.length) add("No matching transcript events.");
 			} else if (state.focus === "tools") {
@@ -362,11 +378,11 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 					{ key: "calls", header: "Calls", align: "right", priority: 1 }, { key: "errors", header: "Errors", align: "right", priority: 2 },
 					{ key: "average", header: "Avg", align: "right", priority: 3 }, { key: "max", header: "Max", align: "right", priority: 4 },
 				], window.rows.map(tool => ({
-					tool: clean(tool.tool), total: formatDurationMs(tool.totalMs), calls: formatInteger(tool.calls), errors: formatInteger(tool.errors),
-					average: formatDurationMs(tool.calls ? tool.totalMs / tool.calls : 0), max: formatDurationMs(tool.maxMs),
+					tool: clean(tool.tool), total: traceDuration(tool.totalMs), calls: formatInteger(tool.calls), errors: formatInteger(tool.errors),
+					average: traceDuration(tool.calls ? tool.totalMs / tool.calls : 0), max: traceDuration(tool.maxMs),
 				})), index - window.offset));
 				const tool = tools[index];
-				if (tool) add(clean(`${tool.tool} · ${tool.calls} calls · ${tool.errors} errors · avg ${formatDurationMs(tool.calls ? tool.totalMs / tool.calls : 0)} · max ${formatDurationMs(tool.maxMs)}`));
+				if (tool) add(clean(`${tool.tool} · ${tool.calls} calls · ${tool.errors} errors · avg ${traceDuration(tool.calls ? tool.totalMs / tool.calls : 0)} · max ${traceDuration(tool.maxMs)}`));
 				if (!tools.length) add("No recorded tool calls.");
 			} else {
 				const tracks = trace.tracks;
@@ -380,7 +396,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 				], window.rows.map(track => ({
 					track: clean(`${"  ".repeat(ancestors(tracks, track.id).length)}${state!.collapsed.has(track.id) ? "+" : "−"} ${track.label || track.id} [${track.id}]`),
 					requests: formatInteger(track.spans.filter(span => span.kind === "model").length), tools: formatInteger(track.spans.filter(span => span.kind === "tool").length),
-					time: formatDurationMs(track.spans.reduce((sum, span) => sum + span.end - span.start, 0)),
+					time: traceDuration(track.spans.reduce((sum, span) => sum + span.end - span.start, 0)),
 				})), index - window.offset));
 				const track = tracks[index];
 				if (track) {

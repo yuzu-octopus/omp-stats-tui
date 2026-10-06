@@ -5,7 +5,7 @@ import type { SessionSummary, SessionTrace, TraceSpan, TraceTrack } from "@oh-my
 import { createTracesFeature } from "../src/tui/features/traces";
 import type { FeatureContext } from "../src/tui/features/types";
 import { ancestors, buildLanes, buildScale, fit, overviewViewport, remapViewport, resizeOverview, rowForEntry, spanCells, transcriptRows, visibleTracks, zoomViewport } from "../src/tui/features/traces/model";
-import { renderTimeline } from "../src/tui/features/traces/render";
+import { renderTimeline, sessionIdentity, traceDuration } from "../src/tui/features/traces/render";
 import { glyph } from "../src/tui/glyphs";
 import { SPAN_COLORS } from "../src/tui/palette";
 
@@ -403,13 +403,20 @@ test("model detail retains recorded metrics when the span has no resolved model 
 	controller.dispose();
 });
 
-test("blank root titles use recorded project and session identity without changing open or copy keys", async () => {
+test("blank Windows root titles stay compact and long wall durations preserve open and copy identity", async () => {
+	expect(sessionIdentity("", ROOT, "/isolated/project")).toBe("project · root");
+	expect(sessionIdentity("", String.raw`C:\sessions/mixed\root.jsonl`, String.raw`C:\work/project`)).toBe("project · root");
+	expect(traceDuration(3_600_000)).toBe("1h 0m");
+	expect(traceDuration(null)).not.toBe("0h 0m");
+	const sourceFile = String.raw`C:\Users\recorded\omp\sessions\root.jsonl`;
+	const project = String.raw`C:\work\project`;
+	const wallMs = 2_450_022_700;
 	const recorded: SessionSummary = {
-		file: ROOT, folder: "/isolated/project", title: " \t ",
-		startedAt: START, endedAt: START + 110_000, requests: 4, toolCalls: 2, subagents: 2,
+		file: sourceFile, folder: project, title: " \t ",
+		startedAt: START, endedAt: START + wallMs, requests: 4, toolCalls: 2, subagents: 2,
 		totalTokens: 100, costTotal: 0.002, unpricedRequests: 1, models: ["recorded-model"],
 	};
-	const trace = { ...nestedTrace(), title: "   " };
+	const trace = { ...nestedTrace(), file: sourceFile, cwd: project, title: "   ", summary: { ...nestedTrace().summary, wallMs } };
 	const copies: string[] = [];
 	const opened: string[] = [];
 	const ctx = context();
@@ -425,15 +432,18 @@ test("blank root titles use recorded project and session identity without changi
 		const lines = controller.render(width, 30);
 		expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
 		expect(stripTerminalSequences(lines.join("\n"))).toContain("project · root");
+		expect(stripTerminalSequences(lines.join("\n"))).toContain("680h 33m");
 	}
 	controller.handleInput("y"); await settle();
-	expect(JSON.parse(copies[0]!).file).toBe(ROOT);
+	expect(JSON.parse(copies[0]!).file).toBe(sourceFile);
 	controller.handleInput("\r"); await settle();
-	expect(opened).toEqual([ROOT]);
+	expect(opened).toEqual([sourceFile]);
 	for (const width of [40, 100, 160]) {
 		const lines = controller.render(width, 30);
 		expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
 		expect(stripTerminalSequences(lines[0]!)).toContain("project · root");
+		expect(stripTerminalSequences(lines[0]!)).not.toContain("C:\\Users");
+		expect(stripTerminalSequences(lines.join("\n"))).toContain("680h 33m");
 	}
 	controller.dispose();
 });

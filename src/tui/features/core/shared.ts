@@ -77,7 +77,7 @@ export class ListState<T> {
 	render(rows: readonly T[], width: number, height: number, columns: readonly ListColumn<T>[], ctx: FeatureContext, title: string): string[] {
 		const search = this.editing ? [`Search: ${this.search || "—"}  · Enter/Esc finish · Ctrl-U clear`] : this.search ? [`Search: ${this.search}`] : [];
 		if (!rows.length) return [sectionHeading(ctx, width, title), ...wrap(search, width),
-			...wrap([ctx.theme.fg("dim", this.search ? "No matches. Esc clears search." : "No visible records. Change range or filters.")], width)];
+			...wrap([ctx.theme.fg("muted", this.search ? "No matches. Esc clears search." : "No visible records. Change range or filters.")], width)];
 		const current = this.current(rows)!;
 		const index = rows.indexOf(current);
 		this.reveal = Math.max(this.reveal, index + 1);
@@ -85,8 +85,7 @@ export class ListState<T> {
 		const start = Math.max(0, Math.min(index - Math.floor(count / 2), Math.min(rows.length, this.reveal) - count));
 		const records = rows.slice(start, start + count).map(row => Object.fromEntries(columns.map(column => [column.key, column.value(row)])));
 		return [sectionHeading(ctx, width, title, `${start + 1}–${start + count}/${rows.length} · ${this.sort} ${this.descending ? "↓" : "↑"}`),
-			...wrap(search, width), ...dataTable(ctx, width, "", columns, records, index - start),
-			...wrap([ctx.theme.fg("dim", "/ search · j/k select · Enter inspect · o/O sort · +/a reveal")], width)];
+			...wrap(search, width), ...dataTable(ctx, width, "", columns, records, index - start)];
 	}
 }
 
@@ -131,8 +130,8 @@ export class ChartState {
 	}
 	render(ctx: FeatureContext, width: number, buckets: readonly number[], series: readonly CoreSeries[], options: TimeSeriesOptions = {}): string[] {
 		this.reconcile(buckets, series.map(row => row.key));
-		return [...renderTimeSeries(ctx, buckets, series, width, this.point, {
+		return renderTimeSeries(ctx, buckets, series, width, this.point, {
 			...options, hidden: this.hidden, selectedKey: series[this.seriesIndex]?.key,
-		}), ...wrap([ctx.theme.fg("dim", "m mode · n legend · v visibility · ,/. point")], width)];
+		});
 	}
 }

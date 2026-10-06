@@ -6,7 +6,7 @@ import type { FeatureContext, FeatureController } from "./types";
 import { projectOptions, savingsHistory } from "./provider-gain-data";
 import { boundLines, recordViewport } from "./provider-gain-chart";
 import { renderTimeSeries } from "../charts/time-series";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "./presentation";
+import { dashboardPanels, dataTable, emptyState, focusTabs, metricGrid, panel, sectionHeading } from "./presentation";
 
 const SORTS = ["tokens", "source", "share", "bytes", "hits", "reduction"] as const;
 type SourceRow = GainSourceTotals & { source: string; share: number };
@@ -63,7 +63,8 @@ export function createGainFeature(ctx: FeatureContext): FeatureController {
 		render(width, height) {
 			const lines = [ctx.theme.bold(`Gain · ${range} · ${project ?? "All projects"}`)];
 			if (error) lines.push(ctx.theme.fg("error", `Savings error: ${error}${data ? " · showing previous reading for this scope" : ""}`));
-			if (data) {
+			const empty = data !== null && data.overall.hits === 0 && data.timeSeries.length === 0;
+			if (data && !empty) {
 				const t = data.overall;
 				lines.push(...metricGrid(ctx, width, [
 					{ label: "Saved tokens", value: compactTokens(t.savedTokens), emphasis: "primary" },
@@ -73,48 +74,79 @@ export function createGainFeature(ctx: FeatureContext): FeatureController {
 			}
 			lines.push(...focusTabs(ctx, width, ["Projects", "History", "Sources"], focus));
 			const hint = focus === 0 ? "p/P project · j/k select" : focus === 1 ? "h/l UTC day · p/P project" : "j/k source · o sort · d direction · Enter detail · + reveal";
-			lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", `Tab focus · ${hint}${loading ? " · loading" : ""}`), width));
-			if (!data) { lines.push(loading ? "Loading scoped savings…" : "No savings payload available"); return boundLines(lines, width); }
-			const t = data.overall;
+			lines.push(...wrapTextWithAnsi(ctx.theme.fg("muted", `Tab focus · ${hint}${loading ? " · loading" : ""}`), width));
+			if (!data) {
+				lines.push(...panel(ctx, width, "Recorded savings", emptyState(ctx, Math.max(1, width - 4), loading ? "Loading scoped savings…" : "Savings unavailable", "Savings totals and history are requested for the selected project and range.")));
+				return boundLines(lines, width);
+			}
+			const options = projectOptions(projects, project);
+			const projectViewport = recordViewport(options, options.indexOf(project), Math.max(1, height - lines.length - 3), Math.min(reveal, 6));
+			if (empty) {
+				lines.push(...dashboardPanels(ctx, width, [
+					{
+						title: "Recorded savings", meta: `${range} · selected project`,
+						render: innerWidth => emptyState(ctx, innerWidth, "No savings recorded", `No savings recorded for ${project ?? "all projects"} in ${range}. Savings appear when snapcompact compacts tool output; only recorded reductions count here.`, range === "all" ? "Choose another project to inspect its recording history." : "Try a longer range or choose another project."),
+					},
+					{
+						title: "Projects", meta: `${options.length - 1} available · p/P select`, active: focus === 0,
+						render: innerWidth => [
+							...dataTable(ctx, innerWidth, "", [{ key: "project", header: "Project", align: "left" }], projectViewport.rows.map(p => ({ project: p ?? "All projects" })), options.indexOf(project) - projectViewport.start),
+							"",
+							...wrapTextWithAnsi(ctx.theme.fg("muted", "Project selection scopes both totals and history. A project with no records in this range remains selectable."), innerWidth),
+						],
+					},
+				]));
+				return boundLines(lines, width);
+			}
 			const history = savingsHistory(data.timeSeries, range, ctx.now());
-			const empty = t.hits === 0 && data.timeSeries.length === 0;
-			if (empty) lines.push(...wrapTextWithAnsi(ctx.theme.fg("muted", `No savings recorded for ${project ?? "all projects"} in ${range}. ${range === "all" ? "Savings appear when snapcompact compacts tool output." : "Try a longer range."}`), width));
-			if (focus === 0) {
-				const options = projectOptions(projects, project);
-				const viewport = recordViewport(options, options.indexOf(project), Math.max(1, height - lines.length + 10), reveal);
-				lines.push(...dataTable(ctx, width, "Projects", [{ key: "project", header: "Project", align: "left" }], viewport.rows.map(p => ({ project: p ?? "All projects" })), options.indexOf(project) - viewport.start));
-			}
-			if (!empty && focus === 1) {
-				const i = Math.max(0, Math.min(history.axis.length - 1, point));
-				lines.push(sectionHeading(ctx, width, "Saved per UTC day", history.axis.length ? new Date(history.axis[i]).toISOString().slice(0, 10) : "", true));
-				if (history.axis.length) lines.push(`Day ${new Date(history.axis[i]).toISOString().slice(0, 10)} · saved ${formatInteger(history.daily[i])} · cumulative ${formatInteger(history.cumulative[i])}`);
-				const chartHeight = Math.max(2, Math.min(4, Math.floor((height - lines.length - 10) / 2)));
-				lines.push(...renderTimeSeries(ctx, history.axis, [{ key: "daily", label: "Saved per day", values: history.daily }], width, point, { format: compactTokens, unit: "tokens", height: chartHeight, legend: false }));
-				lines.push(sectionHeading(ctx, width, "Cumulative saved tokens", "range-scoped", true));
-				lines.push(...renderTimeSeries(ctx, history.axis, [{ key: "cumulative", label: "Cumulative", values: history.cumulative, colorIndex: 1 }], width, point, { cumulative: true, format: compactTokens, unit: "tokens", height: chartHeight, legend: false }));
-			}
 			const sourceRows = rows();
 			const retained = sourceRows.findIndex(r => r.source === selectedSource);
 			selected = retained >= 0 ? retained : Math.max(0, Math.min(selected, sourceRows.length - 1));
 			const chosen = sourceRows[selected];
 			if (chosen) selectedSource = chosen.source;
-			if (chosen && expanded && !empty) {
-				lines.push(sectionHeading(ctx, width, chosen.source, "recorded source detail", focus === 2));
-				lines.push(...wrapTextWithAnsi(`Saved ${formatInteger(chosen.savedTokens)} tokens · ${formatBytes(chosen.savedBytes)} · ${formatInteger(chosen.hits)} hits · ${chosen.hits > 0 ? compactTokens(chosen.savedTokens / chosen.hits) : "—"} tokens/hit`, width));
-				lines.push(...wrapTextWithAnsi(`Share ${formatPercent(chosen.share)} · reduction ${chosen.reductionPercent === null ? "— (original size unknown)" : formatPercent(chosen.reductionPercent)} · original ${formatBytes(chosen.originalBytes)} · output ${formatBytes(chosen.outputBytes)}`, width));
-			}
-			if (!empty && focus !== 1) {
-				lines.push(sectionHeading(ctx, width, "By source", `${SORTS[sort]} ${descending ? "↓" : "↑"} · ${sourceRows.length} sources`, focus === 2));
-				const viewport = recordViewport(sourceRows, selected, Math.max(1, height - lines.length + 10), reveal);
-				lines.push(...dataTable(ctx, width, "", [
-					{ key: "source", header: "Source", align: "left" },
-					{ key: "tokens", header: "Saved tokens", align: "right" },
-					{ key: "hits", header: "Hits", align: "right", priority: 1 },
-					{ key: "bytes", header: "Bytes", align: "right", priority: 2 },
-					{ key: "share", header: "Share", align: "right", priority: 3 },
-					{ key: "reduction", header: "Reduction", align: "right", priority: 4 },
-				], viewport.rows.map(r => ({ source: r.source, tokens: compactTokens(r.savedTokens), hits: formatInteger(r.hits), bytes: formatBytes(r.savedBytes), share: formatPercent(r.share), reduction: r.reductionPercent === null ? "—" : formatPercent(r.reductionPercent) })), selected - viewport.start));
-			}
+			const sourceViewport = recordViewport(sourceRows, selected, Math.max(1, height - lines.length - projectViewport.rows.length - 3), reveal);
+			const i = Math.max(0, Math.min(history.axis.length - 1, point));
+			lines.push(...dashboardPanels(ctx, width, [
+				{
+					title: "Projects & sources", meta: "Recorded scope", active: focus !== 1,
+					render: innerWidth => [
+						sectionHeading(ctx, innerWidth, "Projects", "p/P select", focus === 0),
+						...dataTable(ctx, innerWidth, "", [{ key: "project", header: "Project", align: "left" }], projectViewport.rows.map(p => ({ project: p ?? "All projects" })), options.indexOf(project) - projectViewport.start),
+						"",
+						sectionHeading(ctx, innerWidth, "By source", `${SORTS[sort]} ${descending ? "↓" : "↑"} · ${sourceRows.length} sources`, focus === 2),
+						...(sourceRows.length ? dataTable(ctx, innerWidth, "", [
+							{ key: "source", header: "Source", align: "left" },
+							{ key: "tokens", header: "Saved tokens", align: "right" },
+							{ key: "hits", header: "Hits", align: "right", priority: 1 },
+							{ key: "bytes", header: "Bytes", align: "right", priority: 2 },
+							{ key: "share", header: "Share", align: "right", priority: 3 },
+							{ key: "reduction", header: "Reduction", align: "right", priority: 4 },
+						], sourceViewport.rows.map(r => ({ source: r.source, tokens: compactTokens(r.savedTokens), hits: formatInteger(r.hits), bytes: formatBytes(r.savedBytes), share: formatPercent(r.share), reduction: r.reductionPercent === null ? "—" : formatPercent(r.reductionPercent) })), selected - sourceViewport.start) : emptyState(ctx, innerWidth, "No source breakdown", "Recorded totals are available, but this payload has no per-source records.")),
+						...(chosen && expanded ? [
+							"",
+							sectionHeading(ctx, innerWidth, chosen.source, "recorded source detail", focus === 2),
+							...wrapTextWithAnsi(`Saved ${formatInteger(chosen.savedTokens)} tokens · ${formatBytes(chosen.savedBytes)} · ${formatInteger(chosen.hits)} hits · ${chosen.hits > 0 ? compactTokens(chosen.savedTokens / chosen.hits) : "—"} tokens/hit`, innerWidth),
+							...wrapTextWithAnsi(`Share ${formatPercent(chosen.share)} · reduction ${chosen.reductionPercent === null ? "— (original size unknown)" : formatPercent(chosen.reductionPercent)} · original ${formatBytes(chosen.originalBytes)} · output ${formatBytes(chosen.outputBytes)}`, innerWidth),
+						] : []),
+					],
+				},
+				{
+					title: "Savings history", meta: "UTC days · range-scoped", active: focus === 1,
+					render: innerWidth => {
+						if (!data!.timeSeries.length) return emptyState(ctx, innerWidth, "No daily history recorded", "Totals are available for this scope, but no daily savings observations were supplied.");
+						const chartHeight = 3;
+						return [
+							...wrapTextWithAnsi(`Day ${new Date(history.axis[i]).toISOString().slice(0, 10)} · saved ${formatInteger(history.daily[i])} · cumulative ${formatInteger(history.cumulative[i])}`, innerWidth),
+							"",
+							sectionHeading(ctx, innerWidth, "Saved per UTC day"),
+							...renderTimeSeries(ctx, history.axis, [{ key: "daily", label: "Saved per day", values: history.daily }], innerWidth, point, { format: compactTokens, unit: "tokens", height: chartHeight, legend: false }),
+							"",
+							sectionHeading(ctx, innerWidth, "Cumulative saved tokens"),
+							...renderTimeSeries(ctx, history.axis, [{ key: "cumulative", label: "Cumulative", values: history.cumulative, colorIndex: 1 }], innerWidth, point, { cumulative: true, format: compactTokens, unit: "tokens", height: chartHeight, legend: false }),
+						];
+					},
+				},
+			], { ratio: 0.48 }));
 			return boundLines(lines, width);
 		},
 		handleInput(input) {

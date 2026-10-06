@@ -12,7 +12,7 @@ import { glyphsFor } from "../../glyphs";
 import { heatRamp, SELECTION_BG } from "../../palette";
 import { ChartState, ListState, fields, wrap, type CoreSeries, type Sorters } from "./shared";
 import { RequestDetails } from "./requests";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "../presentation";
+import { dashboardPanels, emptyState, focusTabs, metricGrid, panel, ranking, sectionHeading, type DashboardPanel } from "../presentation";
 
 type SummaryId = "overview" | "projects" | "activity";
 const PROJECT_SORT: Sorters<FolderRowView> = {
@@ -128,7 +128,7 @@ class SummaryFeature implements FeatureController {
 			const chart = this.overviewChart();
 			const needle = this.requests.search.trim().toLowerCase();
 			const rows = this.requests.rows((this.data.recent ?? []).filter(row => !needle || `${row.model} ${row.provider} ${row.folder}`.toLowerCase().includes(needle)), REQUEST_SORT);
-			const list = this.requests.render(rows, width, Math.min(height, 10), [
+			const requestPanel: DashboardPanel = { title: "Latest requests", meta: "Enter details · A all requests · / search", active: this.focus === 0, render: inner => this.requests.render(rows, inner, Math.min(13, Math.max(6, height - 17)), [
 				{ key: "model", header: "Model", align: "left", value: row => row.model },
 				{ key: "provider", header: "Provider", align: "left", priority: 5, value: row => row.provider },
 				{ key: "when", header: "When", align: "left", priority: 3, value: row => formatTimestamp(row.timestamp) },
@@ -136,13 +136,13 @@ class SummaryFeature implements FeatureController {
 				{ key: "cost", header: "API cost", align: "right", priority: 0, value: row => formatMessageCost(row, 4) },
 				{ key: "tokens", header: "Tokens", align: "right", priority: 1, value: row => formatCompact(row.usage.totalTokens) },
 				{ key: "duration", header: "Latency", align: "right", priority: 2, value: row => formatDurationMs(row.duration) },
-			], this.ctx, "Latest requests · A opens all");
-			const graph = [sectionHeading(this.ctx, width, "Activity", chart.mode, this.focus === 1),
-				...(chart.mode === "cost" && overall.unpricedRequests > 0 ? wrap([this.ctx.theme.fg("dim", `Known-priced cost only · ${overall.unpricedRequests} unpriced requests; per-bucket unknown counts unavailable.`)], width) : []),
-				...this.chart.render(this.ctx, width, chart.buckets, chart.series, {
-					height: 5, unit: chart.mode === "cost" ? "API-equivalent USD / bucket" : chart.mode === "tokens" ? "tokens / bucket" : "requests / bucket",
+			], this.ctx, "") };
+			const graphPanel: DashboardPanel = { title: "Activity", meta: "m metric · n/v series · ,/. inspect", active: this.focus === 1, render: inner => [
+				...(chart.mode === "cost" && overall.unpricedRequests > 0 ? wrap([this.ctx.theme.fg("muted", `Known-priced cost only · ${overall.unpricedRequests} unpriced; bucket counts unavailable.`)], inner) : []),
+				...this.chart.render(this.ctx, inner, chart.buckets, chart.series, {
+					height: 7, unit: chart.mode === "cost" ? "API-equivalent USD / bucket" : chart.mode === "tokens" ? "tokens / bucket" : "requests / bucket",
 					stacked: true, format: chart.mode === "cost" ? value => formatEstimatedCost(value, 0) : formatCompact,
-				})];
+				})] };
 			const total = sumConversationTokens(overall);
 			const mix = [["Uncached input", overall.totalInputTokens], ["Cache read", overall.totalCacheReadTokens], ["Cache write", overall.totalCacheWriteTokens], ["Output", overall.totalOutputTokens]] as const;
 			const agents = buildAgentTokenShare(payload.byAgentType);
@@ -153,26 +153,19 @@ class SummaryFeature implements FeatureController {
 				{ label: "Cache hit", value: formatPercent(overall.cacheRate), hint: `${formatPercent(overall.cacheSavings)} saved` },
 				{ label: "Latency", value: formatDurationMs(overall.avgDuration), hint: `${formatDurationMs(overall.avgTtft)} TTFT` },
 				{ label: "Failures", value: formatCompact(overall.failedRequests), hint: `${formatPercent(overall.errorRate)} error rate` },
-			]), "", ...focusTabs(this.ctx, width, ["Requests", "Chart"], this.focus),
-				...(this.focus === 0 ? list : graph), "", ...(this.focus === 0 ? graph : list), "",
-				...dataTable(this.ctx, width, "Token mix", [
-					{ key: "label", header: "Category", align: "left" },
-					{ key: "tokens", header: "Tokens", align: "right", priority: 0 },
-					{ key: "share", header: "Share", align: "right", priority: 1 },
-				], mix.map(([label, value]) => ({ label, tokens: formatCompact(value), share: total > 0 ? formatPercent(value / total) : "—" }))), "",
-				...dataTable(this.ctx, width, "Agent token shares", [
-					{ key: "agent", header: "Agent", align: "left" },
-					{ key: "tokens", header: "Tokens", align: "right", priority: 0 },
-					{ key: "share", header: "Share", align: "right", priority: 1 },
-					{ key: "requests", header: "Req", align: "right", priority: 2 },
-				], agents.segments.map(agent => ({ agent: agent.agentType, tokens: formatCompact(agent.tokens), share: formatPercent(agent.share), requests: String(agent.requests) })))];
+			]), "", ...focusTabs(this.ctx, width, ["Requests", "Chart"], this.focus), "",
+				...dashboardPanels(this.ctx, width, width >= 100 || this.focus === 1 ? [graphPanel, requestPanel] : [requestPanel, graphPanel]),
+				"", ...dashboardPanels(this.ctx, width, [
+					{ title: "Token composition", meta: `${formatPercent(overall.cacheRate)} cache hit · ${formatPercent(overall.cacheSavings)} saved`, render: inner => ranking(this.ctx, inner, mix.map(([label, value]) => ({ label, value, display: `${formatCompact(value)} · ${total > 0 ? formatPercent(value / total) : "—"}` }))) },
+					{ title: "Agent token shares", render: inner => agents.segments.length ? ranking(this.ctx, inner, agents.segments.map(agent => ({ label: agent.agentType, value: agent.tokens, display: `${formatCompact(agent.tokens)} · ${formatPercent(agent.share)}` }))) : emptyState(this.ctx, inner, "No agent split recorded", "Agent attribution appears when recorded sessions include agent types.") },
+				])];
 		}
 		if (this.id === "projects") {
 			const { view, scoped, matching } = this.projectRows();
 			const cost = this.costRanking.rows(scoped, PROJECT_SORT).slice(0, 8);
 			const requests = this.requestRanking.rows(scoped, PROJECT_SORT).slice(0, 8);
 			const columns = [
-				{ key: "folder", header: "Project", align: "left" as const, value: (row: FolderRowView) => `${row.folder || "(root)"}${row.temporary ? " [temp]" : ""}` },
+				{ key: "folder", header: "Project", align: "left" as const, value: (row: FolderRowView) => `${row.temporary ? "[temp] " : ""}${row.folder.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || "(root)"}` },
 				{ key: "cost", header: "API cost", align: "right" as const, priority: 0, value: (row: FolderRowView) => formatEstimatedCost(row.totalCost, row.unpricedRequests) },
 				{ key: "requests", header: "Req", align: "right" as const, priority: 1, value: (row: FolderRowView) => formatCompact(row.totalRequests) },
 				{ key: "tokens", header: "Tokens", align: "right" as const, priority: 2, value: (row: FolderRowView) => formatCompact(row.conversationTokens) },
@@ -181,18 +174,30 @@ class SummaryFeature implements FeatureController {
 			];
 			const lists = [this.projects, this.costRanking, this.requestRanking];
 			const rowSets = [matching, cost, requests];
+			const picked = lists[this.focus].current(rowSets[this.focus]);
 			const titles = ["Projects", "Cost ranking · Enter filters projects", "Request ranking · Enter filters projects"];
 			return [...wrap(prefix, width), ...metricGrid(this.ctx, width, [
 				{ label: "Projects", value: String(view.rows.length), hint: `${view.temporaryCount} temporary`, emphasis: "primary" },
 				{ label: "Requests", value: formatCompact(view.totalRequests), hint: `${view.failedRequests} failed` },
 				{ label: "API cost", value: formatEstimatedCost(view.totalCost, view.unpricedRequests), hint: `${view.unpricedRequests} unpriced` },
 				{ label: "Tokens", value: formatCompact(view.conversationTokens), hint: `${formatPercent(view.cacheRate)} cache hit` },
-			]), ...wrap([this.ctx.theme.fg("dim", `Totals include all projects · t ${this.hideTemporary ? "show" : "hide"} temporary projects${this.hideTemporary && view.temporaryCount ? ` (${view.temporaryCount} hidden)` : ""}`)], width),
-				"", ...focusTabs(this.ctx, width, ["Projects", "By cost", "By requests"], this.focus),
-				...lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - 10), columns, this.ctx, titles[this.focus])];
+			]), ...wrap([this.ctx.theme.fg("muted", `Totals include all projects · t ${this.hideTemporary ? "show" : "hide"} temporary projects${this.hideTemporary && view.temporaryCount ? ` (${view.temporaryCount} hidden)` : ""}`)], width),
+				"", ...focusTabs(this.ctx, width, ["Projects", "By cost", "By requests"], this.focus), "",
+				...dashboardPanels(this.ctx, width, [
+					{ title: titles[this.focus], active: true, meta: "/ search · o/O sort · Enter details · Tab rankings",
+						render: inner => lists[this.focus].render(rowSets[this.focus], inner, Math.max(8, height - 12), columns, this.ctx, "") },
+					{ title: this.focus === 1 ? "Request distribution" : "Known-priced cost distribution", meta: "Included projects · search does not change distribution",
+						render: inner => scoped.length ? [
+							...ranking(this.ctx, inner, (this.focus === 1 ? requests : cost).slice(0, 6).map(row => ({
+								label: row.folder.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || "(root)", value: this.focus === 1 ? row.totalRequests : row.totalCost,
+								display: this.focus === 1 ? formatCompact(row.totalRequests) : formatEstimatedCost(row.totalCost, row.unpricedRequests),
+							}))), "", sectionHeading(this.ctx, inner, "Selected project"),
+							...wrap([picked ? picked.folder || "(root)" : "No project matches the current search.", ...(picked ? [`${formatCompact(picked.totalRequests)} requests · ${formatCompact(picked.conversationTokens)} tokens`, `${formatPercent(picked.errorRate)} errors · ${formatPercent(picked.cacheRate)} cache hit`] : [])], inner),
+						] : emptyState(this.ctx, inner, "No projects visible", "No projects match the current search or temporary-folder filter.", "Clear search or press t to include temporary projects.") },
+				])];
 		}
 		const points = this.data.dailyActivity ?? [];
-		const weeks = weeksForWidth(2, width);
+		const weeks = weeksForWidth(2, Math.max(1, width - 4));
 		const actualToday = new Date(this.ctx.now());
 		const selected = this.selectedDay();
 		let today = this.calendarEnd ? dayDate(this.calendarEnd) : actualToday;
@@ -206,23 +211,32 @@ class SummaryFeature implements FeatureController {
 		const layout = calendarLayout(points, weeks, today);
 		const needle = this.days.search.trim().toLowerCase();
 		const rows = this.days.rows(points.filter(point => !needle || point.day.includes(needle)), DAY_SORT);
-		const list = this.days.render(rows, width, Math.min(height, 9), [
+		const recordedPanel: DashboardPanel = { title: "Recorded days", active: this.focus === 0, meta: "/ search · o/O sort · Enter inspect", render: inner => this.days.render(rows, inner, Math.min(12, Math.max(7, height - 19)), [
 			{ key: "day", header: "Day", align: "left", value: point => point.day },
 			{ key: "requests", header: "Req", align: "right", priority: 0, value: point => formatCompact(point.requests) },
 			{ key: "cost", header: "API cost", align: "right", priority: 1, value: point => formatEstimatedCost(point.cost, 0) },
 			{ key: "tokens", header: "Tokens", align: "right", priority: 2, value: point => formatCompact(point.totalTokens) },
-		], this.ctx, "Recorded days");
-		const calendar = [sectionHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
-			...renderHeatmap(points, { innerWidth: width, labelWidth: 2, weeks, glyphs: glyphsFor(this.ctx.theme.getSymbolPreset()), ramp: [1, 2, 3, 4].map(level => heatRamp(this.ctx.theme, level)), dim: text => this.ctx.theme.fg("dim", text), today, selectedDay: selected.day, selected: text => this.ctx.theme.bg(SELECTION_BG.band, this.ctx.theme.fg("accent", text)) }),
-			...wrap([this.ctx.theme.fg("dim", `${localDay(layout.start)}–${localDay(today)} · ${layout.totalRequests} requests · ${formatEstimatedCost(layout.totalCost, 0)}`),
-				this.ctx.theme.fg("dim", "j/k day · h/l week · t today · Enter details")], width)];
+		], this.ctx, "") };
+		const calendar = panel(this.ctx, width, "Activity calendar", [
+			...renderHeatmap(points, { innerWidth: Math.max(1, width - 4), labelWidth: 2, weeks, glyphs: glyphsFor(this.ctx.theme.getSymbolPreset()), ramp: [1, 2, 3, 4].map(level => heatRamp(this.ctx.theme, level)), dim: text => this.ctx.theme.fg("muted", text), today, selectedDay: selected.day, selected: text => this.ctx.theme.bg(SELECTION_BG.band, this.ctx.theme.fg("accent", text)) }),
+			...wrap([this.ctx.theme.fg("muted", `${localDay(layout.start)}–${localDay(today)} · ${layout.totalRequests} requests · ${formatEstimatedCost(layout.totalCost, 0)}`)], Math.max(1, width - 4)),
+		], { active: this.focus === 1, meta: `${weeks} weeks · j/k day · h/l week · t today · Enter inspect` });
+		const dayPanel: DashboardPanel = { title: "Selected local day", render: inner => [
+			this.ctx.theme.bold(selected.day), "",
+			...ranking(this.ctx, inner, [
+				{ label: "Requests", value: selected.requests, display: formatCompact(selected.requests) },
+			]),
+			"", `API cost ${formatEstimatedCost(selected.cost, 0)} · Tokens ${formatCompact(selected.totalTokens)}`,
+			...wrap([selected.requests === 0 ? "No activity recorded for this local day." : "Enter on the calendar opens the recorded day details.", "Latest 371 local days · independent of the global range."], inner),
+		] };
 		return [...wrap(prefix, width), ...metricGrid(this.ctx, width, [
 			{ label: "Day requests", value: formatCompact(selected.requests), hint: selected.day, emphasis: "primary" },
 			{ label: "Day API cost", value: formatEstimatedCost(selected.cost, 0), hint: "selected local day" },
 			{ label: "Day tokens", value: formatCompact(selected.totalTokens), hint: `${points.length} recorded days` },
-		]), "", ...focusTabs(this.ctx, width, ["Recorded days", "Calendar"], this.focus),
-			...(this.focus === 0 ? list : calendar), "", ...(this.focus === 0 ? calendar : list),
-			...wrap([this.ctx.theme.fg("dim", "Latest 371 local days · independent of the range selector; quiet selected days are zero.")], width)];
+		]), "", ...focusTabs(this.ctx, width, ["Recorded days", "Calendar"], this.focus), "",
+			...(width < 100 && this.focus === 0
+				? [...dashboardPanels(this.ctx, width, [recordedPanel, dayPanel]), "", ...calendar]
+				: [...calendar, "", ...dashboardPanels(this.ctx, width, [recordedPanel, dayPanel])])];
 	}
 	get inputMode(): "text" | "navigation" {
 		return (this.id === "overview" ? this.requests.editing : this.id === "projects" ? this.projects.editing : this.days.editing)

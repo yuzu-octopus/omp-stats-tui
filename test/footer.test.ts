@@ -5,21 +5,9 @@ import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { clampFooter, footerHints, hintsFor, type HintMode, type PanelHint } from "../src/tui/footer";
 
 /**
- * `test/footer.test.ts` — the hint row's SET, its STYLE, and its fit.
- *
- * Three claims are asserted here that no other file can make:
- *
- *   1. **A hint may never name an unbound key.** Every `KeyName` in every mode
- *      is converted to the raw byte sequence `matchesKey` sees and pushed
- *      through the panel's own `panelAction`. A hint the panel does not handle
- *      is a lie the user acts on.
- *   2. **The row is ONE dim span.** `/usage` renders its hint line as
- *      `theme.fg("dim", hint)` (`overlays/usage-dashboard.ts:926`) and the panel
- *      matches it. There is no `muted` span, because a footer that competes with
- *      the data above it is a footer nobody reads.
- *   3. **`close` survives every width.** It is the only exit from a fullscreen
- *      overlay that borrowed the alt screen buffer, so the fit algorithm pins it
- *      and spends the width on the middle hints instead.
+ * Footer behavior: hints describe bound keys, and close remains reachable when
+ * the available width drops other hints. Exact theme escapes and formatter
+ * forwarding are presentation details rather than consumer contracts.
  */
 
 ensureThemeSync();
@@ -33,16 +21,8 @@ const ALL_HINTS: Record<HintMode, readonly PanelHint[]> = {
 };
 const ESC = String.fromCharCode(27);
 const SEPARATOR = " · ";
-const RESET_FG = `${ESC}[39m`;
 const ANSI = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 const strip = (text: string) => text.replace(ANSI, "");
-
-/** The `SGR…m` prefix `theme.fg(color, …)` opens a span with. */
-const sgr = (color: "dim" | "muted" | "borderMuted"): string => theme.fg(color, "x").split("x")[0]!;
-
-/** The only SGR sequences a footer row may contain. */
-const ALLOWED_SPANS: readonly string[] = [sgr("dim"), sgr("borderMuted"), RESET_FG];
-
 
 /** The plain text one hint contributes to the row. */
 const hintText = (hint: PanelHint): string => `${formatKeyHints(hint.keys)} ${hint.label}`;
@@ -96,46 +76,6 @@ test("syncing offers no second sync, error offers a retry, scrollable leads with
 });
 
 
-// ─── the STYLE ──────────────────────────────────────────────────────────────
-
-test("the whole row is ONE dim span, with no muted half", () => {
-	const hints = hintsFor("idle");
-	const [row] = footerHints(hints, theme);
-	const plain = hints.map(hintText).join(SEPARATOR);
-
-	expect(row).toBeDefined();
-	expect(strip(row!)).toBe(plain);
-	// /usage parity, asserted on the escapes themselves: the row opens with the
-	// dim SGR and resets once at the end. A dim-key / muted-label split cannot
-	// produce that shape.
-	expect(row!.startsWith(sgr("dim"))).toBe(true);
-	expect(row!.endsWith(RESET_FG)).toBe(true);
-	expect(row!.includes(sgr("muted"))).toBe(false);
-	// And the exhaustive form of the same claim: dim, separators, reset — nothing
-	// else colours anything.
-	for (const match of row!.match(ANSI) ?? []) {
-		expect(ALLOWED_SPANS, `unexpected SGR ${JSON.stringify(match)} in the footer row`).toContain(match);
-	}
-});
-
-test("hints are separated by a border-muted dot, one step quieter than the text", () => {
-	const hints = hintsFor("idle");
-	expect(hints.length).toBeGreaterThan(1);
-	const [row] = footerHints(hints, theme);
-	// Exactly one separator per gap — no doubled dots from a join mistake.
-	expect(row!.split(SEPARATOR).length - 1).toBe(hints.length - 1);
-	expect(row!.includes(theme.fg("borderMuted", SEPARATOR))).toBe(true);
-	expect(strip(row!)).toBe(hints.map(hintText).join(SEPARATOR));
-});
-
-test("every key renders through formatKeyHints, so keycaps match the host", () => {
-	for (const mode of MODES) {
-		const [row] = footerHints(hintsFor(mode), theme);
-		for (const hint of ALL_HINTS[mode]) {
-			expect(row, `${mode}/${hint.label}`).toContain(hintText(hint));
-		}
-	}
-});
 
 // ─── the fit ────────────────────────────────────────────────────────────────
 

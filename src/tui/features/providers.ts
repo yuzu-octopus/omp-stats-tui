@@ -2,12 +2,11 @@ import { wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { ProviderAggregate, ProviderDashboardStats, ProviderWindowInsight, ProviderWindowStats, UsageWindowSeries } from "@oh-my-pi/omp-stats/shared-types";
 import type { Range } from "../../data/ranges";
 import { compactTokens, costWithUnpriced, formatCost, formatInteger, formatPercent } from "../format";
-import { SERIES_COLORS } from "../palette";
 import type { FeatureContext, FeatureController } from "./types";
 import { accountNames, accountReadings, rangeAxis, rangeStep, resolveWindow, utilization, type AccountReadings, type WindowRef } from "./provider-gain-data";
 import { boundLines, recordViewport } from "./provider-gain-chart";
 import { renderTimeSeries } from "../charts/time-series";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "./presentation";
+import { dashboardPanels, dataTable, emptyState, focusTabs, metricGrid, panel, ranking } from "./presentation";
 import { densify, pivotSeries } from "@oh-my-pi/omp-stats/client/data/series";
 import { glyph } from "../glyphs";
 
@@ -178,109 +177,178 @@ export function createProvidersFeature(ctx: FeatureContext): FeatureController {
 				]));
 			}
 			lines.push(...focusTabs(ctx, width, ["Totals", "Burn", "Local hours", "Windows", "Accounts"], view));
-			const hint = view === 0 ? "j/k provider · Enter mix · o sort · d direction · + reveal" : view === 1 ? "m metric · h/l point · n/N legend · Space hide" : view === 2 ? "h/l hour · p/P provider" : view === 3 ? "j/k window · Enter accounts · o sort · u retry" : "j/k account · h/l point · p/P provider · w/W window · n/N legend · Space hide";
-			lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", `Tab view · ${hint}`), width));
-			if (localLoading || windowsLoading || accountsLoading) lines.push(ctx.theme.fg("dim", `Loading ${[localLoading ? "usage" : "", windowsLoading ? "windows" : "", accountsLoading ? "accounts" : ""].filter(Boolean).join(" · ")} independently`));
-			if (view <= 2 && !data) { lines.push(localLoading ? "Loading local usage…" : "No local usage payload available"); return boundLines(lines, width); }
+			const hint = view === 0 ? "j/k provider · Enter detail · o sort · d direction · + reveal" : view === 1 ? "m metric · h/l point · n/N legend · Space hide" : view === 2 ? "h/l hour · p/P provider" : view === 3 ? "j/k window · Enter accounts · o sort · u retry" : "j/k account · h/l point · p/P provider · w/W window · n/N legend · Space hide";
+			lines.push(...wrapTextWithAnsi(ctx.theme.fg("muted", `Tab view · ${hint}`), width));
+			if (localLoading || windowsLoading || accountsLoading) lines.push(ctx.theme.fg("muted", `Loading ${[localLoading ? "usage" : "", windowsLoading ? "windows" : "", accountsLoading ? "accounts" : ""].filter(Boolean).join(" · ")} independently`));
+			if (view <= 2 && !data) {
+				lines.push(...panel(ctx, width, "Local usage", emptyState(ctx, Math.max(1, width - 4), localLoading ? "Loading local usage…" : "Local usage unavailable", localError ? "The usage request failed. Subscription views remain available." : "Provider activity will appear when local usage is available.")));
+				return boundLines(lines, width);
+			}
 			if (view === 0) {
 				const rows = sortedTotals();
 				const retained = rows.findIndex(p => p.provider === selectedProvider);
 				providerRow = retained >= 0 ? retained : Math.max(0, Math.min(providerRow, rows.length - 1));
 				const p = rows[providerRow];
-				lines.push(sectionHeading(ctx, width, "Provider totals", `${TOTAL_SORTS[totalSort]} ${descending ? "↓" : "↑"} · ${rows.length} providers`, true));
-				const viewport = recordViewport(rows, providerRow, Math.max(1, height - lines.length + 7), reveal);
-				lines.push(...dataTable(ctx, width, "", [
-					{ key: "provider", header: "Provider", align: "left" },
-					{ key: "tokens", header: "Tokens", align: "right" },
-					{ key: "requests", header: "Requests", align: "right", priority: 1 },
-					{ key: "cost", header: "API-equiv.", align: "right", priority: 2 },
-					{ key: "output", header: "Output", align: "right", priority: 3 },
-				], viewport.rows.map(p => ({ provider: p.provider, tokens: compactTokens(p.totalTokens), requests: formatInteger(p.totalRequests), cost: costWithUnpriced(p.totalCost, p.unpricedRequests), output: compactTokens(p.totalOutputTokens) })), providerRow - viewport.start));
-				if (p) {
-					selectedProvider = p.provider;
-					lines.push(sectionHeading(ctx, width, `Selected ${p.provider}`, `${p.models} models · ${p.avgTokensPerSecond === null ? "—" : p.avgTokensPerSecond.toFixed(1)} tok/s`, true));
-					if (expanded === p.provider) lines.push(...wrapTextWithAnsi(`${formatInteger(p.totalRequests)} requests · ${formatInteger(p.failedRequests)} failed · ${formatInteger(p.totalPremiumRequests)} premium · Output ${formatInteger(p.totalOutputTokens)} · API-equivalent cost ${costWithUnpriced(p.totalCost, p.unpricedRequests)}`, width));
-					if (expanded === p.provider) {
-						const mix = [["Uncached input", p.totalInputTokens], ["Cache read", p.totalCacheReadTokens], ["Cache write", p.totalCacheWriteTokens], ["Output", p.totalOutputTokens]] as const;
-						let cells = 0;
-						const track = Math.max(1, Math.min(48, width - 2));
-						lines.push(mix.map(([_, value], i) => { const next = Math.round(mix.slice(0, i + 1).reduce((sum, [, n]) => sum + n, 0) / Math.max(1, p.totalTokens) * track); const text = ctx.theme.fg(SERIES_COLORS[i % SERIES_COLORS.length], glyph(preset, "barFill").repeat(Math.max(0, next - cells))); cells = next; return text; }).join(""));
-						mix.forEach(([label, value], i) => lines.push(`${ctx.theme.fg(SERIES_COLORS[i % SERIES_COLORS.length], glyph(preset, "legendKey"))} ${label}: ${formatInteger(value)} · ${p.totalTokens > 0 ? formatPercent(value / p.totalTokens) : "—"}`));
-					}
-				}
-				if (!rows.length) lines.push("No provider activity in this range");
+				if (p) selectedProvider = p.provider;
+				const viewport = recordViewport(rows, providerRow, Math.max(1, height - lines.length + 3), reveal);
+				lines.push(...dashboardPanels(ctx, width, [
+					{
+						title: "Provider totals", meta: `${TOTAL_SORTS[totalSort]} ${descending ? "↓" : "↑"} · ${rows.length} providers`, active: true,
+						render: innerWidth => rows.length ? [
+							...dataTable(ctx, innerWidth, "", [
+								{ key: "provider", header: "Provider", align: "left" },
+								{ key: "tokens", header: "Tokens", align: "right" },
+								{ key: "requests", header: "Requests", align: "right", priority: 1 },
+								{ key: "cost", header: "API-equiv.", align: "right", priority: 2 },
+								{ key: "output", header: "Output", align: "right", priority: 3 },
+							], viewport.rows.map(p => ({ provider: p.provider, tokens: compactTokens(p.totalTokens), requests: formatInteger(p.totalRequests), cost: costWithUnpriced(p.totalCost, p.unpricedRequests), output: compactTokens(p.totalOutputTokens) })), providerRow - viewport.start),
+							"",
+							...wrapTextWithAnsi(ctx.theme.fg("muted", "Token distribution · selected range"), innerWidth),
+							...ranking(ctx, innerWidth, viewport.rows.map(p => ({ label: p.provider, value: p.totalTokens, display: compactTokens(p.totalTokens) }))),
+						] : emptyState(ctx, innerWidth, "No provider activity in this range", "Provider totals reflect recorded local requests.", "Try a longer range."),
+					},
+					{
+						title: p ? `Selected ${p.provider}` : "Token mix", meta: p ? `${p.models} models · ${p.avgTokensPerSecond === null ? "—" : p.avgTokensPerSecond.toFixed(1)} tok/s` : undefined,
+						render: innerWidth => {
+							if (!p) return emptyState(ctx, innerWidth, "No provider selected", "A measured token mix appears alongside provider activity.");
+							const mix = [["Uncached input", p.totalInputTokens], ["Cache read", p.totalCacheReadTokens], ["Cache write", p.totalCacheWriteTokens], ["Output", p.totalOutputTokens]] as const;
+							return [
+								...wrapTextWithAnsi(`${formatInteger(p.totalRequests)} requests · ${formatPercent(p.totalRequests > 0 ? p.failedRequests / p.totalRequests : 0)} errors`, innerWidth),
+								...wrapTextWithAnsi(`API-equivalent cost ${costWithUnpriced(p.totalCost, p.unpricedRequests)}`, innerWidth),
+								"",
+								...ranking(ctx, innerWidth, mix.map(([label, value]) => ({ label, value, display: `${formatInteger(value)} · ${p.totalTokens > 0 ? formatPercent(value / p.totalTokens) : "—"}` }))),
+								...(expanded === p.provider ? [
+									"",
+									...wrapTextWithAnsi(`${formatInteger(p.failedRequests)} failed · ${formatInteger(p.totalPremiumRequests)} premium · Output ${formatInteger(p.totalOutputTokens)}`, innerWidth),
+									...wrapTextWithAnsi("Token mix is measured local usage; API-equivalent costs use public rates, not subscription billing.", innerWidth),
+								] : []),
+							];
+						},
+					},
+				]));
 			} else if (view === 1) {
 				const chart = burn(); point = Math.max(0, Math.min(chart.axis.length - 1, point));
-				lines.push(`Metric ${chart.metricName} · ${chart.step < 3_600_000 ? "5 minutes" : chart.step < 86_400_000 ? "hour" : "day"} · top six + Other`);
-				if (chart.metricName === "output" && data!.series.some(p => (p as typeof p & { outputTokens?: number }).outputTokens === undefined)) lines.push("Output burn unavailable for older payload points (gaps, not zero).");
-				const ts = chart.axis[point];
-				lines.push(`Point ${new Date(ts).toISOString()} · legend ${chart.rows[legend % Math.max(1, chart.rows.length)]?.label ?? "none"}`);
 				const format = chart.metricName === "cost" ? formatCost : formatInteger;
-				for (const r of chart.rows) {
-					const value = r.values[point];
-					if (!hiddenBurn.has(r.key) && value !== null && value !== undefined) lines.push(`${r.label}: ${format(value)} ${chart.metricName === "cost" ? "API-equivalent" : chart.metricName}`);
-				}
-				const rows = chart.rows.map(r => ({ ...r, legendValue: format(r.values.reduce<number>((sum, value) => sum + (value ?? 0), 0)) }));
-				lines.push(...renderTimeSeries(ctx, chart.axis, rows, width, point, { hidden: hiddenBurn, stacked: true, format: chart.metricName === "cost" ? formatCost : compactTokens, unit: chart.metricName === "cost" ? "USD API-equiv." : chart.metricName, height: 4, selectedKey: chart.rows[legend % Math.max(1, chart.rows.length)]?.key }));
+				const rows = chart.rows.map(r => {
+					const total = r.values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+					return { ...r, total, legendValue: format(total) };
+				});
+				lines.push(...dashboardPanels(ctx, width, [
+					{
+						title: "Burn by provider", meta: `${chart.metricName} · top six + Other`, active: true,
+						render: innerWidth => [
+							...(chart.metricName === "output" && data!.series.some(p => (p as typeof p & { outputTokens?: number }).outputTokens === undefined) ? wrapTextWithAnsi("Output burn unavailable for older payload points (gaps, not zero).", innerWidth) : []),
+							...renderTimeSeries(ctx, chart.axis, rows, innerWidth, point, { hidden: hiddenBurn, stacked: true, format: chart.metricName === "cost" ? formatCost : compactTokens, unit: chart.metricName === "cost" ? "USD API-equiv." : chart.metricName, height: 4, selectedKey: chart.rows[legend % Math.max(1, chart.rows.length)]?.key }),
+						],
+					},
+					{
+						title: "Range distribution", meta: chart.metricName === "cost" ? "API-equivalent · public rates" : `Recorded ${chart.metricName}`,
+						render: innerWidth => [
+							...ranking(ctx, innerWidth, rows.filter(r => !hiddenBurn.has(r.key)).map(r => ({ label: r.label, value: r.total, display: r.legendValue }))),
+							"",
+							...wrapTextWithAnsi(ctx.theme.fg("muted", `Buckets: ${chart.step < 3_600_000 ? "5 minutes" : chart.step < 86_400_000 ? "hour" : "day"} · legend shows selected bucket and range total. Hidden providers are excluded from the distribution.`), innerWidth),
+						],
+					},
+				]));
 			} else if (view === 2) {
 				const hours = Array.from({ length: 24 }, () => ({ tokens: 0, output: 0, requests: 0 }));
 				for (const p of data!.hourly) if (peakProvider === null || p.provider === peakProvider) { hours[p.hour].tokens += p.totalTokens; hours[p.hour].output += p.outputTokens; hours[p.hour].requests += p.requests; }
 				const peak = hours.reduce((best, p, i) => p.tokens > hours[best].tokens ? i : best, 0);
-				lines.push(`Provider ${peakProvider ?? "All providers"} · peak ${hours[peak].tokens > 0 ? `${String(peak).padStart(2, "0")}:00` : "none"}`, `Hour ${String(hour).padStart(2, "0")}:00 local · ${formatInteger(hours[hour].tokens)} tokens · ${formatInteger(hours[hour].output)} output · ${formatInteger(hours[hour].requests)} requests`);
 				const max = Math.max(0, ...hours.map(p => p.tokens));
-				const track = Math.max(1, Math.min(36, width - 25));
-				for (let i = Math.max(0, hour - 4); i < Math.min(24, Math.max(9, hour + 5)); i++) lines.push(`${i === hour ? glyph(preset, "rowCursor") : " "} ${String(i).padStart(2, "0")} ${ctx.theme.fg(i === peak ? "warning" : "success", glyph(preset, "barFill").repeat(max > 0 ? Math.round(hours[i].tokens / max * track) : 0))} ${compactTokens(hours[i].tokens)}`);
-				if (max === 0) lines.push("No activity in this range");
+				const rankedHours = hours.map((p, i) => ({ ...p, hour: i })).filter(p => p.tokens > 0).sort((a, b) => b.tokens - a.tokens || a.hour - b.hour).slice(0, 6);
+				if (!rankedHours.some(p => p.hour === hour)) rankedHours.push({ ...hours[hour], hour });
+				lines.push(...dashboardPanels(ctx, width, [
+					{
+						title: "Peak local hours", meta: peakProvider ?? "All providers", active: true,
+						render: innerWidth => max > 0 ? ranking(ctx, innerWidth, rankedHours.map(p => ({ label: `${p.hour === hour ? glyph(preset, "rowCursor") : " "} ${String(p.hour).padStart(2, "0")}:00`, value: p.tokens, display: compactTokens(p.tokens) }))) : emptyState(ctx, innerWidth, "No activity in this range", "Local-hour totals use recorded provider requests.", "Try a longer range or another provider."),
+					},
+					{
+						title: "Hour context",
+						render: innerWidth => [
+							...wrapTextWithAnsi(`Provider ${peakProvider ?? "All providers"} · peak ${hours[peak].tokens > 0 ? `${String(peak).padStart(2, "0")}:00` : "none"}`, innerWidth),
+							"",
+							...wrapTextWithAnsi(`Hour ${String(hour).padStart(2, "0")}:00 local · ${formatInteger(hours[hour].tokens)} tokens · ${formatInteger(hours[hour].output)} output · ${formatInteger(hours[hour].requests)} requests`, innerWidth),
+							"",
+							...wrapTextWithAnsi(ctx.theme.fg("muted", "Ranked hours show the six busiest local hours plus your selection. Hours aggregate the selected range; provider selection applies to tokens, output and requests together."), innerWidth),
+						],
+					},
+				]));
 			} else if (view === 3) {
-				if (insights === null) lines.push(windowsLoading ? "Loading subscription windows (you can still switch views)…" : "Subscription window payload unavailable");
 				const rows = sortedWindows();
 				const selected = rows.findIndex(i => i.provider === picked?.provider && i.windowKey === picked?.windowKey);
 				const i = rows[selected];
-				lines.push(sectionHeading(ctx, width, "Subscription windows", `${WINDOW_SORTS[windowSort]} ${descending ? "↓" : "↑"} · ${rows.length} windows`, true));
-				const viewport = recordViewport(rows, Math.max(0, selected), Math.max(1, height - lines.length + 10), reveal);
-				lines.push(...dataTable(ctx, width, "", [
-					{ key: "window", header: "Provider / window", align: "left" },
-					{ key: "burned", header: "Burned", align: "right" },
-					{ key: "accounts", header: "Accounts", align: "right", priority: 1 },
-					{ key: "capacity", header: "Capacity", align: "right", priority: 2 },
-					{ key: "exhaustions", header: "Exhaustions", align: "right", priority: 3 },
-				], viewport.rows.map(i => ({ window: `${i.provider} / ${i.windowLabel}`, burned: i.fractionConsumed.toFixed(2), accounts: formatInteger(i.accounts), capacity: i.estTokensPerWindow === null ? "—" : compactTokens(i.estTokensPerWindow), exhaustions: formatInteger(i.exhaustedEvents) })), selected - viewport.start));
-				if (i) lines.push(ctx.theme.bold(`${i.provider} · ${i.windowLabel}`), `Windows burned ${i.fractionConsumed.toFixed(2)} · resets ${i.cycles} · capacity ${i.estTokensPerWindow === null ? "— (too little consumed to estimate)" : `${compactTokens(i.estTokensPerWindow)} tokens/window`}`, `Peak ${formatPercent(i.peakConcurrentFraction)} summed · fleet ${i.accounts} accounts · fleet load ${i.accounts ? formatPercent(i.peakConcurrentFraction / i.accounts) : "—"}`, `Accounts needed ${i.idealAccounts} at <90% · have ${i.accounts} · ${i.idealAccounts > i.accounts ? `short ${i.idealAccounts - i.accounts}` : `headroom ${i.accounts - i.idealAccounts}`} · exhaustions ${i.exhaustedEvents}`);
-				if (insights && !insights.length) lines.push("No usage snapshots in this range. Snapshots accumulate when limits are fetched (footer, /usage, omp usage).");
-				lines.push("Capacity uses upstream broker fleet tokens when present, otherwise local provider tokens; it is an estimate, not billing.");
+				const viewport = recordViewport(rows, Math.max(0, selected), Math.max(1, height - lines.length + 3), reveal);
+				lines.push(...dashboardPanels(ctx, width, [
+					{
+						title: "Subscription windows", meta: `${WINDOW_SORTS[windowSort]} ${descending ? "↓" : "↑"} · ${rows.length} windows`, active: true,
+						render: innerWidth => rows.length ? dataTable(ctx, innerWidth, "", [
+							{ key: "window", header: "Provider / window", align: "left" },
+							{ key: "burned", header: "Burned", align: "right" },
+							{ key: "accounts", header: "Accounts", align: "right", priority: 1 },
+							{ key: "capacity", header: "Capacity", align: "right", priority: 2 },
+							{ key: "exhaustions", header: "Exhaustions", align: "right", priority: 3 },
+						], viewport.rows.map(i => ({ window: `${i.provider} / ${i.windowLabel}`, burned: i.fractionConsumed.toFixed(2), accounts: formatInteger(i.accounts), capacity: i.estTokensPerWindow === null ? "—" : compactTokens(i.estTokensPerWindow), exhaustions: formatInteger(i.exhaustedEvents) })), selected - viewport.start) : emptyState(ctx, innerWidth, insights === null ? windowsLoading ? "Loading subscription windows…" : "Subscription window payload unavailable" : "No usage snapshots in this range", "Snapshots accumulate when limits are fetched (footer, /usage, omp usage).", "Local usage remains available in the other views."),
+					},
+					{
+						title: i ? `${i.provider} · ${i.windowLabel}` : "Capacity context",
+						render: innerWidth => [
+							...(i ? [
+								`Windows burned ${i.fractionConsumed.toFixed(2)} · resets ${i.cycles} · capacity ${i.estTokensPerWindow === null ? "— (too little consumed to estimate)" : `${compactTokens(i.estTokensPerWindow)} tokens/window`}`,
+								`Peak ${formatPercent(i.peakConcurrentFraction)} summed · fleet ${i.accounts} accounts · fleet load ${i.accounts ? formatPercent(i.peakConcurrentFraction / i.accounts) : "—"}`,
+								`Accounts needed ${i.idealAccounts} at <90% · have ${i.accounts} · ${i.idealAccounts > i.accounts ? `short ${i.idealAccounts - i.accounts}` : `headroom ${i.accounts - i.idealAccounts}`} · exhaustions ${i.exhaustedEvents}`,
+								"",
+							] : []),
+							"Capacity uses upstream broker fleet tokens when present, otherwise local provider tokens; it is an estimate, not billing.",
+						].flatMap(line => wrapTextWithAnsi(ctx.theme.fg("text", line), innerWidth)),
+					},
+				]));
 			} else {
-				lines.push(`Provider ${picked?.provider ?? "—"} · window ${insights?.find(i => i.provider === picked?.provider && i.windowKey === picked?.windowKey)?.windowLabel ?? "—"}`);
-				if (!picked) lines.push(insights?.length === 0 ? "No usage snapshots in this range" : "Waiting for subscription windows");
-				else if (!accountData) lines.push(accountsLoading ? "Loading account histories (input remains active)…" : "No account-history payload available");
 				const rows = accountRows();
 				const retained = rows.findIndex(r => JSON.stringify([r.series.windowKey, r.series.accountKey]) === selectedAccount);
 				row = retained >= 0 ? retained : Math.max(0, Math.min(row, rows.length - 1));
 				const current = rows[row];
-				lines.push(sectionHeading(ctx, width, "Accounts / all provider windows", `${ACCOUNT_SORTS[accountSort]} ${descending ? "↓" : "↑"}`, true));
-				const viewport = recordViewport(rows, row, Math.max(1, height - lines.length - 4), reveal);
-				lines.push(...dataTable(ctx, width, "", [
-					{ key: "account", header: "Account / window", align: "left" },
-					{ key: "latest", header: "Latest", align: "right" },
-					{ key: "peak", header: "Peak", align: "right", priority: 1 },
-					{ key: "samples", header: "Snapshots", align: "right", priority: 2 },
-					{ key: "resets", header: "Resets", align: "right", priority: 3 },
-				], viewport.rows.map(r => ({ account: `${r.name} / ${r.series.windowLabel}`, latest: `${r.latest ? formatPercent(r.latest.fraction) : "—"}${r.latest?.exhausted ? " exhausted" : ""}`, peak: r.peak === null ? "—" : formatPercent(r.peak), samples: formatInteger(r.samples), resets: formatInteger(r.resets) })), row - viewport.start));
-				if (current) {
-					selectedAccount = JSON.stringify([current.series.windowKey, current.series.accountKey]);
-					lines.push(ctx.theme.bold(`${current.name} · ${current.series.windowLabel}`), `Account key ${current.series.accountKey}`, `Latest ${current.latest ? `${formatPercent(current.latest.fraction)} · ${new Date(current.latest.timestamp).toISOString()} · ${current.latest.exhausted ? "EXHAUSTED" : current.latest.fraction >= 0.8 ? "HIGH" : "OK"}` : "No numeric reading"}`, `Peak ${current.peak === null ? "—" : formatPercent(current.peak)} · headroom ${current.latest ? formatPercent(1 - current.latest.fraction) : "—"} · resets ${current.resets} · snapshots ${current.samples}`);
-				}
+				if (current) selectedAccount = JSON.stringify([current.series.windowKey, current.series.accountKey]);
+				const viewport = recordViewport(rows, row, Math.max(1, height - lines.length + 3), reveal);
 				const matching = rows.filter(r => r.series.windowKey === picked?.windowKey).sort((a, b) => a.name.localeCompare(b.name));
 				const chart = utilization(matching.map(r => r.series));
 				utilPoint = utilPoint < 0 ? chart.axis.length - 1 : Math.min(utilPoint, chart.axis.length - 1);
 				const chartRows = chart.rows.map(r => ({ ...r, label: matching.find(a => a.series.accountKey === r.key)?.name ?? r.key }));
-				if (chart.axis.length) {
-					lines.push(`Utilization ${new Date(chart.axis[Math.max(0, utilPoint)]).toISOString()} · legend ${chartRows[legend % Math.max(1, chartRows.length)]?.label ?? "none"} · 100% = exhausted capacity`);
-					for (const r of chartRows) if (!hiddenAccounts.has(r.key)) lines.push(`${r.label}: ${r.values[utilPoint] === null ? "No reading (gap)" : formatPercent(r.values[utilPoint]!, 1)}`);
-					const exhausted = chart.exhausted[utilPoint] ?? [];
-					if (exhausted.length) lines.push(ctx.theme.fg("error", `EXHAUSTED: ${exhausted.map(key => chartRows.find(r => r.key === key)?.label ?? key).join(", ")}`));
-					lines.push(...renderTimeSeries(ctx, chart.axis, chartRows, width, utilPoint, { hidden: hiddenAccounts, percent: true, format: value => formatPercent(value, 1), unit: "capacity", height: 3, selectedKey: chartRows[legend % Math.max(1, chartRows.length)]?.key }));
-				} else if (accountData) lines.push("No utilization readings for this window");
-				lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", "Readings hold at most six hours; longer silence is a gap, not zero."), width));
+				lines.push(...wrapTextWithAnsi(ctx.theme.fg("text", `Provider ${picked?.provider ?? "—"} · window ${insights?.find(i => i.provider === picked?.provider && i.windowKey === picked?.windowKey)?.windowLabel ?? "—"}`), width));
+				lines.push(...dashboardPanels(ctx, width, [
+					{
+						title: "Accounts / all provider windows", meta: `${ACCOUNT_SORTS[accountSort]} ${descending ? "↓" : "↑"}`, active: true,
+						render: innerWidth => [
+							...(rows.length ? dataTable(ctx, innerWidth, "", [
+								{ key: "account", header: "Account / window", align: "left" },
+								{ key: "latest", header: "Latest", align: "right" },
+								{ key: "peak", header: "Peak", align: "right", priority: 1 },
+								{ key: "samples", header: "Snapshots", align: "right", priority: 2 },
+								{ key: "resets", header: "Resets", align: "right", priority: 3 },
+							], viewport.rows.map(r => ({ account: `${r.name} / ${r.series.windowLabel}`, latest: `${r.latest ? formatPercent(r.latest.fraction) : "—"}${r.latest?.exhausted ? " exhausted" : ""}`, peak: r.peak === null ? "—" : formatPercent(r.peak), samples: formatInteger(r.samples), resets: formatInteger(r.resets) })), row - viewport.start) : emptyState(ctx, innerWidth, !picked ? insights?.length === 0 ? "No usage snapshots in this range" : "Waiting for subscription windows" : accountsLoading ? "Loading account histories…" : "No account-history payload available", "Account histories are fetched independently of local usage.")),
+							...(current ? [
+								"",
+								...[
+									`${current.name} · ${current.series.windowLabel}`,
+									`Account key ${current.series.accountKey}`,
+									`Latest ${current.latest ? `${formatPercent(current.latest.fraction)} · ${new Date(current.latest.timestamp).toISOString()} · ${current.latest.exhausted ? "EXHAUSTED" : current.latest.fraction >= 0.8 ? "HIGH" : "OK"}` : "No numeric reading"}`,
+									`Peak ${current.peak === null ? "—" : formatPercent(current.peak)} · headroom ${current.latest ? formatPercent(1 - current.latest.fraction) : "—"} · resets ${current.resets} · snapshots ${current.samples}`,
+								].flatMap(line => wrapTextWithAnsi(line, innerWidth)),
+							] : []),
+						],
+					},
+					{
+						title: "Account utilization", meta: "100% = exhausted capacity",
+						render: innerWidth => {
+							const exhausted = chart.exhausted[utilPoint] ?? [];
+							return [
+								...(chart.axis.length ? renderTimeSeries(ctx, chart.axis, chartRows, innerWidth, utilPoint, { hidden: hiddenAccounts, percent: true, format: value => formatPercent(value, 1), formatValue: (_key, value) => value === null || value === undefined ? "No reading (gap)" : formatPercent(value, 1), unit: "capacity", height: 3, selectedKey: chartRows[legend % Math.max(1, chartRows.length)]?.key }) : emptyState(ctx, innerWidth, "No utilization readings for this window", "Recorded snapshots will appear here; missing readings are not zero.")),
+								...(exhausted.length ? wrapTextWithAnsi(ctx.theme.fg("error", `EXHAUSTED: ${exhausted.map(key => chartRows.find(r => r.key === key)?.label ?? key).join(", ")}`), innerWidth) : []),
+								"",
+								...wrapTextWithAnsi(ctx.theme.fg("muted", "Readings hold at most six hours; longer silence is a gap, not zero."), innerWidth),
+							];
+						},
+					},
+				]));
 			}
 			return boundLines(lines, width);
 		},

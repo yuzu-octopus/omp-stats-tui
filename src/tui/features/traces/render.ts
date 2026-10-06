@@ -12,17 +12,23 @@ export function clean(value: unknown): string {
 export function bounded(lines: readonly string[], width: number): string[] {
 	return lines.map(line => truncateToWidth(line, Math.max(1, width)));
 }
+/** Long recorded histories remain legible without losing sub-hour precision. */
+export function traceDuration(ms: number | null): string {
+	if (ms === null || !Number.isFinite(ms) || Math.abs(ms) < 3_600_000) return formatDurationMs(ms);
+	const minutes = Math.floor(Math.abs(ms) / 60_000);
+	return `${ms < 0 ? "−" : ""}${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
 /** Empty transcript titles retain their recorded project and file identity. */
 export function sessionIdentity(title: string | null | undefined, file: string, project?: string | null): string {
 	const recorded = clean(title).trim();
 	if (recorded) return recorded;
-	const name = clean(file).split("/").filter(Boolean).pop()?.replace(/\.jsonl$/i, "") || clean(file);
-	const folder = clean(project).split("/").filter(Boolean).pop();
+	const name = clean(file).split(/[\\/]/).filter(Boolean).pop()?.replace(/\.jsonl$/i, "") || clean(file);
+	const folder = clean(project).split(/[\\/]/).filter(Boolean).pop();
 	return folder ? `${folder} · ${name}` : name;
 }
 export function rowLabel(row: TraceRow, startedAt: number): string {
 	const span = row.span;
-	return `${row.track.id} · ${span?.kind ?? row.marker?.kind} · ${span?.label ?? row.marker?.label} · +${formatDurationMs(row.time - startedAt)}${span ? ` · ${formatDurationMs(span.end - span.start)}${span.isError ? " · ERROR" : ""}${span.unterminated ? " · pending" : ""}` : ""}`;
+	return `${row.track.id} · ${span?.kind ?? row.marker?.kind} · ${span?.label ?? row.marker?.label} · +${traceDuration(row.time - startedAt)}${span ? ` · ${traceDuration(span.end - span.start)}${span.isError ? " · ERROR" : ""}${span.unterminated ? " · pending" : ""}` : ""}`;
 }
 
 interface TimelineRow { track: TraceTrack; lane?: Lane; markers?: boolean }
@@ -45,7 +51,7 @@ export function renderTimeline(options: {
 	const windowStart = Math.max(0, Math.floor((viewport.u0 - full.u0) / domainSize * plotWidth));
 	const windowEnd = Math.min(plotWidth - 1, Math.floor((viewport.u1 - full.u0) / domainSize * (plotWidth - 1)));
 	const brush = Array<string>(plotWidth).fill(" ");
-	for (let x = windowStart; x <= windowEnd; x++) brush[x] = theme.fg("dim", glyph(preset, "axisRule"));
+	for (let x = windowStart; x <= windowEnd; x++) brush[x] = theme.fg("muted", glyph(preset, "axisRule"));
 	brush[windowStart] = theme.fg("accent", "[");
 	brush[windowEnd] = theme.fg("accent", "]");
 	if (options.overviewAnchor !== null && options.overviewAnchor !== undefined) brush[Math.min(plotWidth - 1, Math.floor(options.overviewAnchor * (plotWidth - 1)))] = theme.fg("warning", "|");
@@ -62,7 +68,7 @@ export function renderTimeline(options: {
 		}
 		lines.push(`${`Overview ${kind}`.padEnd(labelWidth)} ${density.map((count, x) => count ? theme.fg(errors[x] ? "error" : SPAN_COLORS[kind], count > 1 ? glyph(preset, "barFill") : MARKS[kind]) : glyph(preset, "heatEmpty")).join("")}`);
 	}
-	lines.push(`Window +${formatDurationMs(scale.toT(viewport.u0) - trace.startedAt)} → +${formatDurationMs(scale.toT(viewport.u1) - trace.startedAt)} · ${(domainSize / (viewport.u1 - viewport.u0)).toFixed(1)}×`);
+	lines.push(theme.fg("muted", `Window +${traceDuration(scale.toT(viewport.u0) - trace.startedAt)} → +${traceDuration(scale.toT(viewport.u1) - trace.startedAt)} · ${(domainSize / (viewport.u1 - viewport.u0)).toFixed(1)}×`));
 	const ruler = Array<string>(plotWidth).fill(glyph(preset, "axisRule"));
 	for (const gap of scale.gaps) {
 		const x = Math.floor((gap.uMid - viewport.u0) / (viewport.u1 - viewport.u0) * plotWidth);
@@ -125,18 +131,18 @@ export function renderTimeline(options: {
 		lines.push(`${active ? theme.bg(SELECTION_BG.band, theme.bold(theme.fg("accent", padded))) : padded} ${cells.join("")}`);
 	}
 	if (!trace.tracks.some(track => track.spans.length || track.markers.length)) lines.push("No recorded spans or markers in this trace.");
-	if (visible.rows.length < timelineRows.length) lines.push(theme.fg("dim", `Rows ${visible.offset + 1}–${visible.offset + visible.rows.length}/${timelineRows.length} · ↑/↓ reveal · Tab panes`));
-	lines.push(...wrapTextWithAnsi(`I input · M model · T tool · A agent · B background · ${glyph(preset, "trackMarker")} marker · ~ compressed idle`, width));
+	if (visible.rows.length < timelineRows.length) lines.push(theme.fg("muted", `Rows ${visible.offset + 1}–${visible.offset + visible.rows.length}/${timelineRows.length} · ↑/↓ reveal · Tab panes`));
+	lines.push(...wrapTextWithAnsi(KINDS.map(kind => theme.fg(SPAN_COLORS[kind], `${MARKS[kind]} ${kind === "turn" ? "input" : kind === "subagent" ? "agent" : kind}`)).join(" · ") + theme.fg("muted", ` · ${glyph(preset, "trackMarker")} marker · ~ compressed idle`), width));
 	return bounded(lines, width);
 }
 
-export function renderEntry(row: TraceRow | null, entry: unknown, loading: boolean, error: string | null, raw: boolean, width: number): string[] {
+export function renderEntry(row: TraceRow | null, entry: unknown, loading: boolean, error: string | null, raw: boolean, width: number, theme: Theme): string[] {
 	const span = row?.span;
 	const lines = row ? [clean(rowLabel(row, row.time)), `Track: ${clean(row.track.label)} · ${clean(row.track.file)}`] : [];
 	if (span) {
 		lines.push(`Start: ${new Date(span.start).toISOString()} · End: ${new Date(span.end).toISOString()}`);
 		if (span.detail) lines.push(`${span.kind === "subagent" ? "Task" : span.kind === "tool" ? "Arguments" : "Detail"}: ${clean(span.detail)}`);
-		if (span.kind === "model") lines.push(`Model: ${clean(span.model ?? "unknown")} · Tokens: ${formatInteger(span.tokens ?? 0)} · Cost: ${formatEstimatedCost(span.cost ?? 0, 0)} · TTFT: ${formatDurationMs(span.ttft ?? null)}`);
+		if (span.kind === "model") lines.push(`Model: ${clean(span.model ?? "unknown")} · Tokens: ${formatInteger(span.tokens ?? 0)} · Cost: ${formatEstimatedCost(span.cost ?? 0, 0)} · TTFT: ${traceDuration(span.ttft ?? null)}`);
 		if (span.childTrackId) lines.push(`Child: ${clean(span.childTrackId)} · o reveal child · O open child's transcript`);
 	}
 	if (loading) lines.push("Loading full journal entry…");
@@ -151,7 +157,7 @@ export function renderEntry(row: TraceRow | null, entry: unknown, loading: boole
 		lines.push(`Usage: input ${clean(usage.input)} · output ${clean(usage.output)} · cache read ${clean(usage.cacheRead)} · cache write ${clean(usage.cacheWrite)} · total ${clean(usage.totalTokens)}`);
 		if (usage.cost) lines.push(`Component costs: ${clean(JSON.stringify(usage.cost))}`);
 	}
-	if (typeof msg.content === "string") lines.push("Text:", clean(msg.content));
+	if (typeof msg.content === "string") lines.push("", "Text:", clean(msg.content));
 	else if (Array.isArray(msg.content)) for (const block of msg.content) {
 		if (!block || typeof block !== "object") continue;
 		if (typeof block.text === "string") lines.push(`${clean(block.type)}:`, clean(block.text));
@@ -159,6 +165,12 @@ export function renderEntry(row: TraceRow | null, entry: unknown, loading: boole
 	}
 	if (msg.details !== undefined) lines.push("Tool details:", clean(JSON.stringify(msg.details, null, 2)));
 	if (row && !loading && entry === null && span?.entryId === undefined) lines.push("No journal entry is associated with this span/marker.");
-	if (raw) lines.push("Raw JSON:", clean(JSON.stringify(entry ?? span ?? row?.marker, null, 2)));
-	return lines.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
+	if (raw) lines.push("", "Raw JSON:", clean(JSON.stringify(entry ?? span ?? row?.marker, null, 2)));
+	return lines.flatMap((line, index) => {
+		const token = index === 0 && row ? span?.isError ? "error" : span ? SPAN_COLORS[span.kind] : "muted"
+			: line.startsWith("Entry unavailable:") ? "error"
+				: /^(Track:|Start:|First seen|No journal|Loading full)/.test(line) ? "muted" : "text";
+		const ink = theme.fg(token, line);
+		return wrapTextWithAnsi(line.endsWith(":") ? theme.bold(ink) : ink, Math.max(1, width));
+	});
 }

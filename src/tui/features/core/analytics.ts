@@ -8,7 +8,7 @@ import type { CostPayload, ModelDashboardPayload } from "../../../data/api";
 import type { Range } from "../../../data/ranges";
 import { renderTimeSeries } from "../../charts/time-series";
 import type { StatTile } from "../../band";
-import { focusTabs, metricGrid, sectionHeading } from "../presentation";
+import { dashboardPanels, emptyState, focusTabs, metricGrid, panel, ranking, sectionHeading } from "../presentation";
 import type { FeatureContext, FeatureController } from "../types";
 import { ChartState, ListState, fields, wrap, type CoreSeries, type ListColumn, type Sorters } from "./shared";
 
@@ -162,11 +162,11 @@ class AnalyticsFeature implements FeatureController {
 		this.modes = [{ label: "Daily estimate by model (UTC)", series: models, unit: "USD" }, { label: "Daily estimate by component (UTC)", series: COMPONENTS.map(c => ({ ...c, values: densify(data.costSeries, this.buckets, p => p[c.key]) })), unit: "USD" }];
 		this.tables[0].rows = summary.models.map(m => {
 			const perPricedRequest = m.requests > m.unpricedRequests ? m.cost / (m.requests - m.unpricedRequests) : null;
-			return row(m.key, identity(m.model, m.provider), { ...m, perPricedRequest }, { ...m, cost: `${formatEstimatedCost(m.cost, m.unpricedRequests)} · Unknown requests: ${formatInteger(m.unpricedRequests)}`, share: m.cost === 0 && m.unpricedRequests > 0 ? "N/A" : `${formatPercent(m.share)} of priced estimate`, ...Object.fromEntries(COMPONENTS.map(c => [c.key, `${formatEstimatedCost(m[c.key], m.unpricedRequests)} · Unknown requests: ${formatInteger(m.unpricedRequests)}`])), perPricedRequest: `${perPricedRequest === null ? "N/A" : perPricedRequest > 0 && perPricedRequest < 0.0001 ? "<$0.0001" : formatCost(perPricedRequest)} · Unknown requests excluded: ${formatInteger(m.unpricedRequests)}` });
+			return row(m.key, identity(m.model, m.provider), { ...m, perPricedRequest }, { ...m, cost: `${formatEstimatedCost(m.cost, m.unpricedRequests)} · Unknown requests: ${formatInteger(m.unpricedRequests)}`, share: m.cost === 0 && m.unpricedRequests > 0 ? "N/A" : formatPercent(m.share), ...Object.fromEntries(COMPONENTS.map(c => [c.key, `${formatEstimatedCost(m[c.key], m.unpricedRequests)} · Unknown requests: ${formatInteger(m.unpricedRequests)}`])), perPricedRequest: `${perPricedRequest === null ? "N/A" : perPricedRequest > 0 && perPricedRequest < 0.0001 ? "<$0.0001" : formatCost(perPricedRequest)} · Unknown requests excluded: ${formatInteger(m.unpricedRequests)}` });
 		});
 		this.tables[1].rows = COMPONENTS.map(c => {
 			const values = { component: c.label, cost: summary[c.key], share: summary.totalCost > 0 ? summary[c.key] / summary.totalCost : 0, unpricedRequests: summary.unpricedRequests };
-			return row(c.key, c.label, values, { ...values, cost: `${formatEstimatedCost(values.cost, summary.unpricedRequests)} · Unknown requests: ${formatInteger(summary.unpricedRequests)}`, share: summary.totalCost > 0 ? `${formatPercent(values.share)} of priced estimate` : "N/A" });
+			return row(c.key, c.label, values, { ...values, cost: `${formatEstimatedCost(values.cost, summary.unpricedRequests)} · Unknown requests: ${formatInteger(summary.unpricedRequests)}`, share: summary.totalCost > 0 ? formatPercent(values.share) : "N/A" });
 		});
 		const priced = summary.requests - summary.unpricedRequests;
 		this.metrics = [
@@ -217,58 +217,93 @@ class AnalyticsFeature implements FeatureController {
 	render(width: number, height: number): readonly string[] {
 		const lines = [sectionHeading(this.ctx, width, this.id[0].toUpperCase() + this.id.slice(1), this.range)];
 		const filter = this.toolFilter !== null && this.toolNames.includes(this.toolFilter) ? this.toolFilter : null;
-		if (this.loading) lines.push(this.ctx.theme.fg("dim", "Loading… Previous observations remain visible."));
+		if (this.loading) lines.push(this.ctx.theme.fg("muted", this.modes.length ? "Loading… Previous observations remain visible." : "Loading observations…"));
 		if (this.error) lines.push(this.ctx.theme.fg("error", this.error));
+		if (!this.modes.length) {
+			lines.push(...panel(this.ctx, width, "Observations", emptyState(this.ctx, Math.max(1, width - 4),
+				this.loading ? "Reading the selected range" : this.error ? "Observations unavailable" : "No observations loaded yet",
+				this.loading ? "Recorded metrics will appear when the read completes." : "Choose a range to load recorded metrics.")));
+			return wrap(lines, width);
+		}
 		if (this.expanded) {
 			const selected = this.rows(this.expanded.table).find(r => r.key === this.expanded?.key);
 			if (selected) {
-				lines.push(`Details: ${selected.label}`);
-				if (this.id === "models" && this.detailMode === "performance") lines.push(...this.renderPerformance(selected.key, width), "m requests trend");
-				else if (this.id === "models" || this.id === "tools") {
-					const trend = this.trends.get(this.id === "tools" ? selected.tool ?? selected.key : selected.key);
-					lines.push(this.id === "tools" ? "Tool call trend (all models)" : "Model request trend", ...this.trendChart.render(this.ctx, width, this.buckets, trend ? [trend] : [], { height: 5, unit: this.id === "tools" ? "calls" : "requests", format: formatInteger }), ...(this.id === "models" ? ["m performance chart"] : []));
-				}
-				lines.push(...fields(selected.display));
-				lines.push("b/Esc back · Tab focus · q close");
+				lines.push(sectionHeading(this.ctx, width, `Details: ${selected.label}`));
+				lines.push(...wrap([this.ctx.theme.fg("muted", this.id === "models"
+					? `m ${this.detailMode === "performance" ? "requests trend" : "performance chart"} · n/v series · ,/. point · b/Esc back`
+					: this.id === "tools" ? "n/v series · ,/. point · b/Esc back" : "b/Esc back")], width));
+				const trend = this.trends.get(this.id === "tools" ? selected.tool ?? selected.key : selected.key);
+				const panels = [];
+				if (this.id === "models" || this.id === "tools") panels.push({
+					title: this.id === "models" && this.detailMode === "performance" ? "Response performance" : this.id === "tools" ? "Tool call trend (all models)" : "Model request trend",
+					render: (innerWidth: number) => this.id === "models" && this.detailMode === "performance"
+						? this.renderPerformance(selected.key, innerWidth)
+						: this.trendChart.render(this.ctx, innerWidth, this.buckets, trend ? [trend] : [], { height: 4, unit: this.id === "tools" ? "calls" : "requests", format: formatInteger }),
+				});
+				panels.push({ title: "Recorded metrics", render: (innerWidth: number) => wrap(fields(selected.display), innerWidth) });
+				lines.push(...dashboardPanels(this.ctx, width, panels));
 				return wrap(lines, width);
 			}
 		}
 		lines.push(...metricGrid(this.ctx, width, this.metrics));
-		if (this.id === "costs") lines.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced.reduce((total, count) => total + count, 0))} unpriced · API estimate excludes unpriced usage, not free`));
-		if (this.id === "tools") lines.push(this.ctx.theme.fg("dim", "Attribution: invoking-turn tokens/cost split across tool calls."));
+		if (this.id === "costs") lines.push(...wrap([this.ctx.theme.fg("muted", `${formatInteger(this.unpriced.reduce((total, count) => total + count, 0))} unpriced · API estimate excludes unpriced usage, not free. Shares use the priced estimate.`)], width));
+		if (this.id === "tools") lines.push(...wrap([this.ctx.theme.fg("muted", "Attribution: invoking-turn tokens/cost split across tool calls.")], width));
 		lines.push(...focusTabs(this.ctx, width, ["Chart", ...this.tables.map(table => table.title)], this.focus));
-		if (this.focus > 0) lines.push(...this.renderTable(this.focus - 1, width, height, filter));
-		const mode = this.mode();
-		if (mode) {
-			this.chart.reconcile(this.buckets, mode.series.map(series => series.key));
-			lines.push(mode.label);
-			const unknown = this.unpriced.reduce((total, count) => total + count, 0);
-			if (this.id === "costs" && unknown > 0 && mode.series.every(s => s.values.every(value => value === 0)))
-				lines.push(`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`);
-			lines.push(...this.chart.render(this.ctx, width, this.buckets, mode.series, {
-				unit: mode.unit === "USD" ? "known-priced USD / day" : mode.unit, percent: mode.unit === "share", stacked: true,
-				format: mode.unit === "USD" ? formatCost : mode.unit === "share" ? formatPercent : formatCompact, height: 5,
-				formatValue: mode.unit === "USD" ? (key, value, point) => value === null || value === undefined ? "—" : formatEstimatedCost(value, this.chart.mode % 2 === 0 ? this.costSeriesUnknown.get(key)?.[point] ?? 0 : this.unpriced[point] ?? 0) : undefined,
-			}));
-			this.chart.point = Math.min(this.chart.point, Math.max(0, this.buckets.length - 1));
-			const point = this.chart.point;
-			// The legend already contains the selected values; don't repeat it as prose.
-			if (this.id === "costs" && this.buckets.length) {
-				const timestamp = this.buckets[point];
-				lines.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced[point] ?? 0)} unpriced in selected UTC day`));
-				// Unpriced-only identities may not have a positive-cost chart series.
-				for (const p of this.costs?.costSeries ?? []) if (p.timestamp === timestamp && p.unpricedRequests > 0) lines.push(`${identity(p.model, p.provider)} · ${formatEstimatedCost(p.cost, p.unpricedRequests)} · ${formatInteger(p.unpricedRequests)} unpriced`);
-			}
+		lines.push(...wrap([this.ctx.theme.fg("muted", this.focus === 0 ? "Tab pane · m mode · n/v series · ,/. point"
+			: `Tab pane · / search · j/k select · o/O sort · +/a reveal · ${this.id === "tools" ? "Enter filter · d details · f/x tool" : "Enter details"} · Esc clear`)], width));
+		const primary = this.focus > 0 ? this.focus - 1 : 0;
+		const tablePanel = (index: number) => ({
+			title: this.tables[index].title,
+			meta: this.id === "tools" && index === 1 ? `Tool filter: ${filter ?? "All tools"}` : undefined,
+			active: this.focus === index + 1,
+			render: (innerWidth: number) => this.renderTable(index, innerWidth, Math.max(7, height - lines.length - 4)),
+		});
+		const chartPanel = {
+			title: this.mode()?.label ?? "Activity",
+			active: this.focus === 0,
+			render: (innerWidth: number) => this.renderChart(innerWidth),
+		};
+		// On narrow screens the active table comes first; wide screens keep it
+		// beside the chart so a long legend cannot displace the working viewport.
+		lines.push(...dashboardPanels(this.ctx, width, this.focus > 0 ? [tablePanel(primary), chartPanel] : [chartPanel, tablePanel(primary)], { ratio: this.focus > 0 ? 0.58 : 0.46 }));
+		for (let index = 0; index < this.tables.length; index++) {
+			if (index === primary) continue;
+			const secondary = tablePanel(index);
+			lines.push(...panel(this.ctx, width, secondary.title, secondary.render(Math.max(1, width - 4)), { meta: secondary.meta, active: secondary.active }));
 		}
-		for (let i = 0; i < this.tables.length; i++) {
-			if (this.tables.every(table => table.rows.length === 0) && (this.focus > 0 || i > 0)) continue;
-			if (i !== this.focus - 1) lines.push(...this.renderTable(i, width, height, filter));
-		}
-		lines.push(this.ctx.theme.fg("dim", this.focus === 0 ? "Tab pane · m mode · n/v legend · ,/. point" : `Tab pane · / search · o/O sort · Enter ${this.id === "tools" ? "filter · d details · f/x tool" : "details"} · Esc clear`));
 		return wrap(lines, width);
 	}
 
-	private renderTable(index: number, width: number, height: number, filter: string | null): string[] {
+	private renderChart(width: number): string[] {
+		const mode = this.mode();
+		if (!mode || !this.buckets.length) return emptyState(this.ctx, width, "No observations in this range", "Choose another range to inspect recorded activity.");
+		this.chart.reconcile(this.buckets, mode.series.map(series => series.key));
+		const lines: string[] = [];
+		const unknown = this.unpriced.reduce((total, count) => total + count, 0);
+		if (this.id === "costs" && unknown > 0 && mode.series.every(s => s.values.every(value => value === 0)))
+			lines.push(...wrap([`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`], width));
+		lines.push(...this.chart.render(this.ctx, width, this.buckets, mode.series, {
+			unit: mode.unit === "USD" ? "known-priced USD / day" : mode.unit, percent: mode.unit === "share", stacked: true,
+			format: mode.unit === "USD" ? formatCost : mode.unit === "share" ? formatPercent : formatCompact, height: this.buckets.length <= 2 ? 3 : 5,
+			formatValue: mode.unit === "USD" ? (key, value, point) => value === null || value === undefined ? "—" : formatEstimatedCost(value, this.chart.mode % 2 === 0 ? this.costSeriesUnknown.get(key)?.[point] ?? 0 : this.unpriced[point] ?? 0) : undefined,
+		}));
+		if (this.id === "costs") {
+			const point = this.chart.point;
+			const hasPricedCost = this.tables[1].rows.some(component => Number(component.values.cost) > 0);
+			lines.push(...wrap([this.ctx.theme.fg("muted", `${formatInteger(this.unpriced[point] ?? 0)} unpriced in selected UTC day`)], width));
+			// Preserve attribution for identities that have no positive priced series.
+			for (const p of this.costs?.costSeries ?? []) if (p.timestamp === this.buckets[point] && p.unpricedRequests > 0)
+				lines.push(...wrap([`${identity(p.model, p.provider)} · ${formatEstimatedCost(p.cost, p.unpricedRequests)} · ${formatInteger(p.unpricedRequests)} unpriced`], width));
+			lines.push(sectionHeading(this.ctx, width, "Component shares", "Priced estimate"),
+				...ranking(this.ctx, width, this.tables[1].rows.map(component => ({
+					label: component.label, value: Number(component.values.cost),
+					display: `${formatEstimatedCost(Number(component.values.cost), unknown)} · ${hasPricedCost ? formatPercent(Number(component.values.share)) : "N/A"}`,
+				}))));
+		}
+		return lines;
+	}
+
+	private renderTable(index: number, width: number, height: number): string[] {
 		const table = this.tables[index];
 		const numeric = (key: string, header: string, priority = 0): ListColumn<Row> => ({
 			key, header, align: "right", priority, value: row => {
@@ -280,8 +315,7 @@ class AnalyticsFeature implements FeatureController {
 		if (this.id === "models") columns.push(numeric("totalRequests", "Requests"), numeric("totalCost", "Estimate", 1), numeric("errorRate", "Errors", 3), numeric("conversationTokens", "Tokens", 4), numeric("avgDuration", "Duration", 5), numeric("avgTtft", "TTFT", 6), numeric("avgTokensPerSecond", "tok/s", 7));
 		else if (this.id === "costs") columns.push(numeric("cost", "Estimate"), numeric("unpricedRequests", "Unpriced", 1), numeric("share", "Share", 3), ...(index === 0 ? [numeric("requests", "Requests", 2), numeric("perPricedRequest", "/ priced req", 4)] : []));
 		else columns.push(numeric("calls", "Calls"), numeric("errors", "Errors", 2), numeric("costShare", "Estimate", 1), numeric("totalTokensShare", "Tokens", 3), numeric("errorRate", "Error %", 4));
-		const title = table.title + (this.id === "tools" && index === 1 ? ` · Tool filter: ${filter ?? "All tools"}` : "");
-		return [...table.state.render(this.rows(index), width, Math.max(5, Math.min(14, Math.floor(height / this.tables.length))), columns, this.ctx, title)];
+		return [...table.state.render(this.rows(index), width, Math.max(5, height), columns, this.ctx, "")];
 	}
 
 	private renderPerformance(key: string, width: number): string[] {
@@ -299,7 +333,6 @@ class AnalyticsFeature implements FeatureController {
 		for (const s of series) if (!this.performanceChart.hidden.has(s.key)) lines.push(...renderTimeSeries(this.ctx, points.map(point => point.timestamp), [s], width, this.performanceChart.point, {
 			height: 4, unit: s.key === "tps" ? "tok/s" : "s", format: value => s.key === "tps" ? formatTokensPerSecond(value) : formatDurationMs(value * 1000), legend: false,
 		}));
-		lines.push("n/v series · ,/. point");
 		return lines;
 	}
 

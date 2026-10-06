@@ -109,10 +109,6 @@ const MIN_SIDEBAR_ROWS = 20;
  */
 export const EXACT_DIRTY_LIMIT = 96;
 
-// G5: no section rule is drawn here. This constant used to size one, drawn
-// directly under the "Cost per bucket" heading — the exact `───` separator the
-// band grammar exists to eliminate. The heading already carries icon, title
-// and meta on one line (G2), so the rule added nothing but the regression.
 
 const NO_ROWS: readonly string[] = [];
 
@@ -757,12 +753,12 @@ export class StatsPanel implements Component {
 				`${data.freshness.pendingSessions} transcript files have un-ingested changes. Press s to sync.`));
 		}
 		if (data.freshness?.records === 0) {
-			notices.push(this.#theme.fg("dim", data.freshness.pendingSessions
+			notices.push(this.#theme.fg("muted", data.freshness.pendingSessions
 				? "No ingested requests yet; this is not measured zero usage."
 				: "No recorded requests found."));
 		}
 		if (data.recent && state.screenId === "requests") {
-			notices.push(this.#theme.fg("dim",
+			notices.push(this.#theme.fg("muted",
 				`Loaded ${data.recent.length} requests in the selected range${data.recent.length === 50
 					? "; latest 50 may not cover the complete range." : "."}`));
 		}
@@ -884,7 +880,7 @@ export class StatsPanel implements Component {
 		const hintWidth = Math.max(0, width - reserve);
 		const [row = ""] = footerHints(hints, this.#theme, hintWidth);
 		return position
-			? row + " ".repeat(Math.max(2, width - visibleWidth(row) - visibleWidth(position))) + this.#theme.fg("dim", position)
+			? row + " ".repeat(Math.max(2, width - visibleWidth(row) - visibleWidth(position))) + this.#theme.fg("muted", position)
 			: row;
 	}
 
@@ -1069,9 +1065,9 @@ export class StatsPanel implements Component {
 
 function loadingLines(theme: Theme, stage: ReadStage): readonly string[] {
 	return [
-		theme.fg("dim", stage === "initializing" ? "Initializing stats database…" : "Reading usage…"),
+		theme.fg("muted", stage === "initializing" ? "Initializing stats database…" : "Reading usage…"),
 		"",
-		theme.fg("dim", "Stats work runs in a separate process. Navigation and close remain available."),
+		theme.fg("muted", "Stats work runs in a separate process. Navigation and close remain available."),
 	];
 }
 
@@ -1082,7 +1078,7 @@ function errorLines(theme: Theme, preset: SymbolPreset, error: string, syncError
 		error,
 		"",
 		// An unreadable source must never masquerade as measured zero usage.
-		theme.fg("dim", "No observations loaded. Usage and cost are unavailable, not zero."),
+		theme.fg("muted", "No observations loaded. Usage and cost are unavailable, not zero."),
 	];
 	if (syncError) lines.push("", `Background sync: ${syncError}`);
 	return lines;

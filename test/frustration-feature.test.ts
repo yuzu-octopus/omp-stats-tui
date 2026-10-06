@@ -28,6 +28,10 @@ function harness(respond: (request: RequestRecord) => unknown | Promise<unknown>
 		getColorHex: (token: string) => `#${(token.length * 7919).toString(16).padStart(6, "0").slice(-6)}`,
 		getColorMode: () => "truecolor",
 		getSymbolPreset: () => "ascii",
+		symbol: (key: string) => ({
+			"boxRound.topLeft": "+", "boxRound.topRight": "+", "boxRound.bottomLeft": "+", "boxRound.bottomRight": "+",
+			"boxRound.horizontal": "-", "boxRound.vertical": "|",
+		} as Record<string, string>)[key],
 	} as unknown as Theme;
 	const ctx: FeatureContext = {
 		reader: {
@@ -376,6 +380,18 @@ test("class and family filtering retains real selected identity and known zero-r
 	zero.feature.handleInput("\r");
 	expect(zero.text()).toContain("Raw model ID: raw/calm");
 	zero.feature.dispose();
+
+	const sparse = harness(() => dashboard([model("small-sample", { messages: 20, judged: 10, annoyed: 3, atAssistant: 2, angry: 1 })]));
+	await sparse.feature.load("24h");
+	const empty = sparse.feature.render(240, 40).map(stripForTest).join("\n");
+	expect(empty).toContain("No model versions match the filters");
+	expect(empty).toContain("20 messages available");
+	expect(empty).toContain("50.0% judge coverage");
+	expect(empty).toContain("1 versions below 50 messages excluded");
+	sparse.feature.handleInput("m");
+	expect(sparse.text()).toContain("Point 1/1: small-sample");
+	expect(sparse.requests.some(request => request.options?.method === "POST")).toBe(false);
+	sparse.feature.dispose();
 });
 
 test("quote errors can be dismissed and retried without authorizing a run", async () => {

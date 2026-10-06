@@ -5,7 +5,7 @@ import { formatCompact, formatCost, formatDurationMs, formatEstimatedCost, forma
 import type { Range } from "../../../data/ranges";
 import type { FeatureContext, FeatureController } from "../types";
 import { ListState, fields, wrap, type ListColumn } from "./shared";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "../presentation";
+import { dashboardPanels, dataTable, emptyState, focusTabs, metricGrid, panel, ranking, sectionHeading } from "../presentation";
 interface JsonSection { title: string; data: unknown; }
 interface AffectedModel { key: string; model: string; provider: string; count: number; }
 
@@ -48,29 +48,43 @@ export class RequestDetails {
 	render(width: number): string[] | null {
 		if (!this.active) return null;
 		const lines = [sectionHeading(this.ctx, width, `Request #${this.row?.id ?? "–"}`)];
-		if (this.notice) lines.push(this.notice);
-		if (!this.payload) return wrap([...lines, this.error ? `Error: ${this.error}${this.row?.id === undefined ? "" : " · e retry"}` : "Loading request details…",
-			this.ctx.theme.fg("dim", "b/Esc back"),
-			...(this.row ? ["Loaded request metadata (session payload unavailable)", ...fields(this.row)] : [])], width);
+		if (this.notice) lines.push(...wrap([this.notice], width));
+		if (!this.payload) {
+			lines.push(...wrap([this.ctx.theme.fg("muted", "b/Esc back")], width));
+			lines.push(...panel(this.ctx, width, "Payload read", wrap([
+				this.error ? `Error: ${this.error}${this.row?.id === undefined ? "" : " · e retry"}` : "Loading request details…",
+			], Math.max(1, width - 4))));
+			if (this.row) lines.push(...panel(this.ctx, width, "Loaded request metadata (session payload unavailable)", wrap(fields(this.row), Math.max(1, width - 4))));
+			return lines;
+		}
 		const d = this.payload;
 		const sections = this.sections(d);
-		const selected = sections[this.section % sections.length];
+		lines.push(...wrap([this.ctx.theme.fg("muted", "n section · v expand/collapse · c/C copy · t trace · b/Esc back")], width));
 		lines.push(sectionHeading(this.ctx, width, `${d.model} · ${d.provider}`, requestStatus(d)),
-			...(d.errorMessage ? [this.ctx.theme.fg("error", `${requestStatus(d) === "aborted" ? "Aborted" : "Error"}: ${d.errorMessage}`)] : []),
+			...(d.errorMessage ? wrap([this.ctx.theme.fg("error", `${requestStatus(d) === "aborted" ? "Aborted" : "Error"}: ${d.errorMessage}`)], width) : []),
 			...metricGrid(this.ctx, width, [
 				{ label: "API estimate", value: formatMessageCost(d, 4), emphasis: "primary", hint: `unpriced requests: ${Number(d.costUnpriced ?? false)}` },
 				{ label: "Duration", value: formatDurationMs(d.duration), hint: formatTimestamp(d.timestamp) },
 				{ label: "TTFT", value: formatDurationMs(d.ttft) },
-				{ label: "Throughput", value: `${formatTokensPerSecond(d.duration !== null && d.duration > 0 && d.usage.output > 0 ? d.usage.output * 1000 / d.duration : null)} tok/s` },
+				{ label: "Throughput", value: `${formatTokensPerSecond(d.duration != null && d.duration > 0 && d.usage.output > 0 ? d.usage.output * 1000 / d.duration : null)} tok/s` },
 			]),
-			...dataTable(this.ctx, width, "Tokens", [{ key: "bucket", header: "Bucket", align: "left" }, { key: "tokens", header: "Tokens", align: "right" }],
-				Object.entries({ "Uncached input": d.usage.input, "Cache read": d.usage.cacheRead, "Cache write": d.usage.cacheWrite, Output: d.usage.output, Total: d.usage.totalTokens, "Premium requests": d.usage.premiumRequests ?? 0 }).map(([bucket, value]) => ({ bucket, tokens: Number.isInteger(value) ? formatInteger(value) : String(value) }))),
-			sectionHeading(this.ctx, width, "Billing components"),
-			...Object.entries(d.usage.cost).map(([component, value]) => `${component}: ${d.costUnpriced ? "unpriced request; component estimate unavailable" : formatCost(value)}`),
-			sectionHeading(this.ctx, width, "Identity"), ...fields({ requestId: d.id, entryId: d.entryId, stopReason: d.stopReason, api: d.api, project: d.folder, sessionFile: d.sessionFile }),
+			...dashboardPanels(this.ctx, width, [
+				{ title: "Token usage", meta: "Tokens · premium amount in requests", render: innerWidth => dataTable(this.ctx, innerWidth, "", [
+					{ key: "bucket", header: "Bucket", align: "left" },
+					{ key: "amount", header: "Amount", align: "right" },
+					{ key: "unit", header: "Unit", align: "left", priority: 1 },
+				], Object.entries({ "Uncached input": d.usage.input, "Cache read": d.usage.cacheRead, "Cache write": d.usage.cacheWrite, Output: d.usage.output, Total: d.usage.totalTokens, "Premium requests": d.usage.premiumRequests ?? 0 })
+					.map(([bucket, value]) => ({ bucket, amount: Number.isInteger(value) ? formatInteger(value) : String(value), unit: bucket === "Premium requests" ? "requests" : "tokens" }))) },
+				{ title: "Billing components", meta: "USD · public API rates", render: innerWidth => wrap(Object.entries(d.usage.cost)
+					.map(([component, value]) => `${component}: ${d.costUnpriced ? "unpriced request; component estimate unavailable" : formatCost(value)}`), innerWidth) },
+			]),
+			...panel(this.ctx, width, "Identity", wrap(fields({ requestId: d.id, entryId: d.entryId, stopReason: d.stopReason, api: d.api, project: d.folder, sessionFile: d.sessionFile }), Math.max(1, width - 4))),
 			...focusTabs(this.ctx, width, sections.map(section => section.title), this.section % sections.length),
-			this.ctx.theme.fg("dim", `n section · v ${this.collapsed.has(selected.title) ? "expand" : "collapse"} · c/C copy · t trace · b/Esc back`),
-			...sections.flatMap(section => [sectionHeading(this.ctx, width, section.title, this.collapsed.has(section.title) ? "collapsed" : ""), ...(this.collapsed.has(section.title) ? [] : [JSON.stringify(section.data, null, 2) ?? "null"])]));
+			...dashboardPanels(this.ctx, width, sections.map((section, index) => ({
+				title: section.title, meta: this.collapsed.has(section.title) ? "collapsed" : "JSON",
+				active: index === this.section % sections.length,
+				render: innerWidth => this.collapsed.has(section.title) ? [] : wrap((JSON.stringify(section.data, null, 2) ?? "null").split("\n"), innerWidth),
+			}))));
 		return wrap(lines, width);
 	}
 	private sections(d: Payload): JsonSection[] {
@@ -175,7 +189,7 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 		render(width, height) {
 			const detail = details.render(width); if (detail) return detail;
 			if (!hasData) return wrap([sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
-				ctx.theme.fg(error ? "error" : "dim", error ? `${error} · l retry` : loading ? "Loading observations…" : "No observations loaded yet."),
+				ctx.theme.fg(error ? "error" : "muted", error ? `${error} · l retry` : loading ? "Loading observations…" : "No observations loaded yet."),
 				...(list.editing || list.search ? [`Search: ${list.search || "—"} · Enter/Esc finish · Ctrl-U clear`] : [])], width);
 			const filtered = visible();
 			let hasTiming = false;
@@ -198,37 +212,74 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 					{ label: "Median latency", value: hasTiming ? formatDurationMs(summary.medianDuration) : "—" },
 					{ label: "p95 latency", value: hasTiming ? formatDurationMs(summary.p95Duration) : "—" },
 				])];
-			if (loading) lines.push(ctx.theme.fg("dim", "Loading… previous rows retained")); if (error) lines.push(ctx.theme.fg("error", `${error} · showing retained rows · l retry`));
-			lines.push(ctx.theme.fg("dim", `${scope} · ${formatInteger(summary.unpriced)} unpriced`));
+			if (loading) lines.push(ctx.theme.fg("muted", "Loading… previous rows retained")); if (error) lines.push(ctx.theme.fg("error", `${error} · showing retained rows · l retry`));
+			lines.push(...wrap([ctx.theme.fg("muted", `${scope} · ${formatInteger(summary.unpriced)} unpriced`)], width));
 			lines.push(...focusTabs(ctx, width, id === "errors" ? ["Signatures", "Models", "Failures"] : ["Request log"], focus));
-			lines.push(ctx.theme.fg("dim", id === "requests" ? `f status: ${statuses[status]} · / search · o/O sort · Enter details · l load more` : "Tab pane · / search · o/O sort · Enter select/open · u latest · f/x/X clear"));
-			const panelHeight = Math.max(5, Math.min(14, height - lines.length - 3));
-			const failurePanel = id === "requests" || focus === 2 ? list.render(filtered, width, panelHeight, id === "errors" ? errorColumns : requestColumns, ctx, id === "errors" ? "Failures" : "Request log") : [];
-			if (id === "requests") {
-				lines.push(...failurePanel);
-			} else {
-				lines.push(`Signature: ${gs.some(group => group.signature === signature) ? signature : "all"} · model: ${ms.some(row => row.key === model) ? model : "all"}`);
-				const panel = focus === 0
-					? signatures.render(gs, width, panelHeight, [
+			if (id === "errors") lines.push(...wrap([`Signature: ${gs.some(group => group.signature === signature) ? signature : "all"} · model: ${ms.some(row => row.key === model) ? model : "all"}`], width));
+			lines.push(...wrap([ctx.theme.fg("muted", id === "requests"
+				? `f status: ${statuses[status]} · / search · j/k select · o/O sort · Enter details · +/a reveal · l load more`
+				: "Tab pane · / search · j/k select · o/O sort · Enter select/open · u latest · f/x/X clear · +/a reveal · l load more")], width));
+			const viewport = Math.max(6, height - lines.length - 2);
+			const expanded = gs.find(group => group.signature === signature);
+			const selectedGroup = expanded ?? signatures.current(gs);
+			const selectedModel = models.current(ms);
+			const selectedRequest = list.current(filtered);
+			const statusDistribution = (innerWidth: number) => [
+				sectionHeading(ctx, innerWidth, "Loaded status distribution", `${formatInteger(rows.length)} requests`),
+				...ranking(ctx, innerWidth, ["ok", "aborted", "failed"].map(label => ({
+					label, value: counts[label as keyof typeof counts], display: formatInteger(counts[label as keyof typeof counts]),
+				}))),
+			];
+			const requestContext = (innerWidth: number) => selectedRequest ? [
+				...wrap([
+					`#${selectedRequest.id ?? "–"} ${selectedRequest.model} · ${selectedRequest.provider}`,
+					`${requestStatus(selectedRequest)} · ${formatTimestamp(selectedRequest.timestamp)}`,
+					`Project: ${selectedRequest.folder}`,
+					`API estimate: ${formatMessageCost(selectedRequest)} · ${selectedRequest.costUnpriced ? "unpriced" : "priced"}`,
+					`Tokens: ${formatInteger(selectedRequest.usage.totalTokens)} · Output: ${formatInteger(selectedRequest.usage.output)}`,
+					`Duration: ${formatDurationMs(selectedRequest.duration)} · TTFT: ${formatDurationMs(selectedRequest.ttft)}`,
+					...(selectedRequest.errorMessage ? [`Error: ${selectedRequest.errorMessage}`] : []),
+				], innerWidth),
+				...statusDistribution(innerWidth),
+			] : emptyState(ctx, innerWidth, rows.length ? "No matching requests" : "No requests in this range", rows.length ? "Change status, search or error filters to restore the log." : "Choose another range to inspect recorded requests.");
+			const signatureContext = (innerWidth: number) => selectedGroup ? wrap([
+				selectedGroup.signature,
+				`${formatInteger(selectedGroup.count)} failures · ${formatInteger(selectedGroup.models.length)} affected models`,
+				`First ${formatTimestamp(selectedGroup.firstSeen)} · latest ${formatTimestamp(selectedGroup.lastSeen)}`,
+				`Latest error: ${selectedGroup.latest.errorMessage ?? "—"}`,
+				...(expanded ? selectedGroup.models : selectedGroup.models.slice(0, 5)).map(member => `${member.model} · ${member.provider}: ${member.count} failures`),
+				...(!expanded && selectedGroup.models.length > 5 ? [`${selectedGroup.models.length - 5} more affected models · Enter selects the full signature`] : []),
+			], innerWidth) : emptyState(ctx, innerWidth, "No error signatures", "No failures were observed in the loaded range.");
+			const activePanel = {
+				title: id === "requests" ? "Request log" : focus === 0 ? "Error signatures" : focus === 1 ? "Affected models" : "Failures",
+				active: true,
+				render: (innerWidth: number) => id === "requests" || focus === 2
+					? list.render(filtered, innerWidth, viewport, id === "errors" ? errorColumns : requestColumns, ctx, "")
+					: focus === 0 ? signatures.render(gs, innerWidth, viewport, [
 						{ key: "signature", header: "Error signature", align: "left", value: g => g.signature },
 						{ key: "count", header: "Failures", align: "right", value: g => formatInteger(g.count) },
 						{ key: "models", header: "Models", align: "right", priority: 2, value: g => formatInteger(g.models.length) },
 						{ key: "last", header: "Latest", align: "left", priority: 3, value: g => formatTimestamp(g.lastSeen) },
-					], ctx, "Error signatures")
-					: focus === 1 ? models.render(ms, width, panelHeight, [
+					], ctx, "") : models.render(ms, innerWidth, viewport, [
 						{ key: "identity", header: "Model / provider", align: "left", value: m => `${m.model} · ${m.provider}` },
 						{ key: "count", header: "Failures", align: "right", value: m => formatInteger(m.count) },
-					], ctx, "Affected models")
-					: failurePanel;
-				lines.push(...panel);
-				const expanded = gs.find(group => group.signature === signature);
-				if (expanded) {
-					lines.push(sectionHeading(ctx, width, "Expanded signature", `${expanded.count} members`), expanded.signature,
-						`First ${formatTimestamp(expanded.firstSeen)} · latest ${formatTimestamp(expanded.lastSeen)}`,
-						`Latest error: ${expanded.latest.errorMessage ?? "—"}`,
-						...expanded.models.map(member => `${member.model} · ${member.provider}: ${member.count} failures`));
-				}
-			}
+					], ctx, ""),
+			};
+			lines.push(...dashboardPanels(ctx, width, [
+				activePanel,
+				{
+					title: id === "requests" || focus === 2 ? "Selected request" : focus === 0 ? expanded ? "Expanded signature" : "Selected signature" : "Selected model",
+					meta: id === "errors" && focus === 0 ? `${selectedGroup?.count ?? 0} members` : undefined,
+					render: innerWidth => id === "requests" || focus === 2 ? requestContext(innerWidth)
+						: focus === 0 ? signatureContext(innerWidth)
+						: selectedModel ? [
+							...wrap([`${selectedModel.model} · ${selectedModel.provider}`, `${formatInteger(selectedModel.count)} loaded failures`], innerWidth),
+							...ranking(ctx, innerWidth, groupErrorsBySignature(rows.filter(row => modelKey(row.model, row.provider) === selectedModel.key))
+								.map(group => ({ label: group.signature, value: group.count, display: `${formatInteger(group.count)} failures` }))),
+						] : emptyState(ctx, innerWidth, "No affected models", "No failures were observed in the loaded range."),
+				},
+			], { ratio: 0.66 }));
+			if (id === "errors" && expanded && focus !== 0) lines.push(...panel(ctx, width, "Expanded signature", signatureContext(Math.max(1, width - 4)), { meta: `${expanded.count} members` }));
 			return wrap(lines, width);
 		},
 		handleInput(data) {

@@ -4,6 +4,7 @@ import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import type { MessageStats, RequestDetails as Payload } from "@oh-my-pi/omp-stats/client/types";
 import type { FeatureContext } from "../src/tui/features/types";
 import { createRequestsFeature, RequestDetails } from "../src/tui/features/core/requests";
+import { stripForTest } from "../src/tui/palette";
 
 ensureThemeSync();
 function row(id: number, overrides: Partial<MessageStats> = {}): MessageStats {
@@ -35,15 +36,21 @@ test("status intersects search while status counts stay unfiltered", async () =>
 	const rows = [row(1, { model: "needle" }), row(2, { model: "needle", stopReason: "error", errorMessage: "failure" }), row(3)];
 	const feature = createRequestsFeature("requests", context(async <T>() => rows as T)); await feature.load("24h");
 	feature.handleInput("f"); feature.handleInput("/"); for (const char of "needle") feature.handleInput(char); feature.handleInput("\r");
-	const text = feature.render(200, 40).join("\n");
+	const text = feature.render(200, 40).map(stripForTest).join("\n");
 	expect(text).toContain("#1 needle");
 	expect(text).not.toContain("#2 needle");
+	expect(text).toContain("Loaded status distribution");
+	expect(text).toMatch(/ok\s+2/);
+	expect(text).toMatch(/failed\s+1/);
 });
 
 test("full server limit reports incomplete and load-more uses next limit", async () => {
 	const limits: string[] = [];
 	const feature = createRequestsFeature("requests", context(async <T>(_path: string, params?: Record<string, string>) => { limits.push(params!.limit); return Array.from({ length: 500 }, (_, index) => row(index)) as T; }));
 	await feature.load("24h"); expect(feature.render(160, 30).join("\n")).toContain("older requests are not loaded");
+	const shortRows = new Set([...feature.render(160, 30).map(stripForTest).join("\n").matchAll(/#\d+ model-\d+/g)].map(match => match[0]));
+	const tallRows = new Set([...feature.render(160, 60).map(stripForTest).join("\n").matchAll(/#\d+ model-\d+/g)].map(match => match[0]));
+	expect(tallRows.size).toBeGreaterThan(shortRows.size);
 	feature.handleInput("l"); await Promise.resolve();
 	expect(limits).toEqual(["500", "2000"]); expect(feature.render(160, 30).join("\n")).toContain("Complete range");
 });
@@ -185,7 +192,7 @@ test("requests without a stored id still expose fetched columns in the narrow in
 	let calls = 0;
 	const inspector = new RequestDetails(context(async <T>() => { calls++; return payload(1) as T; }));
 	await inspector.open(row(1, { id: undefined, model: "unstored-model", duration: 678, ttft: 54 }));
-	const text = inspector.render(24)!.join("\n").replace(/\n/g, "");
+	const text = inspector.render(24)!.map(stripForTest).map(line => line.replace(/^[│|] ?| ?[│|]$/g, "").trimEnd()).join("");
 	expect(text).toContain("unstored-model");
 	expect(text).toContain("duration: 678");
 	expect(text).toContain("usage.cacheWrite: 4");
@@ -212,7 +219,7 @@ test("priced detail components format decimals instead of exposing arithmetic ta
 	const inspector = new RequestDetails(context(async <T>() => data as T));
 	await inspector.open(data);
 	const lines = inspector.render(100)!;
-	const component = lines.find(line => line.startsWith("input:"));
+	const component = lines.map(stripForTest).find(line => line.includes("input:"));
 	expect(component).toContain("$");
 	expect(component).not.toContain("00000000000000004");
 });

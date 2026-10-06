@@ -59,4 +59,6 @@ file-by-file table so this split is not re-derived.
 
 The IR's own invariants (G4 one blank line between bands, G5 no full-width rule inside a
 band) still bind `/stats-test` and are still asserted in `test/band.test.ts`. They no longer
-constrain `/stats-tui`, whose only rule is the `PanelDivider` between body and footer.
+constrain `/stats-tui`, whose production composition now uses shared native rounded
+widget frames as well as the body/footer `PanelDivider`. The trace timeline remains
+unframed to preserve plot and minimap hit geometry.

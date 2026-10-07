@@ -41,8 +41,11 @@ import { expect, test } from "bun:test";
 import { renderDailyBars, renderModelCostBars } from "../src/tui/charts/bars";
 import { bandHeights, renderSeriesChart, type SeriesChartSeries } from "../src/tui/charts/compose";
 import { renderRankedBars, renderShareBar, renderSparkline } from "../src/tui/charts/sparkline";
+import { renderTimeSeries } from "../src/tui/charts/time-series";
 import { glyph, glyphsFor, type GlyphSet, type SymbolPreset } from "../src/tui/glyphs";
 import { stripForTest, type PaletteTheme } from "../src/tui/palette";
+import type { FeatureContext } from "../src/tui/features/types";
+import type { ThemeColor } from "@oh-my-pi/pi-tui";
 import type { CostTimeSeriesPoint } from "@oh-my-pi/omp-stats/shared-types";
 
 const PRESETS: readonly SymbolPreset[] = ["unicode", "nerd", "ascii"];
@@ -754,4 +757,37 @@ test("renderModelCostBars loses the track without losing the cost invariant", ()
 	const filled = filledPerColumn(chart, glyph("unicode", "barFill"), 2);
 	// The 42x token spender is still the shorter bar: scaling by cost, not tokens.
 	expect(filled[0]).toBeGreaterThan(filled[1] ?? 0);
+});
+
+// ─── 6. renderTimeSeries is a delegation, not a second geometry ───────────────
+
+/**
+ * A context for the swapped renderer. Real theme methods off {@link THEME} so
+ * `resolveSeries` resolves distinct hues, with `fg` as identity so assertions
+ * read glyphs rather than escapes. Only `fg` and `getSymbolPreset` are reached.
+ */
+const seriesCtx = { theme: { ...THEME, fg: (_color: ThemeColor, text: string) => text } } as unknown as FeatureContext;
+
+test("renderTimeSeries delegates to host pipeline", () => {
+	// Four buckets, not the plan's three: `worthCharting` needs at least four
+	// categories, so three would take the empty-state branch and prove nothing
+	// about the delegation.
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3, 4] }];
+	const lines = renderTimeSeries(seriesCtx, axis, rows, 80, 1, {});
+	const text = stripForTest(lines.join("\n"));
+	expect(lines.length).toBeGreaterThan(0);
+	// The host planned a chart, so a plot is drawn and the legend names the series.
+	expect(text).toContain(glyph("unicode", "barFill"));
+	expect(text).toContain("A");
+});
+
+test("renderTimeSeries says so when the host will not chart the range", () => {
+	// Two buckets fail `worthCharting`, so `planTimeline` returns undefined and
+	// the renderer must supply its OWN sentence rather than a blank body.
+	const axis = [1700000000000, 1700008640000];
+	const lines = renderTimeSeries(seriesCtx, axis, [{ key: "a", label: "A", values: [1, 2] }], 80, 0, {});
+	const text = stripForTest(lines.join("\n"));
+	expect(text).toContain("No chart-worthy data in this range.");
+	expect(text).not.toContain(glyph("unicode", "barFill"));
 });

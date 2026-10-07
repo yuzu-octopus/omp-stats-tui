@@ -1,12 +1,22 @@
 /**
  * `src/tui/charts/host-adapter.ts` — plan and render host charts with our glyphs.
  *
- * Bridges raw timeline/series data to a concrete chart spec, then renders
- * using the project's own primitives. Currency labels go through
- * `costWithUnpriced` — never the host's `formatValue` — so unpriced requests
- * show N/A rather than a misleading $0.
+ * The host pipeline decides what a table becomes and what it plots:
+ * `analyzeTable` reads the cells, `planChart` picks the chart kind and the
+ * columns to draw, `buildChart` turns that into a `ChartSpec`, and
+ * `worthCharting` decides whether the picture says more than the table. This
+ * module only maps our `TimelineRow[]` and bar-series shapes onto the host's
+ * table input, then redraws the resulting `ChartSpec` with the project's own
+ * primitives — `renderSeriesChart`, `resolveSeries`, our glyphs.
+ *
+ * Money honesty: the host's `formatValue` compacts (`$1235` for 1234.56) and
+ * prints `$0` for unpriced. It is NEVER called here. A currency series' labels
+ * go through `costWithUnpriced`, so unpriced requests read `N/A`, not `$0`.
  */
 
+import { analyzeTable } from "@oh-my-pi/pi-tui/charts/table-data";
+import { buildChart, planChart, worthCharting } from "@oh-my-pi/pi-tui/charts/chart-plan";
+import type { ChartSpec } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import type { TimelineRow, TimeSeriesOptions } from "./time-series";
 import type { SeriesChartSeries, SeriesChartOptions } from "./compose";
 import { renderSeriesChart } from "./compose";
@@ -15,154 +25,99 @@ import type { PaletteTheme } from "../palette";
 import type { SymbolPreset } from "../glyphs";
 import type { ThemeColor } from "@oh-my-pi/pi-tui";
 
-// ─── Chart spec ──────────────────────────────────────────────────────────────
-
-export interface HostChartSeries {
-  label: string;
-  values: readonly (number | null)[];
-  dim?: "currency" | "number" | "percent";
-}
+// ─── Spec ────────────────────────────────────────────────────────────────────
 
 /**
- * A concrete, renderable chart. Deliberately plain (`number[]`, not the IR's
- * `MetricRef`): the adapter has already resolved the data.
+ * A host `ChartSpec` from a timeline, plus the two modes the host does not model.
  *
- * STACKED/CUMULATIVE ARE RECORDED, NOT RENDERED. `renderSeriesChart` composes
- * one BAND per series against a shared scale — it has no stacking geometry, and
- * a terminal cell cannot carry two stacked values legibly (that is exactly the
- * `░█░█░█` noise `compose.ts` exists to prevent). So `stacked`/`cumulative`
- * survive here as metadata for a caller that wants to sum before plotting; the
- * renderer treats every spec as banded. A `stacked` spec is therefore rendered
- * as its component bands, which is honest — it shows the parts — and the
- * caller that needs a total sums the series first.
+ * `stacked`/`cumulative` are RECORDED, not applied. `renderSeriesChart` has no
+ * stacking geometry — a terminal cell cannot carry two stacked values legibly
+ * (that is exactly the `░█░█░█` noise `compose.ts` exists to prevent). So a
+ * `stacked` spec is drawn as its component bands, which is honest — it shows the
+ * parts — and a caller that needs the stack total sums the series before
+ * plotting.
  */
-export interface HostChartSpec {
-  kind: "line" | "bars";
-  categories: readonly string[];
-  series: readonly HostChartSeries[];
-  /** Recorded from {@link TimeSeriesOptions}; see the note above. */
-  stacked?: boolean;
-  /** Recorded from {@link TimeSeriesOptions}; see the note above. */
-  cumulative?: boolean;
-}
+export type TimelineChartSpec = ChartSpec & {
+  readonly stacked?: boolean;
+  readonly cumulative?: boolean;
+};
 
-// ─── Table analysis ──────────────────────────────────────────────────────────
+// ─── Table cells ─────────────────────────────────────────────────────────────
 
-export interface TableAnalysis {
-  header: readonly string[];
-  rows: readonly (readonly string[])[];
-  roles: readonly ("label" | "measure")[];
-}
-
-export function analyzeTable(
-  header: readonly string[],
-  rows: readonly (readonly string[])[],
-): TableAnalysis {
-  return {
-    header,
-    rows,
-    roles: header.map((_, i) => (i === 0 ? "label" : "measure")),
-  };
-}
-
-// ─── Chart planning ──────────────────────────────────────────────────────────
-
-export function planChart(
-  table: TableAnalysis,
-  dims?: readonly ("currency" | "number" | "percent")[],
-): HostChartSpec | undefined {
-  if (!table.header.length || !table.rows.length) return undefined;
-
-  const measures = table.header.slice(1);
-  if (!measures.length) return undefined;
-
-  return {
-    kind: "bars",
-    categories: table.rows.map((row) => row[0]!),
-    series: measures.map((label, i) => ({
-      label,
-      values: table.rows.map((row) => {
-        const v = row[i + 1];
-        if (v === undefined || v === "—") return null;
-        const n = Number(v);
-        return Number.isFinite(n) ? n : null;
-      }),
-      dim: dims?.[i] ?? "number",
-    })),
-  };
-}
-
-export function buildChart(_table: TableAnalysis, plan: HostChartSpec): HostChartSpec | undefined {
-  return plan;
-}
-
-export function worthCharting(spec: HostChartSpec): boolean {
-  return spec.series.length > 0;
+/**
+ * A cell the host reads as its number.
+ *
+ * Cost cells carry a currency mark so the host types the column `currency`; the
+ * RENDERED money label is still `costWithUnpriced`, never this text.
+ */
+function cell(value: number | null | undefined, currency: boolean): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (!currency) return String(value);
+  return value < 0 ? `-$${-value}` : `$${value}`;
 }
 
 // ─── Timeline planning ───────────────────────────────────────────────────────
 
 /**
- * Full pipeline: timeline data → HostChartSpec.
+ * Full pipeline: timeline data → host `ChartSpec`.
  *
  * Table construction follows the pre-flight ruling: header = [labelCol, ...measureNames],
  * rows = categories × measures (column 0 = categories).
  *
- * Gap policy: returns undefined when there are fewer than 3 buckets (sub-threshold).
+ * Gap policy: `undefined` whenever the host's `planChart` finds no chart or
+ * `worthCharting` rejects the spec (too few categories, no spread).
  */
 export function planTimeline(
   axis: readonly number[],
   rows: readonly TimelineRow[],
   options: TimeSeriesOptions,
-): HostChartSpec | undefined {
+): TimelineChartSpec | undefined {
   if (!axis.length || !rows.length) return undefined;
-  if (axis.length < 3) return undefined;
 
-  const header = ["Bucket", ...rows.map((r) => r.label)];
-  const tableRows = axis.map((ts, i) => {
-    const bucketLabel = new Date(ts).toISOString().slice(5, 16).replace("T", " ");
-    return [bucketLabel, ...rows.map((r) => String(r.values[i] ?? "—"))];
-  });
+  const currency = rows.map((row) => row.key === "cost");
+  const table = analyzeTable(
+    ["Bucket", ...rows.map((row) => row.label)],
+    axis.map((timestamp, index) => [
+      // An ISO timestamp, so the host reads the column as temporal.
+      new Date(timestamp).toISOString(),
+      ...rows.map((row, column) => cell(row.values[index], currency[column]!)),
+    ]),
+  );
 
-  const table = analyzeTable(header, tableRows);
-  const dims = rows.map((r) => (r.key === "cost" ? ("currency" as const) : ("number" as const)));
-  const plan = planChart(table, dims);
-  if (!plan) return undefined;
-  const spec = buildChart(table, plan);
-  if (!spec || !worthCharting(spec)) return undefined;
-
-  // `stacked`/`cumulative` are RECORDED, not applied — see HostChartSpec. The
-  // banded renderer shows the parts; a caller wanting the stack total sums the
-  // series before plotting.
-  return { ...spec, kind: "line", stacked: options.stacked, cumulative: options.cumulative };
-}
-
-// ─── Series planning ─────────────────────────────────────────────────────────
-
-/**
- * Full pipeline: series data → HostChartSpec.
- *
- * Table construction follows the pre-flight ruling: header = [labelCol, ...measureNames],
- * rows = categories × measures (column 0 = categories).
- */
-export function planSeries(
-  series: readonly SeriesChartSeries[],
-  _options: SeriesChartOptions,
-): HostChartSpec | undefined {
-  if (!series.length) return undefined;
-
-  const header = ["Series", ...series.map((s) => s.label)];
-  const tableRows = series[0]!.values.map((_, i) => {
-    const bucketLabel = `Bucket ${i + 1}`;
-    return [bucketLabel, ...series.map((s) => String(s.values[i] ?? "—"))];
-  });
-
-  const table = analyzeTable(header, tableRows);
   const plan = planChart(table);
   if (!plan) return undefined;
   const spec = buildChart(table, plan);
   if (!spec || !worthCharting(spec)) return undefined;
 
+  return { ...spec, stacked: options.stacked, cumulative: options.cumulative };
+}
+
+// ─── Series planning ─────────────────────────────────────────────────────────
+
+/**
+ * Full pipeline: series data → host `ChartSpec`.
+ *
+ * Same table construction as {@link planTimeline}: header = [labelCol, ...measureNames],
+ * rows = categories × measures (column 0 = categories).
+ */
+export function planSeries(
+  series: readonly SeriesChartSeries[],
+  _options: SeriesChartOptions,
+): ChartSpec | undefined {
+  if (!series.length) return undefined;
+
+  const table = analyzeTable(
+    ["Series", ...series.map((entry) => entry.label)],
+    series[0]!.values.map((_, index) => [
+      `Bucket ${index + 1}`,
+      ...series.map((entry) => cell(entry.values[index], false)),
+    ]),
+  );
+
+  const plan = planChart(table);
+  if (!plan) return undefined;
+  const spec = buildChart(table, plan);
+  if (!spec || !worthCharting(spec)) return undefined;
   return spec;
 }
 
@@ -181,19 +136,17 @@ export interface HostChartOptions {
 }
 
 /**
- * Render a HostChartSpec to terminal lines using the project's own primitives.
+ * Render a host `ChartSpec` to terminal lines using the project's own primitives.
  *
  * Currency labels go through `costWithUnpriced` — never the host's `formatValue`.
  */
-export function renderHostChart(spec: HostChartSpec, opts: HostChartOptions): readonly string[] {
+export function renderHostChart(spec: ChartSpec, opts: HostChartOptions): readonly string[] {
   const { width, preset, theme, paint, dim, labels } = opts;
-  const dimFn = dim ?? ((text: string) => text);
-
   if (!spec.series.length) return [];
 
-  const series: SeriesChartSeries[] = spec.series.map((s) => ({
-    label: s.label,
-    values: s.values.map((v) => v ?? 0),
+  const series: SeriesChartSeries[] = spec.series.map((entry) => ({
+    label: entry.name,
+    values: entry.points.map((point) => point?.value ?? 0),
   }));
 
   const lines = renderSeriesChart(series, {
@@ -202,18 +155,20 @@ export function renderHostChart(spec: HostChartSpec, opts: HostChartOptions): re
     preset,
     theme,
     paint,
-    dim: dimFn,
+    dim: dim ?? ((text: string) => text),
     labels,
   });
 
   if (!opts.currency || opts.unpriced === undefined) return lines;
 
-  const valueLines: string[] = [];
-  for (const s of spec.series) {
-    if (s.dim !== "currency") continue;
-    const formatted = s.values.map((v) => (v === null ? "—" : costWithUnpriced(v, opts.unpriced!)));
-    valueLines.push(`${s.label}: ${formatted.join(", ")}`);
+  const money: string[] = [];
+  for (const entry of spec.series) {
+    if (entry.dim !== "currency") continue;
+    const figures = entry.points.map((point) =>
+      point ? costWithUnpriced(point.value, opts.unpriced!) : "—",
+    );
+    money.push(`${entry.name}: ${figures.join(", ")}`);
   }
 
-  return [...lines, ...valueLines];
+  return [...lines, ...money];
 }

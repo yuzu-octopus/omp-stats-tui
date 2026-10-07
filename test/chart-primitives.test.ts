@@ -484,20 +484,22 @@ test("renderSeriesChart drops the remainder rather than giving it to the last se
 // ─── Host adapter: planTimeline, money labels, gap policy ────────────────────
 
 test("planTimeline returns a ChartSpec for valid timeline data", () => {
-	const axis = [1700000000000, 1700008640000, 1700095040000];
-	const rows = [{ key: "a", label: "A", values: [1, 2, 3] }];
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3, 4] }];
 	const spec = planTimeline(axis, rows, {});
 	expect(spec).toBeDefined();
 	expect(spec!.kind).toBe("line");
-	expect(spec!.categories.length).toBe(3);
+	expect(spec!.categories.length).toBe(4);
 	expect(spec!.series.length).toBe(1);
 });
 
 test("adapter never calls host formatValue for currency", () => {
-	const axis = [1700000000000, 1700008640000, 1700095040000];
-	const rows = [{ key: "cost", label: "Cost", values: [0, 1, 2] }];
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "cost", label: "Cost", values: [0, 1, 2, 3] }];
 	const spec = planTimeline(axis, rows, {});
 	expect(spec).toBeDefined();
+	// The host typed the column currency from the cells; the LABEL is still ours.
+	expect(spec!.series[0]!.dim).toBe("currency");
 
 	const lines = renderHostChart(spec!, {
 		width: 80,
@@ -518,4 +520,12 @@ test("planTimeline returns undefined for sub-threshold data", () => {
 	const rows = [{ key: "a", label: "A", values: [1, 1] }];
 	const spec = planTimeline(axis, rows, {});
 	expect(spec).toBeUndefined();
+});
+
+test("planTimeline applies the worthCharting gap policy", () => {
+	// Four buckets pass `planChart`, but four points at a 2× spread carry no
+	// trend: `worthCharting` rejects it, so the adapter returns undefined.
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 1, 1, 2] }];
+	expect(planTimeline(axis, rows, {})).toBeUndefined();
 });

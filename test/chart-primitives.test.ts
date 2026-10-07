@@ -375,6 +375,113 @@ test("bands drop the remainder rather than giving it to the last series", () => 
 	for (const row of rows) expect(cells(row)).toBe(10);
 });
 
+// ─── Composition byte-equality: the renderer IS the primitive ────────────────
+
+test("renderSeriesChart of ONE series is exactly renderDailyBars", () => {
+	const s: SeriesChartSeries = { label: "Succeeded", values: [12, 30, 8, 20, 0, 5] };
+	const width = 20;
+	const height = 6;
+	const glyphs = glyphsFor("unicode");
+	const max = bandMax([s]);
+
+	const expected = renderDailyBars(s.values, {
+		width,
+		height,
+		max,
+		glyphs,
+		accent: paint,
+		dim: (text) => text,
+	});
+
+	const actual = renderSeriesChart([s], {
+		width,
+		height,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+		labels: false,
+	});
+
+	expect(actual).toEqual(expected);
+});
+
+test("renderSeriesChart is renderDailyBars called once per series, band by band", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "Succeeded", values: [12, 30, 8, 20, 0, 5] },
+		{ label: "Failed", values: [2, 0, 1, 0, 3, 0] },
+	];
+	const width = 20;
+	const height = 8;
+	const glyphs = glyphsFor("unicode");
+	const max = bandMax(series);
+	const perBand = series.map((entry) =>
+		entry.values.reduce((peak, value) => (value > peak ? value : peak), 0),
+	);
+	const rowsEach = bandHeights(perBand, height);
+
+	const expected = series.flatMap((entry, index) =>
+		renderDailyBars(entry.values, {
+			width,
+			height: rowsEach[index]!,
+			max,
+			glyphs,
+			accent: paint,
+			dim: (text) => text,
+		}),
+	);
+
+	const actual = renderSeriesChart(series, {
+		width,
+		height,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+		labels: false,
+	});
+
+	expect(actual).toEqual(expected);
+});
+
+test("composition holds at every preset and every width", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "A", values: [5, 0, 15, 3] },
+		{ label: "B", values: [0, 8, 2, 0] },
+		{ label: "C", values: [1, 1, 1, 1] },
+	];
+	const max = bandMax(series);
+	const perBand = series.map((entry) =>
+		entry.values.reduce((peak, value) => (value > peak ? value : peak), 0),
+	);
+
+	for (const preset of PRESETS) {
+		const glyphs = glyphsFor(preset);
+		for (const width of WIDTHS) {
+			for (const height of [4, 6, 8, 10]) {
+				const rowsEach = bandHeights(perBand, height);
+				const expected = series.flatMap((entry, index) =>
+					renderDailyBars(entry.values, {
+						width,
+						height: rowsEach[index]!,
+						max,
+						glyphs,
+						accent: paint,
+						dim: (text) => text,
+					}),
+				);
+				const actual = renderSeriesChart(series, {
+					width,
+					height,
+					preset,
+					theme: THEME,
+					paint: (_color, text) => text,
+					labels: false,
+				});
+				expect(actual).toEqual(expected);
+			}
+		}
+	}
+});
+
 // ─── Host adapter: planTimeline, planSeries, money labels, gap policy ─────────
 
 test("planTimeline returns a ChartSpec for valid timeline data", () => {

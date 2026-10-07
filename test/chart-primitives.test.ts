@@ -512,7 +512,7 @@ test("adapter never calls host formatValue for currency", () => {
 
 	const allText = lines.join("\n");
 	expect(allText).not.toContain("$0");
-	expect(allText).toContain("N/A");
+	expect(allText).toContain(costWithUnpriced(0, 5));
 });
 
 test("planTimeline returns undefined for sub-threshold data", () => {
@@ -528,4 +528,13 @@ test("planTimeline applies the worthCharting gap policy", () => {
 	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
 	const rows = [{ key: "a", label: "A", values: [1, 1, 1, 2] }];
 	expect(planTimeline(axis, rows, {})).toBeUndefined();
+});
+
+test("planTimeline records stacked and cumulative flags on the spec", () => {
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3, 4] }];
+	const spec = planTimeline(axis, rows, { stacked: true, cumulative: true });
+	expect(spec).toBeDefined();
+	expect(spec!.stacked).toBe(true);
+	expect(spec!.cumulative).toBe(true);
 });

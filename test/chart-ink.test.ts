@@ -791,3 +791,43 @@ test("renderTimeSeries says so when the host will not chart the range", () => {
 	expect(text).toContain("No chart-worthy data in this range.");
 	expect(text).not.toContain(glyph("unicode", "barFill"));
 });
+
+/**
+ * The caller shapes the swap broke. Every multi-series time-series in the panel
+ * goes through `renderHostChart`, and the swap routed them ALL through the band
+ * compositor — which, when the height is no greater than the series count, spends
+ * every row on one floor per band and draws a blank wall of `_`. That is exactly
+ * the shapes the analytics screens pass (6 series at height 5) and the providers
+ * burn view passes (7 series at height 4), so the primary analytics screens went
+ * blank while the old renderer had drawn a shared-axis plot on those rows.
+ *
+ * The host names a temporal axis `line`, so `renderHostChart` consults
+ * `spec.kind` and restores the shared-axis geometry for a multi-series line. The
+ * stacked form fills whole cells (`sparkRamp[7]`, byte-identical to `barFill`)
+ * and the point form drops a `pointHollow` per bucket per series. These tests
+ * FAIL on the swapped HEAD (floors only, no ink) and PASS after the fix.
+ */
+const SHAPE_AXIS = Array.from({ length: 12 }, (_, i) => 1700000000000 + i * 86_400_000);
+const shapeRows = (count: number) =>
+	Array.from({ length: count }, (_, s) => ({
+		key: `s${s}`,
+		label: `Series ${s}`,
+		values: SHAPE_AXIS.map((_, i) => (s + 1) * (i + 1)),
+	}));
+
+test("a 6-series stacked time-series at height 5 draws data ink", () => {
+	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(6), 80, 5, { height: 5, stacked: true });
+	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "barFill"));
+});
+
+test("a 7-series stacked time-series at height 4 draws data ink", () => {
+	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(7), 80, 5, { height: 4, stacked: true });
+	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "barFill"));
+});
+
+test("a multi-series line spec draws a shared-axis plot, not one floor per band", () => {
+	// The point form of the same shapes: no stacking, so the ink is one
+	// `pointHollow` per bucket per series rather than a filled column.
+	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(6), 80, 5, { height: 5 });
+	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "pointHollow"));
+});

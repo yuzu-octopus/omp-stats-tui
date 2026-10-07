@@ -13,8 +13,8 @@
  * Series hues come from `resolveSeries`, marks from our glyphs.
  *
  * Money honesty: the host's `formatValue` compacts (`$1235` for 1234.56) and
- * prints `$0` for unpriced. It is NEVER called here. A currency series' labels
- * go through `costWithUnpriced`, so unpriced requests read `N/A`, not `$0`.
+ * prints `$0` for unpriced. It is NEVER called here — this module draws
+ * marks only. Money labels stay with the callers' legends (`costWithUnpriced`).
  */
 
 import { analyzeTable } from "@oh-my-pi/pi-tui/charts/table-data";
@@ -36,13 +36,14 @@ import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
  * A host `ChartSpec` from a timeline, plus the two modes the host does not model.
  *
  * `stacked`/`cumulative` are APPLIED in the shared-axis plot
- * ({@link renderSharedAxisPlot}): stacked sums each bucket's series into one
- * column, cumulative draws a running total. The band renderer has no stacking
- * geometry — a terminal cell cannot carry two stacked values legibly — so a
- * multi-series `line` spec is drawn as its component bands, which is honest:
- * it shows the parts, and a caller that needs the stack total sums the series
- * before plotting.
+ * ({@link renderSharedAxisPlot}), which a multi-series `line` spec takes:
+ * stacked scales to the bucket total with each cell carrying its dominant
+ * series, cumulative fills the cell with a solid mark instead of a point.
+ * Single-series specs keep the band renderer, which has no stacking
+ * geometry — it shows the parts, and a caller that needs the stack total
+ * sums the series before plotting.
  */
+
 export type TimelineChartSpec = ChartSpec & {
   readonly stacked?: boolean;
   readonly cumulative?: boolean;
@@ -88,8 +89,8 @@ export interface SeriesChartOptions {
 /**
  * A cell the host reads as its number.
  *
- * Cost cells carry a currency mark so the host types the column `currency`; the
- * RENDERED money label is still `costWithUnpriced`, never this text.
+ * Cost cells carry a currency mark so the host types the column `currency`;
+ * the mark is never rendered — money labels stay with the callers' legends.
  */
 function cell(value: number | null | undefined, currency: boolean): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
@@ -333,8 +334,8 @@ const NO_ACTIVITY = "No activity recorded in this range.";
  * block ramp. An unstacked series drops one point per bucket.
  *
  * NO AXIS LABELS AND NO CURSOR: those stay the caller's (the legend carries
- * each series' value and visibility, and money labels never leave
- * `costWithUnpriced`). The marks are the whole of what this draws.
+ * each series' value and visibility, and money labels stay with the callers'
+ * legends). The marks are the whole of what this draws.
  */
 function renderSharedAxisPlot(
   series: readonly SeriesChartSeries[],

@@ -33,6 +33,8 @@ import { bandHeights, bandMax, renderSeriesChart, type SeriesChartSeries } from 
 import { PALETTE, heatRamp, resolveSeries, stripForTest, type PaletteTheme } from "../src/tui/palette";
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import type { CostTimeSeriesPoint, DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
+import { planTimeline, renderHostChart } from "../src/tui/charts/host-adapter";
+import { costWithUnpriced } from "../src/tui/format";
 
 const PRESETS: readonly SymbolPreset[] = ["unicode", "ascii", "nerd"];
 const WIDTHS = [40, 80, 120, 200] as const;
@@ -477,4 +479,43 @@ test("renderSeriesChart drops the remainder rather than giving it to the last se
 	// takes the spare row that `a` — no quieter, but listed first — did not.
 	expect(rows.length).toBe(5);
 	for (const row of rows) expect(cells(row)).toBe(10);
+});
+
+// ─── Host adapter: planTimeline, money labels, gap policy ────────────────────
+
+test("planTimeline returns a ChartSpec for valid timeline data", () => {
+	const axis = [1700000000000, 1700008640000, 1700095040000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3] }];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeDefined();
+	expect(spec!.kind).toBe("line");
+	expect(spec!.categories.length).toBe(3);
+	expect(spec!.series.length).toBe(1);
+});
+
+test("adapter never calls host formatValue for currency", () => {
+	const axis = [1700000000000, 1700008640000, 1700095040000];
+	const rows = [{ key: "cost", label: "Cost", values: [0, 1, 2] }];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeDefined();
+
+	const lines = renderHostChart(spec!, {
+		width: 80,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+		currency: true,
+		unpriced: 5,
+	});
+
+	const allText = lines.join("\n");
+	expect(allText).not.toContain("$0");
+	expect(allText).toContain("N/A");
+});
+
+test("planTimeline returns undefined for sub-threshold data", () => {
+	const axis = [1700000000000, 1700008640000];
+	const rows = [{ key: "a", label: "A", values: [1, 1] }];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeUndefined();
 });

@@ -11,7 +11,7 @@ const HOST_IMPORTS: Record<string, true> = {
 	"@oh-my-pi/pi-tui/theme": true,
 	"@oh-my-pi/pi-tui/charts/table-data": true,
 	"@oh-my-pi/pi-tui/charts/chart-plan": true,
-	"@oh-my-pi/pi-tui/charts/chart-svg": true,
+	// "@oh-my-pi/pi-tui/charts/chart-svg": true, — dropped: nothing imports it (YAGNI; re-add when used)
 	"@oh-my-pi/pi-tui/theme/color": true,
 	"@oh-my-pi/pi-utils": true,
 	"@oh-my-pi/pi-natives": true,

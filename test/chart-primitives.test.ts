@@ -34,7 +34,6 @@ import { PALETTE, heatRamp, resolveSeries, stripForTest, type PaletteTheme } fro
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import type { CostTimeSeriesPoint, DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
 import { planSeries, planTimeline, renderHostChart, renderSeriesChart } from "../src/tui/charts/host-adapter";
-import { costWithUnpriced } from "../src/tui/format";
 
 const PRESETS: readonly SymbolPreset[] = ["unicode", "ascii", "nerd"];
 const WIDTHS = [40, 80, 120, 200] as const;
@@ -494,27 +493,6 @@ test("planTimeline returns a ChartSpec for valid timeline data", () => {
 	expect(spec!.series.length).toBe(1);
 });
 
-test("adapter never calls host formatValue for currency", () => {
-	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
-	const rows = [{ key: "cost", label: "Cost", values: [0, 1, 2, 3] }];
-	const spec = planTimeline(axis, rows, {});
-	expect(spec).toBeDefined();
-	// The host typed the column currency from the cells; the LABEL is still ours.
-	expect(spec!.series[0]!.dim).toBe("currency");
-
-	const lines = renderHostChart(spec!, {
-		width: 80,
-		preset: "unicode",
-		theme: THEME,
-		paint: (_color, text) => text,
-		currency: true,
-		unpriced: 5,
-	});
-
-	const allText = lines.join("\n");
-	expect(allText).not.toContain("$0");
-	expect(allText).toContain(costWithUnpriced(0, 5));
-});
 
 test("planTimeline returns undefined for sub-threshold data", () => {
 	const axis = [1700000000000, 1700008640000];

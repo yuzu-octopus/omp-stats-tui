@@ -9,7 +9,7 @@ import { openStandaloneJudge, type StandaloneJudge } from "@oh-my-pi/pi-coding-a
 import { cancelFrustrationRun, setStatsJudgeProvider } from "@oh-my-pi/omp-stats/frustration";
 // `.js` subpath: the package ships `dist/types/*.d.ts` built from UNPATCHED
 // source, so `StatsLive({ workers })` — added by patches/@oh-my-pi%2Fomp-stats
-// @18.6.1.patch — has no declaration. This subpath resolves to `src/live.ts`,
+// @18.7.0.patch — has no declaration. This subpath resolves to `src/live.ts`,
 // the code that actually runs. Verified the same resolved module as the bare
 // specifier, so this changes types only, never the runtime instance.
 import { StatsLive } from "@oh-my-pi/omp-stats/live.js";

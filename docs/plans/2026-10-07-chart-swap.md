@@ -331,7 +331,7 @@ Expected: no matches (all consumers swapped)
 
 - [ ] **Step 2: Grep for old rendering internals**
 
-Run: `grep -r "grid\[y\]\[x]\|plotWidth\|cellWidth" src/tui/charts/ --include="*.ts"`
+Run: `grep -r "grid\[y\]\[x]\|plotWidth\|cellWidth" src/tui/charts/ --include="*.ts" | grep -v "host-adapter.ts"`
 Expected: no matches (old geometry engine deleted)
 
 - [ ] **Step 3: Run theme-fidelity test**

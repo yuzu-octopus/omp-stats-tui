@@ -24,6 +24,8 @@ export interface TimeSeriesOptions {
 	height?: number;
 	selectedKey?: string;
 	legend?: boolean;
+	/** Caller intent: mark this chart as currency. When absent, falls back to key sniffing (row.key === "cost"). */
+	currency?: boolean;
 }
 
 /**

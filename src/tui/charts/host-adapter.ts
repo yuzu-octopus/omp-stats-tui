@@ -25,7 +25,6 @@ import type { SeriesChartSeries } from "./compose";
 export type { SeriesChartSeries };
 import { bandHeights, bandMax } from "./compose";
 import { renderDailyBars } from "./bars";
-import { costWithUnpriced } from "../format";
 import { resolveSeries, type PaletteTheme } from "../palette";
 import { glyph, glyphsFor, SPARK_LEVELS, type SymbolPreset } from "../glyphs";
 
@@ -36,11 +35,13 @@ import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
 /**
  * A host `ChartSpec` from a timeline, plus the two modes the host does not model.
  *
- * `stacked`/`cumulative` are RECORDED, not applied. The band renderer has no
- * stacking geometry — a terminal cell cannot carry two stacked values legibly.
- * So a `stacked` spec is drawn as its component bands, which is honest — it shows
- * the parts — and a caller that needs the stack total sums the series before
- * plotting.
+ * `stacked`/`cumulative` are APPLIED in the shared-axis plot
+ * ({@link renderSharedAxisPlot}): stacked sums each bucket's series into one
+ * column, cumulative draws a running total. The band renderer has no stacking
+ * geometry — a terminal cell cannot carry two stacked values legibly — so a
+ * multi-series `line` spec is drawn as its component bands, which is honest:
+ * it shows the parts, and a caller that needs the stack total sums the series
+ * before plotting.
  */
 export type TimelineChartSpec = ChartSpec & {
   readonly stacked?: boolean;
@@ -114,7 +115,7 @@ export function planTimeline(
 ): TimelineChartSpec | undefined {
   if (!axis.length || !rows.length) return undefined;
 
-  const currency = rows.map((row) => row.key === "cost");
+  const currency = rows.map((row) => options.currency ?? (row.key === "cost"));
   const table = analyzeTable(
     ["Bucket", ...rows.map((row) => row.label)],
     axis.map((timestamp, index) => [
@@ -301,8 +302,6 @@ export interface HostChartOptions {
   paint: (color: ThemeColor, text: string) => string;
   dim?: (text: string) => string;
   labels?: boolean;
-  currency?: boolean;
-  unpriced?: number;
 }
 
 /**
@@ -418,8 +417,6 @@ function renderSharedAxisPlot(
 
 /**
  * Render a host `ChartSpec` to terminal lines using the project's own primitives.
- *
- * Currency labels go through `costWithUnpriced` — never the host's `formatValue`.
  */
 export function renderHostChart(spec: ChartSpec, opts: HostChartOptions): readonly string[] {
   const { width, preset, theme, paint, dim, labels } = opts;
@@ -449,16 +446,5 @@ export function renderHostChart(spec: ChartSpec, opts: HostChartOptions): readon
       labels,
     });
 
-  if (!opts.currency || opts.unpriced === undefined) return lines;
-
-  const money: string[] = [];
-  for (const entry of spec.series) {
-    if (entry.dim !== "currency") continue;
-    const figures = entry.points.map((point) =>
-      point ? costWithUnpriced(point.value, opts.unpriced!) : "—",
-    );
-    money.push(`${entry.name}: ${figures.join(", ")}`);
-  }
-
-  return [...lines, ...money];
+  return lines;
 }

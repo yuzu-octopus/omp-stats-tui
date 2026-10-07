@@ -84,7 +84,7 @@ import type {
 } from "../../layout/spec";
 import { isProseHint, proseHintText } from "../../layout/spec";
 import { renderBands, type Band, type BandRenderOptions } from "../band";
-import { renderSeriesChart } from "../charts/compose";
+import { planSeries, renderHostChart } from "../charts/host-adapter";
 import { calendarLayout } from "../charts/calendar";
 import { renderHeatmap, weeksForWidth } from "../charts/heatmap";
 import { BAR_TRACK_MAX, renderRankedBars, renderShareBar, renderSparkline, type RankedRow } from "../charts/sparkline";
@@ -877,25 +877,27 @@ function gridTotals(points: readonly DataRow[], weeks: number, today?: Date): { 
  * height as a one-series chart. NEVER summed — see the module header.
  */
 function barRows(chart: ChartSpec, opts: ScreenRenderOptions, width: number): readonly string[] {
-	// `renderSeriesChart`, NOT a multi-series path written here. That module has no
-	// geometry of its own: every mark comes out of `renderDailyBars` called once
-	// per series, and `test/chart-primitives.test.ts` asserts the composition
-	// equals the primitive byte for byte. Writing the loop again here is exactly how
-	// this chart broke four times in one session — a second encoding nobody
-	// compares against the primitive.
-	return renderSeriesChart(
+	// GEOMETRY IS THE HOST'S. `planSeries` builds the host table, `planChart`
+	// picks the kind and `worthCharting` is the gate — a range the host will not
+	// chart returns `undefined` and gets our own sentence instead.
+	// `renderHostChart` redraws the spec with our glyphs. Writing a
+	// multi-series path here is exactly how this chart broke four times in one
+	// session — a second encoding nobody compares against the primitive.
+	const spec = planSeries(
 		chart.series.map(series => ({ label: series.label, values: bucketedValues(series.metric, opts) })),
-		{
-			width,
-			height: Math.max(1, opts.plan.barHeight),
-			preset: opts.preset,
-			theme: opts.palette,
-			paint: (color, text) => opts.fg(color, text),
-			// The floor is CHROME: the web keeps its baseline at `--line-3` and
-			// its gridlines at 5.5% white, never in a series hue.
-			dim: text => opts.fg(PALETTE.dim, text),
-		},
+		{},
 	);
+	if (!spec) return [opts.fg(PALETTE.dim, "No chart-worthy data in this range.")];
+	return renderHostChart(spec, {
+		width,
+		height: Math.max(1, opts.plan.barHeight),
+		preset: opts.preset,
+		theme: opts.palette,
+		paint: (color, text) => opts.fg(color, text),
+		// The floor is CHROME: the web keeps its baseline at `--line-3` and
+		// its gridlines at 5.5% white, never in a series hue.
+		dim: text => opts.fg(PALETTE.dim, text),
+	});
 }
 
 /**

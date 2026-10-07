@@ -882,7 +882,7 @@ test("tokens are shown as separate cells, never as one combined total", async ()
 test("an empty cost series is stated as empty, not drawn as a wall of zero columns", async () => {
 	const panel = makePanel({ data: dataFor({ costs: { costSeries: [] } }) });
 	await __testing.settled(panel);
-	expect(__testing.debugBody(panel).join("\n")).toContain("No activity recorded");
+	expect(__testing.debugBody(panel).join("\n")).toContain("No chart-worthy data in this range.");
 });
 
 // ---------------------------------------------------------------------------

@@ -39,7 +39,8 @@
 import { expect, test } from "bun:test";
 
 import { renderDailyBars, renderModelCostBars } from "../src/tui/charts/bars";
-import { bandHeights, renderSeriesChart, type SeriesChartSeries } from "../src/tui/charts/compose";
+import { bandHeights } from "../src/tui/charts/compose";
+import { renderSeriesChart, type SeriesChartSeries } from "../src/tui/charts/host-adapter";
 import { renderRankedBars, renderShareBar, renderSparkline } from "../src/tui/charts/sparkline";
 import { renderTimeSeries } from "../src/tui/charts/time-series";
 import { glyph, glyphsFor, type GlyphSet, type SymbolPreset } from "../src/tui/glyphs";

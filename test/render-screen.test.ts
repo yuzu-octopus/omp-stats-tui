@@ -31,7 +31,7 @@ import { bucketAxis } from "@oh-my-pi/omp-stats/client/data/range";
 import { SCREEN_SPECS, type ScreenSpec } from "../src/layout/spec";
 import { renderScreen, screenBands, type ScreenRenderOptions } from "../src/tui/render/screen";
 import { resolveNumber, resolveSeriesValues, rowsFor } from "../src/layout/resolve";
-import { renderSeriesChart } from "../src/tui/charts/compose";
+import { planSeries, renderHostChart } from "../src/tui/charts/host-adapter";
 import { planLayout, type LayoutPlan } from "../src/tui/layout";
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import { PALETTE, SERIES_COLORS, stripForTest } from "../src/tui/palette";
@@ -427,9 +427,11 @@ test("sparse succeeded and failed charts densify on the real range, including id
 		const options = { ...opts(FILLABLE.find(spec => spec.id === "overview")!, data, { width, range: "1h" }), now };
 		const chart = screenBands(options).find(band => band.kind === "chart" && band.title === "Activity")!;
 		if (chart.kind !== "chart") throw new Error("missing activity chart");
-		expect(chart.chart.render()).toEqual(renderSeriesChart([{ label: "Succeeded", values: succeeded }, { label: "Failed", values: failed }], {
+		const spec = planSeries([{ label: "Succeeded", values: succeeded }, { label: "Failed", values: failed }], {});
+		if (!spec) throw new Error("planSeries rejected the activity chart");
+		expect(chart.chart.render()).toEqual(renderHostChart(spec, {
 			width: options.plan.innerWidth, height: options.plan.barHeight, preset: options.preset, theme: options.palette,
-			paint: (color, text) => options.fg(color, text), dim: text => options.fg(PALETTE.dim, text),
+			paint: (color: ThemeColor, text: string) => options.fg(color, text), dim: (text: string) => options.fg(PALETTE.dim, text),
 		}));
 		const tile = screenBands(options).flatMap(band => band.kind === "statRow" ? band.stats : []).find(tile => tile.label === "Requests")!;
 		expect(tile.spark).toEqual(axis.map(timestamp => points.find(point => point.timestamp === timestamp)?.requests ?? 0));

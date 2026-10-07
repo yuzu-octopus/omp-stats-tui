@@ -21,11 +21,14 @@ import { analyzeTable } from "@oh-my-pi/pi-tui/charts/table-data";
 import { buildChart, planChart, worthCharting } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import type { ChartSpec } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import type { TimelineRow, TimeSeriesOptions } from "./time-series";
-import type { SeriesChartSeries, SeriesChartOptions } from "./compose";
-import { renderSeriesChart } from "./compose";
+import type { SeriesChartSeries } from "./compose";
+export type { SeriesChartSeries };
+import { bandHeights, bandMax } from "./compose";
+import { renderDailyBars } from "./bars";
 import { costWithUnpriced } from "../format";
 import { resolveSeries, type PaletteTheme } from "../palette";
-import { glyph, SPARK_LEVELS, type SymbolPreset } from "../glyphs";
+import { glyph, glyphsFor, SPARK_LEVELS, type SymbolPreset } from "../glyphs";
+
 import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
 
 // ─── Spec ────────────────────────────────────────────────────────────────────
@@ -33,17 +36,51 @@ import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
 /**
  * A host `ChartSpec` from a timeline, plus the two modes the host does not model.
  *
- * `stacked`/`cumulative` are RECORDED, not applied. `renderSeriesChart` has no
- * stacking geometry — a terminal cell cannot carry two stacked values legibly
- * (that is exactly the `░█░█░█` noise `compose.ts` exists to prevent). So a
- * `stacked` spec is drawn as its component bands, which is honest — it shows the
- * parts — and a caller that needs the stack total sums the series before
+ * `stacked`/`cumulative` are RECORDED, not applied. The band renderer has no
+ * stacking geometry — a terminal cell cannot carry two stacked values legibly.
+ * So a `stacked` spec is drawn as its component bands, which is honest — it shows
+ * the parts — and a caller that needs the stack total sums the series before
  * plotting.
  */
 export type TimelineChartSpec = ChartSpec & {
   readonly stacked?: boolean;
   readonly cumulative?: boolean;
 };
+
+/**
+ * Options for the band chart. The planner reads nothing from these — `planSeries`
+ * answers "is this worth a chart", and the geometry belongs to the render —
+ * so every field is optional and the callers that only plan pass `{}`.
+ */
+export interface SeriesChartOptions {
+	/** Columns available. No rendered row may exceed it. */
+	width?: number;
+	/**
+	 * Rows for the WHOLE chart, split between the series — not a per-series
+	 * allowance. A two-series chart in 8 rows is an 8-row chart.
+	 */
+	height?: number;
+	preset?: SymbolPreset;
+	/** The theme's palette slice. Series hues come from `resolveSeries`. */
+	theme?: PaletteTheme;
+	/**
+	 * Applies a series' resolved hue to one line. Injected rather than reached for
+	 * from the theme singleton, so this module can be loaded and tested without an
+	 * active theme — and so a test can observe which hue reached which series.
+	 */
+	paint?: (color: ThemeColor, text: string) => string;
+	/**
+	 * Chrome ink: the chart floor, and nothing else. Defaults to identity, so the
+	 * mark-only form stays a pure comparison of geometry. SEPARATE from `paint`
+	 * because the two make different claims.
+	 */
+	dim?: (text: string) => string;
+	/**
+	 * Whether each band is labelled. Narrow terminals and callers that label the
+	 * chart themselves turn it off.
+	 */
+	labels?: boolean;
+}
 
 // ─── Table cells ─────────────────────────────────────────────────────────────
 
@@ -124,6 +161,136 @@ export function planSeries(
   return spec;
 }
 
+/**
+ * N series, one `renderDailyBars` call each. The categorical branch of
+ * `renderHostChart`: every band is sized by its peak relative to the shared
+ * maximum (`bandMax`), so magnitude reads ACROSS series the way column height
+ * reads within one.
+ *
+ * `[]` for no series: a chart with nothing in it must not render a block of
+ * blank rows, and the caller's grammar drops an empty band regardless.
+ *
+ * The full geometry a band RENDER needs — the planner passes `{}` and skips this.
+ */
+export type SeriesRenderOptions = SeriesChartOptions & {
+  width: number;
+  height: number;
+  preset: SymbolPreset;
+  theme: PaletteTheme;
+  paint: (color: ThemeColor, text: string) => string;
+};
+export function renderSeriesChart(
+  series: readonly SeriesChartSeries[],
+  opts: SeriesRenderOptions,
+): readonly string[] {
+  if (series.length === 0) return [];
+
+  const glyphs = glyphsFor(opts.preset);
+  const width = Math.max(0, Math.floor(opts.width));
+  const dim = opts.dim ?? ((text: string) => text);
+  // EVERY series measured zero. There is no peak to scale against, so each band
+  // would be a block of blank rows with a floor and nothing else — dead space
+  // that reads as a broken chart rather than as a quiet range. The primitive
+  // says this in one dim line for a single all-zero series, and the composed
+  // chart says the same, so "nothing happened" has exactly one rendering
+  // however many series declared it.
+  if (series.every((entry) => entry.values.every((value) => !(value > 0)))) {
+    return [dim(truncateToWidth(NO_ACTIVITY, width))];
+  }
+
+  const colors = resolveSeries(series.length, opts.theme);
+  // A band with NO rows at all draws nothing, and a band that drew nothing is
+  // indistinguishable from a series that recorded nothing — so every band is
+  // guaranteed a row BEFORE anything else is paid for. That row is its floor:
+  // the one row of an all-zero series is the floor, and for a live series it is
+  // a row of ink. Names come out of what is left, and a chart too short to
+  // afford both draws marks rather than names with no marks under them.
+  const perBand = series.map((entry) =>
+    entry.values.reduce((max, value) => (value > max ? value : max), 0),
+  );
+  const wanted = opts.labels !== false;
+  // A LABEL IS ONLY WORTH ITS ROW IF THE BANDS STILL GET TO DIFFER. Names cost
+  // one row each, and at four series in eight rows they cost half the chart,
+  // leaving every band exactly one row — a chart that names four series and
+  // shows them as four identical bars. Data beats chrome: when the rows cannot
+  // pay for both, the chart draws marks and lets the caller name them.
+  const labelled = wanted && opts.height >= series.length * 2 + 1;
+  // Clamped to the declared height: a band may never claim a row the chart was
+  // not given, because an overflowing band corrupts the panel around it.
+  const markable = Math.min(opts.height, labelled ? opts.height - series.length : opts.height);
+  // THE WHOLE BUDGET, not an even slice of it. `bandHeights` apportions rows
+  // across the bands by peak share, and it can only do that from one pool —
+  // dividing first left every band the same handful of rows, at four series two
+  // rows each, which no allocation could make look different.
+  const rowsEach = bandHeights(perBand, markable);
+  // ONE divisor for every band: each band re-scaling against its own peak is
+  // what made a series peaking at a fiftieth of the loudest draw the same shape
+  // as the loudest.
+  const max = bandMax(series);
+
+  // Shed the overflow QUIETEST-FIRST, so the loudest band keeps its geometry:
+  // the bands that give up rows are the ones whose magnitude the reader loses
+  // least.
+  //
+  // A band normally stops at the one row it needs to paint its floor — that row
+  // is what makes its zero visible. But a chart SHORTER THAN ITS OWN SERIES LIST
+  // cannot give every band that row without overflowing the panel, and an
+  // overflowing band corrupts the layout around it, which is the worse of the
+  // two wrongs. So when the rows run out entirely the quietest bands are shed
+  // to nothing, loudest-first kept whole: the chart stays inside its height and
+  // the reader gets the loudest bands rather than a broken panel.
+  const heights = [...rowsEach];
+  let spill = Math.max(
+    0,
+    heights.reduce((sum, rows) => sum + rows, 0) + (labelled ? series.length : 0) - opts.height,
+  );
+  if (spill > 0) {
+    const quietestFirst = series
+      .map((_entry, index) => ({ index, peak: perBand[index] ?? 0 }))
+      .sort((a, b) => a.peak - b.peak || a.index - b.index);
+    for (const { index } of quietestFirst) {
+      // First give up the rows ABOVE the floor, keeping every band visible.
+      while (spill > 0 && (heights[index] ?? 0) > 1) {
+        heights[index] = (heights[index] ?? 0) - 1;
+        spill -= 1;
+      }
+    }
+    // Then, only if the rows still do not fit, give up whole bands — again
+    // quietest first.
+    for (const { index } of quietestFirst) {
+      while (spill > 0 && (heights[index] ?? 0) > 0) {
+        heights[index] = 0;
+        spill -= 1;
+      }
+    }
+  }
+
+  const rows: string[] = [];
+  for (const [index, entry] of series.entries()) {
+    const color = colors[index] ?? colors[0]!;
+    const apply = (text: string) => opts.paint(color, text);
+    const height = heights[index] ?? 0;
+    if (height > 0) {
+      // The band is given `height` rows TOTAL, floor included — see
+      // `plotRows` in bars.ts. The floor comes out of the band's budget
+      // rather than on top of it, so a four-series chart cannot claim four
+      // rows more than the plan gave it.
+      //
+      // `dim` is CHROME, not this series' hue: the floor belongs to the
+      // chart, and painting it in a data colour is what made the old track
+      // fill read as measured values.
+      rows.push(...renderDailyBars(entry.values, { width, height, max, glyphs, accent: apply, dim }));
+    }
+    if (labelled) {
+      // Padded to the full width so the block stays rectangular: the primitive
+      // returns full-width rows, and a short label beside them leaves a ragged
+      // right edge for the panel border to cut through.
+      rows.push(apply(` ${entry.label}`.slice(0, width).padEnd(width)));
+    }
+  }
+  return rows;
+}
+
 // ─── Rendering ───────────────────────────────────────────────────────────────
 
 export interface HostChartOptions {
@@ -139,7 +306,7 @@ export interface HostChartOptions {
 }
 
 /**
- * What a temporal spec says when every reading is zero. The band compositor's
+ * What a temporal spec says when every reading is zero. The band renderer's
  * own sentence, retyped here so the two renderings of one state agree — the
  * plot only reaches this on the defensive path, since `worthCharting` already
  * rejects an all-zero table before a spec exists.
@@ -150,7 +317,7 @@ const NO_ACTIVITY = "No activity recorded in this range.";
  * A multi-series temporal plot on ONE shared scale — the geometry the old
  * `renderTimeSeries` drew, restored for the host's `line` kind.
  *
- * WHY THIS IS NOT THE BAND COMPOSITOR. `renderSeriesChart` gives every series
+ * WHY THIS IS NOT THE BAND RENDERER. `renderSeriesChart` gives every series
  * its own band of rows. That is right for a categorical chart, and it is wrong
  * for a time series whose height is no greater than its series count: with six
  * series in five rows `bandHeights` hands every band its one-row floor, and
@@ -265,9 +432,9 @@ export function renderHostChart(spec: ChartSpec, opts: HostChartOptions): readon
 
   // THE HOST OWNS THE KIND, SO THE RENDERER MUST READ IT. A temporal axis comes
   // back `line`; everything else (bar/paired/grouped/heatmap) is categorical and
-  // stays on the band compositor. A multi-series `line` draws the shared-axis
-  // plot — see {@link renderSharedAxisPlot} for why the compositor cannot draw
-  // those shapes. A SINGLE series keeps the compositor: its column chart is the
+  // stays on the band renderer. A multi-series `line` draws the shared-axis
+  // plot — see {@link renderSharedAxisPlot} for why bands cannot draw
+  // those shapes. A SINGLE series keeps the bands: its column chart is the
   // same rendering it had before the swap, and this must not change it.
   const temporal = spec.kind === "line";
   const lines = temporal && series.length > 1

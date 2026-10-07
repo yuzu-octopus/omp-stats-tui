@@ -29,10 +29,11 @@ import { expect, test } from "bun:test";
 import { renderDailyBars, renderModelCostBars } from "../src/tui/charts/bars";
 import { renderHeatmap } from "../src/tui/charts/heatmap";
 import { renderSparkline } from "../src/tui/charts/sparkline";
-import { bandHeights, bandMax, renderSeriesChart, type SeriesChartSeries } from "../src/tui/charts/compose";
+import { bandHeights, bandMax, type SeriesChartSeries } from "../src/tui/charts/compose";
 import { PALETTE, heatRamp, resolveSeries, stripForTest, type PaletteTheme } from "../src/tui/palette";
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import type { CostTimeSeriesPoint, DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
+import { planSeries, planTimeline, renderHostChart, renderSeriesChart } from "../src/tui/charts/host-adapter";
 
 const PRESETS: readonly SymbolPreset[] = ["unicode", "ascii", "nerd"];
 const WIDTHS = [40, 80, 120, 200] as const;
@@ -238,127 +239,7 @@ test("renderModelCostBars ranks by COST: the 42x token spender is the shorter ba
 	expect(filled(0)).toBe(7);
 });
 
-// ─── Composition: the multi-series chart IS the primitive, N times ───────────
-
-/**
- * Series with EQUAL peaks.
- *
- * Equal peaks are what make the shared allocation give every series the same
- * band height, which is what lets the composition be asserted as plain
- * byte-equality against `series.flatMap(…)`. The unequal-peak case is covered
- * by the band-by-band test and by `bandHeights` directly.
- */
-const REQUEST_SERIES: readonly SeriesChartSeries[] = [
-	{ label: "Succeeded", values: [12, 30, 8, 20, 21] },
-	{ label: "Failed", values: [12, 30, 8, 20, 21] },
-];
-
-/**
- * The mark-only form, which is what the equality tests compare.
- *
- * `labels: false` is the pure composition: no band names, so the output is
- * exactly `renderDailyBars` once per series. Labelled output is that plus one
- * row per band, and has its own test below.
- */
-function marks(
-	series: readonly SeriesChartSeries[],
-	width: number,
-	height: number,
-	preset: SymbolPreset = "unicode",
-): readonly string[] {
-	return renderSeriesChart(series, {
-		width,
-		height,
-		preset,
-		theme: THEME,
-		paint: (_color, text) => text,
-		labels: false,
-	});
-}
-
-/**
- * The primitive, called exactly as `compose` must call it.
- *
- * `max` is the SHARED peak across every series, because that is what
- * `renderSeriesChart` hands each band — see `bandMax`. Omitting it here would
- * compare the composition against a differently-scaled renderer, which is the
- * one thing the equality is supposed to rule out.
- */
-function primitive(
-	values: readonly number[],
-	width: number,
-	height: number,
-	preset: SymbolPreset,
-	max: number,
-) {
-	return renderDailyBars(values, {
-		width,
-		height,
-		max,
-		glyphs: glyphsFor(preset),
-		accent: (_text: string) => _text,
-		dim: (_text: string) => _text,
-	});
-}
-
-test("renderSeriesChart IS renderDailyBars called once per series", () => {
-	// THE EQUALITY THAT MATTERS. Not "looks like a stacked chart" — byte-identical
-	// to the composition a caller would have written by hand. A new multi-series
-	// geometry fails this; composing passes.
-	const series = REQUEST_SERIES;
-	const width = 20;
-	const height = 6;
-	const perSeries = bandHeights(series.map(s => Math.max(...s.values)), height)[0] ?? 0;
-	const max = bandMax(series);
-
-	const handRolled = series.flatMap(s => primitive(s.values, width, perSeries, "unicode", max));
-
-	expect(marks(series, width, height)).toEqual(handRolled);
-});
-
-test("renderSeriesChart of ONE series is exactly the primitive", () => {
-	const one: SeriesChartSeries[] = [{ label: "Calls", values: [4, 9, 2, 7] }];
-	expect(marks(one, 12, 3)).toEqual(primitive(one[0]!.values, 12, 3, "unicode", bandMax(one)));
-});
-
-test("every series in a multi-series chart is the primitive, band by band", () => {
-	// The whole-chart equality above could still pass if one series were rendered
-	// correctly and another fudged. This asks, for EACH series, whether its own
-	// band is the primitive over its own values — and it uses UNEVEN peaks, so it
-	// also covers the unequal-band case the equal-peak equality cannot reach.
-	const series: SeriesChartSeries[] = [
-		{ label: "Succeeded", values: [44, 40, 44, 38] },
-		{ label: "Failed", values: [4, 4, 4, 4] },
-	];
-	const width = 20;
-	// The WHOLE height is the budget: bands draw from one pool, so the test has to
-	// ask for the allocation the same way `renderSeriesChart` does.
-	const budget = 16;
-	const rows = marks(series, width, budget);
-
-	const heights = bandHeights([44, 4], budget);
-	const max = bandMax(series);
-	let offset = 0;
-	for (const [index, entry] of series.entries()) {
-		const band = rows.slice(offset, offset + (heights[index] ?? 0));
-		expect(band.slice()).toEqual([...primitive(entry.values, width, heights[index] ?? 0, "unicode", max)]);
-		offset += heights[index] ?? 0;
-	}
-});
-
-test("composition holds at every preset and every width", () => {
-	const series = REQUEST_SERIES;
-	const height = 6;
-	for (const preset of PRESETS) {
-		for (const width of WIDTHS) {
-			const perSeries = bandHeights(series.map(s => Math.max(...s.values)), height)[0] ?? 0;
-			const max = bandMax(series);
-			const expected = series.flatMap(s => primitive(s.values, width, perSeries, preset, max));
-			expect(marks(series, width, height, preset)).toEqual(expected);
-			for (const row of expected) expect(cells(row)).toBe(width);
-		}
-	}
-});
+// ─── Band allocation: one scale, heights that carry magnitude ─────────────────
 
 test("the SHARED scale is what stops a 4% failure rate reading as 100%", () => {
 	// THE REGRESSION THIS MODULE EXISTS TO PREVENT, stated as arithmetic. Failed
@@ -412,9 +293,13 @@ test("the SHARED scale is what stops a 4% failure rate reading as 100%", () => {
 	expect(bandHeights([16, 8, 2, 1], 0)).toEqual([0, 0, 0, 0]);
 });
 
-test("a labelled chart names every band and still holds the width", () => {
+test("a labelled band chart names every band and still holds the width", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "Succeeded", values: [12, 30, 8, 20] },
+		{ label: "Failed", values: [12, 30, 8, 20] },
+	];
 	const width = 20;
-	const rows = renderSeriesChart(REQUEST_SERIES, {
+	const rows = renderSeriesChart(series, {
 		width,
 		height: 9,
 		preset: "unicode",
@@ -427,30 +312,34 @@ test("a labelled chart names every band and still holds the width", () => {
 	for (const row of rows) expect(cells(row)).toBe(width);
 });
 
-test("renderSeriesChart colours each series from resolveSeries", () => {
+test("the band renderer colours each series from resolveSeries", () => {
 	// Asserting only that the palette returns two different tokens would pass even
-	// if `compose` ignored the palette entirely. This counts what `compose`
+	// if the renderer ignored the palette entirely. This counts what the renderer
 	// actually handed to `paint`, so a dropped `resolveSeries` call fails.
+	const series: SeriesChartSeries[] = [
+		{ label: "Succeeded", values: [12, 30, 8, 20] },
+		{ label: "Failed", values: [12, 30, 8, 20] },
+	];
 	const tokens = resolveSeries(2, THEME);
 	expect(tokens[0]).not.toBe(tokens[1]);
 
-	const seen = new Map<string, number>();
-	const rows = renderSeriesChart(REQUEST_SERIES, {
+	const seen: Record<string, number> = {};
+	const rows = renderSeriesChart(series, {
 		width: 20,
 		height: 4,
 		preset: "unicode",
 		theme: THEME,
 		paint: (color, text) => {
-			seen.set(color, (seen.get(color) ?? 0) + 1);
+			seen[color] = (seen[color] ?? 0) + 1;
 			return text;
 		},
 	});
 
 	expect(rows.length).toBeGreaterThan(0);
-	for (const token of tokens) expect(seen.get(token) ?? 0).toBeGreaterThan(0);
+	for (const token of tokens) expect(seen[token] ?? 0).toBeGreaterThan(0);
 });
 
-test("renderSeriesChart renders nothing for no series, rather than a blank block", () => {
+test("the band renderer draws nothing for no series, rather than a blank block", () => {
 	expect(
 		renderSeriesChart([], {
 			width: 20,
@@ -462,7 +351,7 @@ test("renderSeriesChart renders nothing for no series, rather than a blank block
 	).toEqual([]);
 });
 
-test("renderSeriesChart drops the remainder rather than giving it to the last series", () => {
+test("bands drop the remainder rather than giving it to the last series", () => {
 	// 5 rows across 3 series is 1 row each with 2 spare. Handing the spare rows to
 	// the final series would make its apparent magnitude a function of its
 	// position in the list.
@@ -471,10 +360,195 @@ test("renderSeriesChart drops the remainder rather than giving it to the last se
 		{ label: "b", values: [2, 1] },
 		{ label: "c", values: [1, 1] },
 	];
-	const rows = marks(many, 10, 5);
-	void bandMax(many);
+	const rows = renderSeriesChart(many, {
+		width: 10,
+		height: 5,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+		labels: false,
+	});
 	// The 5 rows go to the LOUDEST bands, not to the last one: `b` peaks at 2 and
 	// takes the spare row that `a` — no quieter, but listed first — did not.
 	expect(rows.length).toBe(5);
 	for (const row of rows) expect(cells(row)).toBe(10);
+});
+
+// ─── Composition byte-equality: the renderer IS the primitive ────────────────
+
+test("renderSeriesChart of ONE series is exactly renderDailyBars", () => {
+	const s: SeriesChartSeries = { label: "Succeeded", values: [12, 30, 8, 20, 0, 5] };
+	const width = 20;
+	const height = 6;
+	const glyphs = glyphsFor("unicode");
+	const max = bandMax([s]);
+
+	const expected = renderDailyBars(s.values, {
+		width,
+		height,
+		max,
+		glyphs,
+		accent: paint,
+		dim: (text) => text,
+	});
+
+	const actual = renderSeriesChart([s], {
+		width,
+		height,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+		labels: false,
+	});
+
+	expect(actual).toEqual(expected);
+});
+
+test("renderSeriesChart is renderDailyBars called once per series, band by band", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "Succeeded", values: [12, 30, 8, 20, 0, 5] },
+		{ label: "Failed", values: [2, 0, 1, 0, 3, 0] },
+	];
+	const width = 20;
+	const height = 8;
+	const glyphs = glyphsFor("unicode");
+	const max = bandMax(series);
+	const perBand = series.map((entry) =>
+		entry.values.reduce((peak, value) => (value > peak ? value : peak), 0),
+	);
+	const rowsEach = bandHeights(perBand, height);
+
+	const expected = series.flatMap((entry, index) =>
+		renderDailyBars(entry.values, {
+			width,
+			height: rowsEach[index]!,
+			max,
+			glyphs,
+			accent: paint,
+			dim: (text) => text,
+		}),
+	);
+
+	const actual = renderSeriesChart(series, {
+		width,
+		height,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+		labels: false,
+	});
+
+	expect(actual).toEqual(expected);
+});
+
+test("composition holds at every preset and every width", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "A", values: [5, 0, 15, 3] },
+		{ label: "B", values: [0, 8, 2, 0] },
+		{ label: "C", values: [1, 1, 1, 1] },
+	];
+	const max = bandMax(series);
+	const perBand = series.map((entry) =>
+		entry.values.reduce((peak, value) => (value > peak ? value : peak), 0),
+	);
+
+	for (const preset of PRESETS) {
+		const glyphs = glyphsFor(preset);
+		for (const width of WIDTHS) {
+			for (const height of [4, 6, 8, 10]) {
+				const rowsEach = bandHeights(perBand, height);
+				const expected = series.flatMap((entry, index) =>
+					renderDailyBars(entry.values, {
+						width,
+						height: rowsEach[index]!,
+						max,
+						glyphs,
+						accent: paint,
+						dim: (text) => text,
+					}),
+				);
+				const actual = renderSeriesChart(series, {
+					width,
+					height,
+					preset,
+					theme: THEME,
+					paint: (_color, text) => text,
+					labels: false,
+				});
+				expect(actual).toEqual(expected);
+			}
+		}
+	}
+});
+
+// ─── Host adapter: planTimeline, planSeries, money labels, gap policy ─────────
+
+test("planTimeline returns a ChartSpec for valid timeline data", () => {
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3, 4] }];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeDefined();
+	expect(spec!.kind).toBe("line");
+	expect(spec!.categories.length).toBe(4);
+	expect(spec!.series.length).toBe(1);
+});
+
+
+test("planTimeline returns undefined for sub-threshold data", () => {
+	const axis = [1700000000000, 1700008640000];
+	const rows = [{ key: "a", label: "A", values: [1, 1] }];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeUndefined();
+});
+
+test("planTimeline applies the worthCharting gap policy", () => {
+	// Four buckets pass `planChart`, but four points at a 2× spread carry no
+	// trend: `worthCharting` rejects it, so the adapter returns undefined.
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 1, 1, 2] }];
+	expect(planTimeline(axis, rows, {})).toBeUndefined();
+});
+
+test("planTimeline records stacked and cumulative flags on the spec", () => {
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3, 4] }];
+	const spec = planTimeline(axis, rows, { stacked: true, cumulative: true });
+	expect(spec).toBeDefined();
+	expect(spec!.stacked).toBe(true);
+	expect(spec!.cumulative).toBe(true);
+});
+
+test("planSeries returns a non-line ChartSpec for a categorical multi-series table", () => {
+	// The `barRows` path: bucketed series become rows of "Bucket N × measures",
+	// so the host must NOT type the axis temporal — only `line` takes the
+	// shared-axis plot, and a bar spec that came back `line` would draw points
+	// instead of bands. Four buckets clear `worthCharting`'s floor.
+	const spec = planSeries(
+		[
+			{ label: "Succeeded", values: [12, 30, 8, 20] },
+			{ label: "Failed", values: [1, 3, 0, 2] },
+		],
+		{},
+	);
+	expect(spec).toBeDefined();
+	expect(spec!.kind).not.toBe("line");
+	expect(spec!.categories.length).toBe(4);
+	expect(spec!.series.length).toBe(2);
+});
+
+test("planSeries returns undefined for no series", () => {
+	expect(planSeries([], {})).toBeUndefined();
+});
+
+test("planSeries returns undefined for sub-threshold data", () => {
+	// Two buckets fail `worthCharting`, so the adapter returns undefined and
+	// `barRows` must supply its own honest sentence rather than a blank body.
+	const spec = planSeries(
+		[
+			{ label: "Succeeded", values: [1, 1] },
+			{ label: "Failed", values: [1, 1] },
+		],
+		{},
+	);
+	expect(spec).toBeUndefined();
 });

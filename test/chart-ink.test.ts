@@ -39,10 +39,14 @@
 import { expect, test } from "bun:test";
 
 import { renderDailyBars, renderModelCostBars } from "../src/tui/charts/bars";
-import { bandHeights, renderSeriesChart, type SeriesChartSeries } from "../src/tui/charts/compose";
+import { bandHeights } from "../src/tui/charts/compose";
+import { renderSeriesChart, type SeriesChartSeries } from "../src/tui/charts/host-adapter";
 import { renderRankedBars, renderShareBar, renderSparkline } from "../src/tui/charts/sparkline";
+import { renderTimeSeries } from "../src/tui/charts/time-series";
 import { glyph, glyphsFor, type GlyphSet, type SymbolPreset } from "../src/tui/glyphs";
 import { stripForTest, type PaletteTheme } from "../src/tui/palette";
+import type { FeatureContext } from "../src/tui/features/types";
+import type { ThemeColor } from "@oh-my-pi/pi-tui";
 import type { CostTimeSeriesPoint } from "@oh-my-pi/omp-stats/shared-types";
 
 const PRESETS: readonly SymbolPreset[] = ["unicode", "nerd", "ascii"];
@@ -754,4 +758,77 @@ test("renderModelCostBars loses the track without losing the cost invariant", ()
 	const filled = filledPerColumn(chart, glyph("unicode", "barFill"), 2);
 	// The 42x token spender is still the shorter bar: scaling by cost, not tokens.
 	expect(filled[0]).toBeGreaterThan(filled[1] ?? 0);
+});
+
+// ─── 6. renderTimeSeries is a delegation, not a second geometry ───────────────
+
+/**
+ * A context for the swapped renderer. Real theme methods off {@link THEME} so
+ * `resolveSeries` resolves distinct hues, with `fg` as identity so assertions
+ * read glyphs rather than escapes. Only `fg` and `getSymbolPreset` are reached.
+ */
+const seriesCtx = { theme: { ...THEME, fg: (_color: ThemeColor, text: string) => text } } as unknown as FeatureContext;
+
+test("renderTimeSeries delegates to host pipeline", () => {
+	// Four buckets, not the plan's three: `worthCharting` needs at least four
+	// categories, so three would take the empty-state branch and prove nothing
+	// about the delegation.
+	const axis = [1700000000000, 1700008640000, 1700095040000, 1700181440000];
+	const rows = [{ key: "a", label: "A", values: [1, 2, 3, 4] }];
+	const lines = renderTimeSeries(seriesCtx, axis, rows, 80, 1, {});
+	const text = stripForTest(lines.join("\n"));
+	expect(lines.length).toBeGreaterThan(0);
+	// The host planned a chart, so a plot is drawn and the legend names the series.
+	expect(text).toContain(glyph("unicode", "barFill"));
+	expect(text).toContain("A");
+});
+
+test("renderTimeSeries says so when the host will not chart the range", () => {
+	// Two buckets fail `worthCharting`, so `planTimeline` returns undefined and
+	// the renderer must supply its OWN sentence rather than a blank body.
+	const axis = [1700000000000, 1700008640000];
+	const lines = renderTimeSeries(seriesCtx, axis, [{ key: "a", label: "A", values: [1, 2] }], 80, 0, {});
+	const text = stripForTest(lines.join("\n"));
+	expect(text).toContain("No chart-worthy data in this range.");
+	expect(text).not.toContain(glyph("unicode", "barFill"));
+});
+
+/**
+ * The caller shapes the swap broke. Every multi-series time-series in the panel
+ * goes through `renderHostChart`, and the swap routed them ALL through the band
+ * compositor — which, when the height is no greater than the series count, spends
+ * every row on one floor per band and draws a blank wall of `_`. That is exactly
+ * the shapes the analytics screens pass (6 series at height 5) and the providers
+ * burn view passes (7 series at height 4), so the primary analytics screens went
+ * blank while the old renderer had drawn a shared-axis plot on those rows.
+ *
+ * The host names a temporal axis `line`, so `renderHostChart` consults
+ * `spec.kind` and restores the shared-axis geometry for a multi-series line. The
+ * stacked form fills whole cells (`sparkRamp[7]`, byte-identical to `barFill`)
+ * and the point form drops a `pointHollow` per bucket per series. These tests
+ * FAIL on the swapped HEAD (floors only, no ink) and PASS after the fix.
+ */
+const SHAPE_AXIS = Array.from({ length: 12 }, (_, i) => 1700000000000 + i * 86_400_000);
+const shapeRows = (count: number) =>
+	Array.from({ length: count }, (_, s) => ({
+		key: `s${s}`,
+		label: `Series ${s}`,
+		values: SHAPE_AXIS.map((_, i) => (s + 1) * (i + 1)),
+	}));
+
+test("a 6-series stacked time-series at height 5 draws data ink", () => {
+	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(6), 80, 5, { height: 5, stacked: true });
+	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "barFill"));
+});
+
+test("a 7-series stacked time-series at height 4 draws data ink", () => {
+	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(7), 80, 5, { height: 4, stacked: true });
+	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "barFill"));
+});
+
+test("a multi-series line spec draws a shared-axis plot, not one floor per band", () => {
+	// The point form of the same shapes: no stacking, so the ink is one
+	// `pointHollow` per bucket per series rather than a filled column.
+	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(6), 80, 5, { height: 5 });
+	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "pointHollow"));
 });

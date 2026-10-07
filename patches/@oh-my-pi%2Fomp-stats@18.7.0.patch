@@ -5,10 +5,10 @@ diff --git a/node_modules/@oh-my-pi/omp-stats/.bun-tag-ed825ee26d42165f b/.bun-t
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 1d6c53e419b5a7f630fb9838779cc2eb405be44a..3724b6ca8820857f1b89eb9352c7672027838c3e 100644
+index 92b8e69b4e5443c84c0f16abc547a75f95dd8cef..37211ac7f672334c33ff002ff076cc010901023b 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -2,6 +2,16 @@
+@@ -2,6 +2,15 @@
  
  ## [Unreleased]
  
@@ -18,11 +18,10 @@ index 1d6c53e419b5a7f630fb9838779cc2eb405be44a..3724b6ca8820857f1b89eb9352c76720
 +
 +### Fixed
 +
-+- Report absent provider/model price cards as unknown spend rather than free usage, preserve recorded zero charges and explicit free cards, and replay historic sessions once to repair unpriced markers and invalidate cached rollups.
 +- Apply the selected range to recent requests before sorting and limiting, while preserving all-range requests when no range is supplied.
 +- Expose actual output-token totals in provider time-series points for output burn charts.
 +
- ## [18.6.0] - 2026-10-03
+ ## [18.7.0] - 2026-10-06
  
  ### Fixed
 diff --git a/src/aggregator.ts b/src/aggregator.ts
@@ -107,7 +106,7 @@ index ca2fbfa885a8af25b005c4215e4b9ff3c93e839a..b158f4c63bf9624266a842b874e703c0
  	const filtered = useMemo(() => {
  		const needle = search.trim().toLowerCase();
 diff --git a/src/db.ts b/src/db.ts
-index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1cd4ee52c 100644
+index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8c120be6b 100644
 --- a/src/db.ts
 +++ b/src/db.ts
 @@ -35,21 +35,11 @@ const ZERO_USAGE_COST: UsageCost = {
@@ -137,7 +136,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
   */
  export function unpricedRequestSql(prefix = ""): string {
  	return `CASE WHEN ${prefix}total_tokens > 0 AND ${prefix}cost_total = 0
-@@ -101,11 +91,10 @@ const TOOL_CALLS_BACKFILL_KEY = "tool_calls_v2";
+@@ -104,11 +94,10 @@ const TOOL_CALLS_BACKFILL_KEY = "tool_calls_v2";
  // reach the inclusive 200K tier. A one-time full re-parse repairs them through
  // the cost-refreshing UPSERT in `insertMessageStats`.
  const COST_REINGEST_BACKFILL_KEY = "messages_cost_reingest_v1";
@@ -153,7 +152,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  function shouldResetBackfill(value: string | undefined): boolean {
  	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
  }
-@@ -365,20 +354,19 @@ function getBundledModelCost(provider: string, modelId: string): ModelCost | nul
+@@ -374,20 +363,19 @@ function getBundledModelCost(provider: string, modelId: string): ModelCost | nul
  }
  
  function getCatalogCost(provider: string, modelId: string): ModelCost | null {
@@ -183,7 +182,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  }
  
  /** Whether the catalog prices this model on a time-based (scheduled) card. */
-@@ -431,11 +419,7 @@ function hasRequestTimestamp(timestamp: number): boolean {
+@@ -440,11 +428,7 @@ function hasRequestTimestamp(timestamp: number): boolean {
  
  interface ResolvedCost {
  	cost: UsageCost;
@@ -196,7 +195,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  	unpriced: boolean;
  }
  
-@@ -448,9 +432,11 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
+@@ -457,9 +441,11 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
  	const storedCost = raw ? normalizeUsageCost(raw) : undefined;
  	const catalogCost = getCatalogCost(stats.provider, stats.model);
  
@@ -211,7 +210,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  		return { cost: storedCost, unpriced: false };
  	}
  
-@@ -466,7 +452,7 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
+@@ -475,7 +461,7 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
  			calculateCatalogCost(stats.provider, stats.model, stats.usage, stats.timestamp) ??
  			storedCost ??
  			ZERO_USAGE_COST,
@@ -220,7 +219,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  	};
  }
  
-@@ -496,6 +482,7 @@ function backfillMissingCatalogCosts(database: Database): void {
+@@ -505,6 +491,7 @@ function backfillMissingCatalogCosts(database: Database): void {
  			SELECT id, provider, model, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
  			FROM messages
  			WHERE cost_total = 0 AND total_tokens > 0
@@ -228,7 +227,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  		`)
  		.all() as CostBackfillRow[];
  
-@@ -836,6 +823,7 @@ export function insertMessageStats(stats: Iterable<MessageStatsInput>): number {
+@@ -845,6 +832,7 @@ export function insertMessageStats(stats: Iterable<MessageStatsInput>): number {
  			WHERE entry_id = ? AND timestamp = ? AND session_file <> ?
  		)
  		ON CONFLICT(session_file, entry_id) DO UPDATE SET
@@ -236,7 +235,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  			premium_requests = MAX(messages.premium_requests, excluded.premium_requests),
  			cost_input = excluded.cost_input,
  			cost_output = excluded.cost_output,
-@@ -945,14 +933,17 @@ function rowToMessageStats(row: any): MessageStats {
+@@ -957,14 +945,17 @@ function rowToMessageStats(row: any): MessageStats {
  	};
  }
  
@@ -258,7 +257,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
  }
  
  export function getRecentErrors(limit = 100, cutoff?: number | null): MessageStats[] {
-@@ -1110,13 +1101,10 @@ function backfillReingestCosts(database: Database): void {
+@@ -1122,13 +1113,10 @@ function backfillReingestCosts(database: Database): void {
  }
  
  /**
@@ -276,7 +275,7 @@ index a21878e37c74b7615fab7f8bcb14bb8ad63e1f42..9956a028cd6166f65612142f76eed1e1
   */
  function backfillUnpricedCosts(database: Database): void {
  	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(COST_UNPRICED_BACKFILL_KEY) as
-@@ -1124,10 +1112,12 @@ function backfillUnpricedCosts(database: Database): void {
+@@ -1136,10 +1124,12 @@ function backfillUnpricedCosts(database: Database): void {
  		| undefined;
  	if (!shouldResetBackfill(row?.value)) return;
  
@@ -387,12 +386,12 @@ index f7e5a04787e6702ec1e56eb48c2954ee4825425e..8cf857976841dde1fb15f4e5f0bd8209
  	/** Requests excluded because no public-equivalent subscription price exists. */
  	unpricedRequests: number;
 diff --git a/src/types.ts b/src/types.ts
-index 9d3a82ff3057955b2ade5f8251a6bd1d6eb206c7..51a4920b02c47a40b8fdadd57fafc7d27beb28c7 100644
+index e15d7502ff19c7d55f2425fb20034da0a7efd4fb..612bf1291f5c1592ccc8baba611d30f437f8135e 100644
 --- a/src/types.ts
 +++ b/src/types.ts
-@@ -36,11 +36,10 @@ export interface MessageStats {
- 	/** Which agent produced this message (main agent, task subagent, advisor) */
- 	agentType: AgentType;
+@@ -44,11 +44,10 @@ export interface MessageStats {
+ 	 */
+ 	serviceTier?: ServiceTier | null;
  	/**
 -	 * Ingest refused to price this request: a scheduled (time-based) card with no
 -	 * recoverable request timestamp, so `usage.cost.total` of 0 is unknown spend
@@ -406,7 +405,7 @@ index 9d3a82ff3057955b2ade5f8251a6bd1d6eb206c7..51a4920b02c47a40b8fdadd57fafc7d2
  	 */
  	costUnpriced?: boolean;
  }
-@@ -49,9 +48,9 @@ export interface MessageStats {
+@@ -57,9 +56,9 @@ export interface MessageStats {
   * Session-recorded token usage before pricing: counters are coerced to numbers
   * because their columns are NOT NULL, but `cost` is only present when the
   * session entry actually recorded one. Absence is meaningful — `resolveStoredCost`

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 // `db.js`, not `db`: `dist/types/db.d.ts` is built from UNPATCHED source, so
 // `getRecentRequests`' `cutoff` parameter — added by
-// patches/@oh-my-pi%2Fomp-stats@18.6.1.patch — is absent from the declaration.
+// patches/@oh-my-pi%2Fomp-stats@18.7.0.patch — is absent from the declaration.
 // The subpath resolves to `src/db.ts`, the code that actually runs, and to the
 // same module instance as the bare specifier, so only the types change.
 import { syncAllSessions } from "@oh-my-pi/omp-stats/aggregator";

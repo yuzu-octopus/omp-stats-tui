@@ -1,7 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
-// Exact host surfaces retained by omp 18.6.1's compiled module registry.
+// Exact host surfaces retained by omp 18.7.0's compiled module registry.
 // Do not use package-root external patterns: they also externalize private
 // subpaths such as pi-utils/file-lock, whose source cannot load in compiled omp.
 const HOST_IMPORTS: Record<string, true> = {
@@ -9,6 +9,9 @@ const HOST_IMPORTS: Record<string, true> = {
 	"@oh-my-pi/pi-tui": true,
 	"@oh-my-pi/pi-tui/chrome": true,
 	"@oh-my-pi/pi-tui/theme": true,
+	"@oh-my-pi/pi-tui/charts/table-data": true,
+	"@oh-my-pi/pi-tui/charts/chart-plan": true,
+	// "@oh-my-pi/pi-tui/charts/chart-svg": true, — dropped: nothing imports it (YAGNI; re-add when used)
 	"@oh-my-pi/pi-tui/theme/color": true,
 	"@oh-my-pi/pi-utils": true,
 	"@oh-my-pi/pi-natives": true,

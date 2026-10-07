@@ -2,7 +2,8 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tu
 import type { FeatureContext } from "../features/types";
 import { resolveSeries } from "../palette";
 import { compactTokens, formatPercent } from "../format";
-import { glyph, SPARK_LEVELS } from "../glyphs";
+import { glyph } from "../glyphs";
+import { planTimeline, renderHostChart } from "./host-adapter";
 
 export interface TimelineRow {
 	key: string;
@@ -23,9 +24,42 @@ export interface TimeSeriesOptions {
 	height?: number;
 	selectedKey?: string;
 	legend?: boolean;
+	/** Caller intent: mark this chart as currency. When absent, falls back to key sniffing (row.key === "cost"). */
+	currency?: boolean;
 }
 
-/** Recorded buckets share one scale; null stays a gap and narrow views follow the selected point. */
+/**
+ * The one sentence a plot-less range gets.
+ *
+ * `worthCharting` says "not worth a chart" for too few buckets and for flat
+ * data alike, so the sentence is chosen from what the rows actually recorded:
+ * no reading at all, every reading zero, or a real series the host still
+ * judged too flat to draw. Those are three different claims and the reader
+ * must not be handed the same one for each.
+ */
+function emptyState(active: readonly TimelineRow[]): string {
+	let measured = false;
+	let max = 0;
+	for (const row of active) for (const value of row.values) {
+		if (value === null || value === undefined) continue;
+		measured = true;
+		if (value > max) max = value;
+	}
+	if (!measured) return "No readings in the visible series; gaps are not zero.";
+	if (max === 0) return "No positive measured values in this range.";
+	return "No chart-worthy data in this range.";
+}
+
+/**
+ * Recorded buckets share one scale; null stays a gap and narrow views follow the selected point.
+ *
+ * GEOMETRY IS THE HOST'S. `planTimeline` builds the host table, `planChart`
+ * picks the kind and `worthCharting` is the gate — a range the host will not
+ * chart returns `undefined` and gets our own sentence instead. `renderHostChart`
+ * redraws the spec with our glyphs. The header, the bucket-range footer and the
+ * legend stay ours: they read the DATA, not the plot, and the legend is the one
+ * surface carrying each series' value and visibility.
+ */
 export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], rows: readonly TimelineRow[], width: number, selected: number, options: TimeSeriesOptions = {}): string[] {
 	const w = Math.max(1, Math.floor(width));
 	if (!axis.length || !rows.length) return wrapTextWithAnsi(ctx.theme.fg("dim", "No recorded chart observations in this range."), w);
@@ -33,77 +67,27 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 	const format = options.format ?? (options.percent ? value => formatPercent(value, 0) : compactTokens);
 	const active = rows.filter(row => !options.hidden?.has(row.key));
 	const colors = resolveSeries(Math.max(rows.length, ...rows.map(row => (row.colorIndex ?? 0) + 1)), ctx.theme);
-	let max = options.percent ? 1 : 0;
-	let measured = false;
-	for (let i = 0; i < axis.length; i++) {
-		let total = 0;
-		for (const row of active) {
-			const value = row.values[i];
-			if (value === null || value === undefined) continue;
-			measured = true;
-			total += value;
-			max = Math.max(max, value);
-		}
-		if (options.stacked) max = Math.max(max, total);
-	}
 	selected = Math.max(0, Math.min(axis.length - 1, selected));
-	const yWidth = Math.min(9, Math.max(3, visibleWidth(format(max))));
-	const available = Math.max(1, w - yWidth - 2);
-	const slots = Math.min(axis.length, available);
-	const start = Math.max(0, Math.min(axis.length - slots, selected - Math.floor(slots / 2)));
-	const cellWidth = Math.max(1, Math.floor(available / slots));
-	const plotWidth = slots * cellWidth;
-	const height = Math.max(3, Math.min(10, Math.floor(options.height ?? 6)));
 	const date = new Date(axis[selected]).toISOString().slice(5, 16).replace("T", " ");
-	const lines = wrapTextWithAnsi(ctx.theme.fg("dim", `${options.unit ? options.unit + " · " : ""}${date} UTC · ${start + 1}–${start + slots}/${axis.length} buckets`), w);
+	const lines = wrapTextWithAnsi(ctx.theme.fg("dim", `${options.unit ? options.unit + " · " : ""}${date} UTC · ${axis.length} buckets`), w);
 	if (!active.length) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", "All series hidden; select a legend and toggle visibility to restore it."), w));
-	else if (!measured || max === 0) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", measured ? "No positive measured values in this range." : "No readings in the visible series; gaps are not zero."), w));
 	else {
-		const grid = Array.from({ length: height }, () => Array<string>(plotWidth).fill(" "));
-		for (let slot = 0; slot < slots; slot++) {
-			const i = start + slot;
-			if (options.stacked) {
-				// One terminal character has one hue: choose its dominant measured segment,
-				// not a whole fake row for a sub-cell series. Partial fill keeps magnitude.
-				for (let y = 0; y < height; y++) {
-					const low = (height - 1 - y) / height * max;
-					const high = (height - y) / height * max;
-					let base = 0, coverage = 0, dominant = 0, color = colors[0];
-					for (let r = 0; r < rows.length; r++) {
-						const row = rows[r];
-						if (options.hidden?.has(row.key)) continue;
-						const value = row.values[i] ?? 0;
-						const overlap = Math.max(0, Math.min(base + value, high) - Math.max(base, low));
-						coverage += overlap;
-						if (overlap > dominant) { dominant = overlap; color = colors[row.colorIndex ?? r]; }
-						base += value;
-					}
-					if (coverage <= 0) continue;
-					const level = Math.max(0, Math.min(SPARK_LEVELS - 1, Math.ceil(coverage / (high - low) * SPARK_LEVELS) - 1));
-					const mark = ctx.theme.fg(color, glyph(preset, "sparkRamp", level));
-					for (let x = slot * cellWidth; x < (slot + 1) * cellWidth; x++) grid[y][x] = mark;
-				}
-			} else {
-				for (let r = 0; r < rows.length; r++) {
-					const row = rows[r];
-					if (options.hidden?.has(row.key)) continue;
-					const value = row.values[i];
-					if (value === null || value === undefined) continue;
-					const y = height - 1 - Math.max(0, Math.min(height - 1, Math.round(value / max * (height - 1))));
-					const mark = ctx.theme.fg(colors[row.colorIndex ?? r], glyph(preset, options.cumulative ? "pointFilled" : "pointHollow"));
-					if (options.cumulative) for (let x = slot * cellWidth; x < (slot + 1) * cellWidth; x++) grid[y][x] = mark;
-					else grid[y][slot * cellWidth + Math.floor((cellWidth - 1) / 2)] = mark;
-				}
-			}
-		}
-		for (let y = 0; y < height; y++) {
-			const label = y === 0 ? format(max) : y === height - 1 ? format(0) : y === Math.floor((height - 1) / 2) ? format(max * (height - 1 - y) / (height - 1)) : "";
-			lines.push(ctx.theme.fg("dim", truncateToWidth(label, yWidth).padStart(yWidth) + " " + glyph(preset, "plotSpine")) + grid[y].join(""));
-		}
-		lines.push(" ".repeat(yWidth + 2 + (selected - start) * cellWidth + Math.floor((cellWidth - 1) / 2)) + ctx.theme.fg("accent", glyph(preset, "plotCursor")));
+		const spec = planTimeline(axis, active, options);
+		if (!spec) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", emptyState(active)), w));
+		else lines.push(...renderHostChart(spec, {
+			width: w,
+			height: options.height,
+			preset,
+			theme: ctx.theme,
+			paint: (color, text) => ctx.theme.fg(color, text),
+			// The floor is CHROME, never a series hue — the same rule the band
+			// renderer keeps. Labels are off: the legend below names the series.
+			dim: text => ctx.theme.fg("dim", text),
+			labels: false,
+		}));
 	}
-	const first = new Date(axis[start]).toISOString().slice(5, 16).replace("T", " ");
-	const last = new Date(axis[start + slots - 1]).toISOString().slice(5, 16).replace("T", " ");
+	const first = new Date(axis[0]).toISOString().slice(5, 16).replace("T", " ");
+	const last = new Date(axis[axis.length - 1]).toISOString().slice(5, 16).replace("T", " ");
 	lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", `${first} → ${last} UTC`), w));
 	if (options.legend !== false) for (let r = 0; r < rows.length; r++) {
 		const row = rows[r], hidden = options.hidden?.has(row.key);

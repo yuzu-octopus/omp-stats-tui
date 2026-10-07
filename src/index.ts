@@ -9,7 +9,7 @@ import { SHOWCASE_SECTIONS } from "./tui/showcase/spec";
 // produces an obscure load failure rather than a clear error. Warn loudly, on
 // stderr (stdout is the TUI's), and still load — refusing to load would leave
 // the user with a working omp and no explanation.
-const PINNED = "18.6.1";
+const PINNED = "18.7.0";
 
 
 export default function (pi: ExtensionAPI): void {

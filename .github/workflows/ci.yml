@@ -9,7 +9,7 @@
 # Read this before "optimising" it.
 #
 # This repo patches a dependency at install time:
-#   package.json -> patchedDependencies -> patches/@oh-my-pi%2Fomp-stats@18.6.1.patch
+#   package.json -> patchedDependencies -> patches/@oh-my-pi%2Fomp-stats@18.7.0.patch
 #
 # That patch is what makes an absent price card read as unknown spend instead of
 # free usage. So the contents of node_modules/@oh-my-pi/omp-stats are NOT a pure

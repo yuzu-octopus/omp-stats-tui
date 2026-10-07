@@ -66,8 +66,8 @@ export interface BarsOptions {
 	 * band silently re-scaled against its own peak and a 4%-failure band drew
 	 * exactly the same shape as the 100%-success band beside it — the quiet lie
 	 * the web's single y-axis (`Chart.tsx:83-98`) exists to prevent, reproduced in
-	 * a different shape. `renderSeriesChart` passes the shared maximum; see
-	 * `bandMax`.
+	 * a different shape. The band renderer in `host-adapter.ts` passes the shared
+	 * maximum; see `bandMax`.
 	 */
 	max?: number;
 	/** Data ink. Reaches the FILLED cells of a column and nothing else. */
@@ -151,7 +151,7 @@ function heights(values: readonly number[], rows: number, supplied?: number): re
 	// concludes from a blank band that nothing happened.
 	//
 	// So a shared scale alone is NOT enough to make two bands comparable — a
-	// quiet band given one row fills that row completely. `renderSeriesChart`
+	// quiet band given one row fills that row completely. The band renderer
 	// therefore sizes bands by PEAK SHARE as well as passing the shared maximum:
 	// the row count carries the cross-series magnitude and the maximum keeps each
 	// band from over-filling the rows it was given.
@@ -164,7 +164,7 @@ function heights(values: readonly number[], rows: number, supplied?: number): re
  * THE FLOOR IS INSIDE THE BUDGET, deliberately. A band allocated
  * `renderDailyBars(values, {height})` must not grow by a row per call, or a
  * four-series chart would claim four rows more than the plan gave it and the
- * body would overflow — and `renderSeriesChart` splits one `height` between its
+ * body would overflow — and the band renderer splits one `height` between its
  * series, so an extra row per band would silently halve the resolution.
  *
  * So the floor comes out of the height rather than being added to it, and it

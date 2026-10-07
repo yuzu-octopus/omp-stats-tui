@@ -1,7 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
-// Exact host surfaces retained by omp 18.6.1's compiled module registry.
+// Exact host surfaces retained by omp 18.7.0's compiled module registry.
 // Do not use package-root external patterns: they also externalize private
 // subpaths such as pi-utils/file-lock, whose source cannot load in compiled omp.
 const HOST_IMPORTS: Record<string, true> = {

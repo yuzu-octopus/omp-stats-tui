@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Fullscreen local usage-stats panel for omp",
-  "files": ["dist", "patches"],
+  "files": [
+    "dist",
+    "patches"
+  ],
   "scripts": {
     "build": "bun run scripts/build.ts",
     "test": "bun test",
@@ -16,17 +19,19 @@
   "omp": {
     "name": "omp-stats-tui",
     "description": "Fullscreen local usage-stats panel for omp",
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "dependencies": {
-    "@oh-my-pi/omp-stats": "18.6.1",
-    "@oh-my-pi/pi-coding-agent": "18.6.1"
+    "@oh-my-pi/omp-stats": "18.7.0",
+    "@oh-my-pi/pi-coding-agent": "18.7.0"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-tui": "18.6.1",
+    "@oh-my-pi/pi-tui": "18.7.0",
     "@types/bun": "^1.4.2"
   },
   "patchedDependencies": {
-    "@oh-my-pi/omp-stats@18.6.1": "patches/@oh-my-pi%2Fomp-stats@18.6.1.patch"
+    "@oh-my-pi/omp-stats@18.7.0": "patches/@oh-my-pi%2Fomp-stats@18.7.0.patch"
   }
 }

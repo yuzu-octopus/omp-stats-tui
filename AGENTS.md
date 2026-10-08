@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`omp-stats-tui` is a plugin extension for compiled omp **18.6.1**. `/stats-tui` mounts a fullscreen terminal overlay over the upstream stats records; built-in `/stats` remains the separate browser command.
+`omp-stats-tui` is a plugin extension for compiled omp **18.8.6**. `/stats-tui` mounts a fullscreen terminal overlay over the upstream stats records; built-in `/stats` remains the separate browser command.
 
 The active [execution roadmap](docs/plans/2026-10-05-dashboard-parity.md) supersedes the older plan's subset, read-only and version constraints. Twelve interactive screen controllers are integrated in production, including Traces and Frustration. The local mounted workflow/theme/package matrix and integrated suite are verified; paid execution and credentialed broker verification remain external. Source lives under `src/`; compiled-host installation loads `dist/index.js` after `bun install` and `bun run build`.
 
@@ -22,7 +22,7 @@ Settled design, in order:
 
 **There is NO webserver and NO plugin-owned SQL workaround.** The 100-line unpriced-count `WORKAROUND` that once lived in `src/data/api.ts` was deleted in PR #1 and must not come back: it re-implemented the rollup union and could not correct rollups the dependency had already cached. Synthetic localhost `Request`s call upstream handlers inside the isolated worker without binding a socket. Reuse upstream aggregators, shared types and pure client/data helpers, not React components or a second data backend.
 
-**Dependency corrections are shipped, not patched at runtime** (ADR 0008). Standard Bun `patchedDependencies` plus `bun.lock` apply the committed stats 18.6.1 patch: pricing-v2 historic replay, rollup-v3 invalidation, selected-range recent requests before limit, provider `outputTokens`, and standalone live ingestion. Absent provider/model cards are unknown spend; explicit free cards and recorded zero charges remain zero. The production bundle includes the corrected stats dependency. `bun install` is therefore correctness-critical, not just setup — see §CI for why `verify:patch` runs immediately after it and why `node_modules` is not cached.
+**Dependency corrections are shipped, not patched at runtime** (ADR 0008). Standard Bun `patchedDependencies` plus `bun.lock` apply the committed stats 18.8.6 patch: pricing-v2 historic replay, rollup-v3 invalidation, selected-range recent requests before limit, provider `outputTokens`, and standalone live ingestion. Absent provider/model cards are unknown spend; explicit free cards and recorded zero charges remain zero. The production bundle includes the corrected stats dependency. `bun install` is therefore correctness-critical, not just setup — see §CI for why `verify:patch` runs immediately after it and why `node_modules` is not cached.
 
 **Theme is current per render.** The panel reads the initialized host theme at render time and updates mutable `FeatureContext.theme`; primitives receive theme/paint arguments. Sparkline, bar, calendar and timeline ink is coloured per character/series using active omp roles and shared series/legend identity. Avoid an eager module-scope singleton read or permanently captured theme. Each terminal cell has one foreground/background, not separately coloured braille dots.
 
@@ -35,7 +35,7 @@ Settled design, in order:
 These historical measurements describe the former in-process adapter. `bun:sqlite` remains synchronous, but production now runs that work in a persistent isolated process. All measurements below are warm page-cache, one machine (M-series darwin-arm64).
 
 | Operation | Measured | Note |
-|---|---|---|
+| --- | --- | --- |
 | `handleApi(GET /api/stats/overview?range=7d)` | HTTP 200 | keys: `byAgentType`, `overall`, `timeSeries` |
 | `getDashboardStats` per range (warm, steady state) | `1h` 4.8 ms · `24h` 1.2 ms · `7d` 5.8–6.4 ms · `30d` 9.5 ms · `90d` 13.8–14.1 ms · `all` 12.9–13.4 ms | historical warm-query sample, not a reason to query on the host thread |
 | first query in a fresh process (`1h` run0) | 434.2 ms | page-cache warmup, **not** rollup cost |
@@ -49,7 +49,7 @@ These are historical measurements, not current latency guarantees. SQLite work b
 ## Key Directories
 
 | Path | State | Contents |
-|---|---|---|
+| --- | --- | --- |
 | `CONTEXT.md` | **exists** | The glossary. Source of truth for vocabulary. |
 | `AGENTS.md` | **exists** | This file. |
 | `docs/research/omp-stats-tui/REPORT.md` | **exists** | The synthesis. Read this first after `CONTEXT.md`. |
@@ -66,7 +66,7 @@ There is a `package.json`, a `bun.lock`, `node_modules`, and a `.gitignore`. All
 
 ## Development Commands
 
-### Compiled-host commands (18.6.1)
+### Compiled-host commands (18.8.6)
 
 ```sh
 # Fast feedback loop: loads extensions, prints load errors to stderr,
@@ -170,7 +170,7 @@ These are the non-obvious ones. Each has already cost a future agent time once.
 Historical research paths on the previous machine, not runtime import targets. Installed host files remain read-only.
 
 | Path | Why it matters |
-|---|---|
+| --- | --- |
 | `/Users/yuzu/.bun/install/global/node_modules/@oh-my-pi/omp-stats/src/server.ts:165` | `export async function handleApi(req: Request): Promise<Response>` — the data seam. Not re-exported from the package root, but the `exports` map declares `"./*": {"import": "./src/*.ts"}`, so the deep subpath `@oh-my-pi/omp-stats/server` is legal. |
 | `/Users/yuzu/.bun/install/global/node_modules/@oh-my-pi/omp-stats/src/shared-types.ts` | The aggregate types: `AggregatedStats`, `ModelStats`, `TimeSeriesPoint`, `DailyActivityPoint`, `DashboardStats` and 14 others. A pure type module — zero runtime exports, `import type` only. |
 | `/Users/yuzu/.bun/install/global/node_modules/@oh-my-pi/pi-tui/src/overlays/usage-dashboard.ts:533` | `export class UsageDashboardComponent implements Component` — the structural template. Data-heavy, read-only, async-loaded with distinct loading and error states, self-scrolling, frame-composed via `OverlayPanel` regions. **Read it, do not import it** — it couples us to an uncovered constructor and option shape. |
@@ -189,7 +189,7 @@ Supporting source worth knowing:
 
 ## Runtime & Tooling Constraints
 
-- **Supported runtime:** compiled omp 18.6.1, standalone Bun 1.4.2; stats/TUI/coding-agent packages are pinned to 18.6.1.
+- **Supported runtime:** compiled omp 18.8.6, standalone Bun 1.4.2; stats/TUI/coding-agent packages are pinned to 18.8.6.
 - **Production entry:** `bun run build` emits `dist/index.js` and `dist/data-worker.js`; the manifest loads the bundle. Direct source loading is not the supported compiled-host entry.
 - **Module ownership:** bundle local stats/private dependencies; externalize only supported host API specifiers through the exact-match build resolver. Preserve host theme/keybinding/native singletons. Never discover a host source root or mutate installed packages to repair runtime resolution. The committed Bun dependency patch is the reproducible upstream correction.
 - **Imports:** static public TUI/coding-agent roots plus supported named theme/chrome subpaths. Private overlays are not runtime APIs. The real standalone judge subpath resolves from the installed runtime coding-agent dependency in standalone Bun, not the compiled host registry; its resources open lazily when requested.
@@ -232,7 +232,7 @@ Supporting source worth knowing:
 Each is an ADR. Do not relitigate without new measurement.
 
 | ADR | Decision | Why |
-|---|---|---|
+| --- | --- | --- |
 | 0001 | Reuse the declared, patched upstream stats dependency; original own-SQL decision superseded. | Preserve the upstream rollup union, dirty-hour rules, shared types and aggregators. Pricing-v2/rollup-v3 corrections ship via Bun's locked patch; there is no plugin-owned narrow SQL exception. |
 | 0002 | The command is `/stats-tui`, not `/stats`. | Built-in slash commands dispatch before extension commands. An extension registering `/stats` appears in the palette and never executes — the worst kind of bug, because it looks like it works. |
 | 0003 | Historical no-write/no-sync policy is superseded. | Ingest is cancellable; initialization itself can create/migrate/backfill records. Do not claim a read-only DB handle. |

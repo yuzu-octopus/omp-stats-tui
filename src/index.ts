@@ -9,14 +9,14 @@ import { SHOWCASE_SECTIONS } from "./tui/showcase/spec";
 // produces an obscure load failure rather than a clear error. Warn loudly, on
 // stderr (stdout is the TUI's), and still load — refusing to load would leave
 // the user with a working omp and no explanation.
-const PINNED = "18.7.0";
-
+const PINNED = "18.8.6";
 
 export default function (pi: ExtensionAPI): void {
 	if (VERSION !== PINNED) {
-		console.error(`[stats-tui] built against omp ${PINNED}, host is ${VERSION}`);
+		console.error(
+			`[stats-tui] built against omp ${PINNED}, host is ${VERSION}`,
+		);
 	}
-
 
 	pi.registerCommand("stats-tui", {
 		description: "Local usage stats, fullscreen",
@@ -87,12 +87,16 @@ export default function (pi: ExtensionAPI): void {
 export function showcaseSectionFrom(arg: string): string | undefined {
 	if (arg === "") return undefined;
 	const lower = arg.toLowerCase();
-	const byId = SHOWCASE_SECTIONS.find(section => section.id === lower);
+	const byId = SHOWCASE_SECTIONS.find((section) => section.id === lower);
 	if (byId) return byId.id;
-	const byLabel = SHOWCASE_SECTIONS.find(section => section.label.toLowerCase() === lower);
+	const byLabel = SHOWCASE_SECTIONS.find(
+		(section) => section.label.toLowerCase() === lower,
+	);
 	if (byLabel) return byLabel.id;
 	if (lower.length === 1) {
-		const byLetter = SHOWCASE_SECTIONS.find(section => section.hotkey === lower);
+		const byLetter = SHOWCASE_SECTIONS.find(
+			(section) => section.hotkey === lower,
+		);
 		if (byLetter) return byLetter.id;
 	}
 	return undefined;

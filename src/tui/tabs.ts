@@ -8,7 +8,7 @@
  * `TabBar` renders full labels and, only if they overflow, collapses the tabs
  * FURTHEST FROM THE ACTIVE ONE to `short`, then wraps (`tab-bar.ts:271-286`).
  * So `short` is not decoration — it is the budget that decides whether the strip
- * costs the body one row. Our `ScreenSpec.short` values are 6-8 cell words, and
+ * costs the body one row. Our `Screen.short` values are 6-8 cell words, and
  * `statsIcon` cannot stand in: the ascii arm of `STATS_ICONS` is VARIABLE
  * (`"tok:"` = 4 cells, `"[!!]"` = 4, `"cache"` = 5, `src/tui/icons.ts:106-124`),
  * and 12 tabs of 5 cells plus padding plus gutters is 108 columns. Hence
@@ -56,11 +56,9 @@
  */
 
 import type { SymbolPreset, Tab, TabBarTheme, Theme } from "@oh-my-pi/pi-tui";
-import { SCREEN_SPECS, type ScreenSpec } from "../layout/spec";
+import { SCREENS, type ScreenId } from "./screens/types";
 import { STATS_ICONS, statsIcon, type IconRole } from "./icons";
 import { SELECTION_BG, TAB_INK } from "./palette";
-
-export type ScreenId = ScreenSpec["id"];
 
 /**
  * The icon each screen carries. `overview` takes `trendUp` rather than `cost`
@@ -161,20 +159,20 @@ export function tabBarTheme(theme: Theme): TabBarTheme {
 }
 
 /**
- * The strip, built from the IR's `SCREEN_SPECS` — one source of truth shared
- * with the screen registry and the fetch needs.
+ * The strip, built from the screen registry `SCREENS` — one source of truth
+ * shared with the nav and the digit row.
  *
  * `label` is `icon + space + label`, matching `/settings`
  * (`settings-selector.ts:546-553`); `short` is {@link TAB_SHORT}.
  */
 export function buildTabs(preset: SymbolPreset, theme: Theme, activeId: ScreenId): Tab[] {
-	if (!SCREEN_SPECS.some(spec => spec.id === activeId)) {
+	if (!SCREENS.some(screen => screen.id === activeId)) {
 		throw new Error(`unknown screen id: ${activeId}`);
 	}
-	return SCREEN_SPECS.map(spec => ({
-		id: spec.id,
-		label: `${statsIcon(preset, TAB_ICON[spec.id], theme)} ${spec.label}`,
-		short: TAB_SHORT[preset][spec.id],
+	return SCREENS.map(screen => ({
+		id: screen.id,
+		label: `${statsIcon(preset, TAB_ICON[screen.id], theme)} ${screen.label}`,
+		short: TAB_SHORT[preset][screen.id],
 		muted: false,
 	}));
 }

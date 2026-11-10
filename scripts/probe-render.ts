@@ -1,31 +1,34 @@
 /**
- * Render any screen to stdout at any width, without launching a terminal.
+ * Render a production screen body to stdout at any width, without a terminal.
  *
  * This is how a screen gets reviewed. The panel only exists inside an overlay on
  * someone else's terminal, which makes "does this look right" an expensive
- * question to answer; this script makes it a command. It renders the screen's
- * spec through the same `renderScreen` the fixture path uses, with a real
- * `planLayout` and real `glyphsFor`, fetches the screen's declared needs through
- * the same worker boundary the panel uses, and prints the rows.
+ * question to answer; this script makes it a command. It builds the SAME
+ * `FeatureContext` the tests use, serves the shared fixture payload from
+ * `test/fixtures/panel.ts`, and prints the controller's rendered body.
  *
  * Usage:
- *   bun scripts/probe-render.ts [screenId] [--width N] [--width N] [--range 24h]
+ *   bun scripts/probe-render.ts [screenId|all] [--width N] [--width N]
+ *     [--range 24h] [--preset unicode|nerd|ascii]
  *
  * Defaults to the overview at width 100 and width 60, which is the pair the plan
  * asks for: 100 is the common terminal, 60 is where the layout has to start
  * dropping things.
  */
 
+import { visibleWidth } from "@oh-my-pi/pi-tui";
+import type { SymbolPreset } from "@oh-my-pi/pi-tui";
+import { ensureThemeSync, setNativeSymbolPreset, theme } from "@oh-my-pi/pi-tui/theme";
 import type { PanelData } from "../src/data/api";
-import { StatsReadClient } from "../src/data/client";
 import { RANGES, DEFAULT_RANGE, isRange, type Range } from "../src/data/ranges";
-import { SCREEN_SPECS, type ScreenSpec } from "../src/layout/spec";
-import { renderScreen } from "../src/tui/render/screen";
-import { planLayout } from "../src/tui/layout";
-import { glyphsFor } from "../src/tui/glyphs";
-import { SERIES_COLORS } from "../src/tui/palette";
-import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
-import type { SymbolPreset, ThemeColor } from "@oh-my-pi/pi-tui";
+import { SCREENS, type ScreenId } from "../src/tui/screens/types";
+import { createCoreFeature } from "../src/tui/features/core";
+import { createProvidersFeature } from "../src/tui/features/providers";
+import { createGainFeature } from "../src/tui/features/gain";
+import { createTracesFeature } from "../src/tui/features/traces";
+import { createFrustrationFeature } from "../src/tui/features/frustration";
+import type { FeatureContext, FeatureController, FeatureReader } from "../src/tui/features/types";
+import { FIXTURE_NOW, liveData } from "../test/fixtures/panel";
 
 ensureThemeSync();
 
@@ -65,63 +68,65 @@ for (let i = 0; i < args.length; i++) {
 
 if (widths.length === 0) widths.push(100, 60);
 
-const specs = SCREEN_SPECS;
-const known = specs.map(s => s.id);
+const known = SCREENS.map(screen => screen.id);
 /**
  * EVERY screen by default, and one screen when named. A reviewer judging whether
  * this now looks like the web dashboard needs all of them side by side: a layout
  * that reads well on one screen and badly on the next is exactly the inconsistency
- * the band grammar exists to prevent, and it is invisible if the probe only ever
- * shows the first screen.
+ * the shared drawing grammar exists to prevent, and it is invisible if the probe
+ * only ever shows the first screen.
  */
-const wanted: readonly ScreenSpec[] =
-	screenId === "all"
-		? specs
-		: specs.filter(spec => spec.id === screenId);
+const wanted = screenId === "all"
+	? SCREENS
+	: SCREENS.filter(screen => screen.id === screenId);
 if (wanted.length === 0) {
 	console.error(`unknown screen "${screenId}"; expected one of ${known.join(", ")}, all`);
 	process.exit(1);
 }
 
 const ROWS = 40;
+const data: PanelData = liveData();
+const reader: FeatureReader = {
+	fetch: async () => data,
+	// The overview's recent list is the one eager API read a screen makes; every
+	// other API call is on-demand detail, and the fixture answers it with an empty
+	// list rather than a fabricated payload.
+	api: async <T>(path: string): Promise<T> =>
+		((data as unknown as Record<string, unknown>)[path.split("/").pop() ?? ""] ?? []) as T,
+};
 
-// Use the mounted panel's worker boundary rather than initializing on this thread.
-const reads = new StatsReadClient();
-const data: PanelData = {};
-const timings: string[] = [];
-for (const spec of wanted) {
-	const started = performance.now();
-	Object.assign(data, await reads.fetch(spec.needs, range));
-	timings.push(`${spec.id}: ${spec.needs.length} route(s) in ${Math.round(performance.now() - started)}ms`);
+function createFeature(id: ScreenId, ctx: FeatureContext): FeatureController {
+	return createCoreFeature(id, ctx) ?? (
+		id === "providers" ? createProvidersFeature(ctx) :
+		id === "gain" ? createGainFeature(ctx) :
+		id === "traces" ? createTracesFeature(ctx) :
+		createFrustrationFeature(ctx));
 }
-reads.close();
 
-const now = Date.now();
+setNativeSymbolPreset(preset);
+
 for (const width of widths) {
-	for (const spec of wanted) {
-		const plan = planLayout(width, ROWS, preset);
-		const rendered = renderScreen({
-			spec,
-			data,
-			plan,
-			preset,
-			range,
-			now,
-			fg: (color, text) => theme.fg(color, text),
-			bold: text => theme.bold(text),
-			palette: theme,
-			seriesColorFor: (index): ThemeColor => SERIES_COLORS[index % SERIES_COLORS.length],
-			glyphs: glyphsFor(preset),
-		});
-		const over = rendered.filter(r => Bun.stringWidth(r) > plan.innerWidth);
+	for (const screen of wanted) {
+		const ctx: FeatureContext = {
+			reader,
+			theme,
+			now: () => FIXTURE_NOW,
+			changed: () => {},
+			copy: async () => {},
+			openTrace: () => {},
+			openScreen: () => {},
+		};
+		const feature = createFeature(screen.id, ctx);
+		await feature.load(range);
+		const rows = feature.render(width, ROWS);
+		const over = rows.filter(row => visibleWidth(row) > width);
 
 		console.log(`\n${"═".repeat(width)}`);
-		console.log(`${spec.id}  width=${width}  range=${range}  preset=${preset}  inner=${plan.innerWidth}`);
+		console.log(`${screen.id}  width=${width}  range=${range}  preset=${preset}`);
 		console.log(`${"─".repeat(width)}`);
-		console.log(rendered.join("\n"));
+		console.log(rows.join("\n"));
 		console.log(`${"─".repeat(width)}`);
-		console.log(`${rendered.length} rows${over.length === 0 ? "" : `, ${over.length} OVER WIDE`}`);
+		console.log(`${rows.length} rows${over.length === 0 ? "" : `, ${over.length} OVER WIDE`}`);
+		feature.dispose();
 	}
 }
-
-console.log(`\nfetched ${timings.join(", ")}`);

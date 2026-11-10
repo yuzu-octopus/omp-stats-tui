@@ -2,7 +2,7 @@
  * `src/tui/screens/gain.ts` — registry identity for the Gain screen.
  *
  * Production bodies are `FeatureController.render()` strings (ADR 0007); this
- * entry carries the id, labels and fetch contract the nav and panel read.
+ * entry carries the id and labels the nav and panel read.
  *
  * Gain is token savings from snapcompact (a jsonl beside the DB), not cache
  * savings: no dollars, no ratio that goes negative, and reductionPercent stays
@@ -15,5 +15,4 @@ export const gainScreen: Screen = {
 	id: "gain",
 	label: "Gain",
 	short: "Gain",
-	needs: ["gain", "rollupStatus"],
 };

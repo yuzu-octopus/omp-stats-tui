@@ -55,8 +55,8 @@ const SHARE_GAP = 1;
  * a 146-cell panel used to hand the top row, which read as a solid block rather
  * than as a measurement.
  *
- * Exported so the share-bar rows in `render/screen.ts` budget against the SAME
- * bound. A share bar is a ranked bar with one row, and letting the two
+ * Exported so the share-bar rows budget against the SAME bound. A share bar is a
+ * ranked bar with one row, and letting the two
  * primitives disagree about how wide a bar may be is how one of them ends up
  * full-bleed again.
  */

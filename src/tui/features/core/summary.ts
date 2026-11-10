@@ -134,7 +134,7 @@ class SummaryFeature implements FeatureController {
 		if (!this.data) return wrap(prefix, width);
 		if (this.id === "overview") {
 			const payload = this.data.overview;
-			if (!payload) return wrap([...prefix, "Overview payload unavailable."], width);
+			if (!payload?.overall) return wrap([...prefix, "Overview payload unavailable."], width);
 			const overall = payload.overall;
 			const chart = this.overviewChart();
 			const needle = this.requests.search.trim().toLowerCase();

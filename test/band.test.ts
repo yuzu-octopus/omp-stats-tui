@@ -3,13 +3,11 @@ import {
 	renderBands,
 	type Band,
 	type BandRenderOptions,
-	type ChartSpec,
 	type Column,
-	type LegendItem,
 	type StatTile,
 } from "../src/tui/band";
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
-import { PALETTE, SERIES_COLORS } from "../src/tui/palette";
+import { PALETTE } from "../src/tui/palette";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 
 const PRESETS: SymbolPreset[] = ["unicode", "nerd", "ascii"];
@@ -37,24 +35,10 @@ const rows = {
 	],
 };
 
-const legendItems: LegendItem[] = [
-	{ label: "Main agent", share: 0.72 },
-	{ label: "Subagents", share: 0.28 },
-];
-
-const chart: ChartSpec = {
-	type: "bars",
-	axis: "Per day",
-	render: () => ["███░░░", "██████"],
-};
-
-/** Every band kind, in one list, so a rule sweep covers the whole grammar. */
+/** Every live band kind, in one list, so a rule sweep covers the whole grammar. */
 const ALL_KINDS: Band[] = [
 	{ kind: "statRow", stats: tiles },
-	{ kind: "chart", title: "Daily cost", chart, source: "all time" },
 	{ kind: "table", title: "Models", columns, rows },
-	{ kind: "legend", items: legendItems },
-	{ kind: "note", text: "This is not a zero." },
 ];
 
 /**
@@ -138,22 +122,21 @@ test("G1: a headed band is EXACTLY ONE heading line followed by body lines", () 
 
 		for (const band of ALL_KINDS) {
 			const rows = renderBands([band], ctxFor());
-			const hasHeading = band.kind === "chart" || band.kind === "table";
+			const hasHeading = band.kind === "table";
 
 			if (!hasHeading) {
-				// G3: statRow, note and legend carry no heading, so the band is
-				// body alone — and it must not be empty if it is in the list.
+				// G3: a statRow carries no heading, so the band is body alone —
+				// and it must not be empty if it is in the list.
 				expect(rows.length, `${band.kind}/${preset}`).toBeGreaterThan(0);
 				continue;
 			}
 
 			// Exactly one heading, and it is FIRST. A body row above it, or a
 			// second heading, breaks G1 even though G2 and G4 still hold.
-			const title = band.kind === "chart" ? band.title : band.title;
-			const headingAt = rows.findIndex(row => plain(row).includes(title));
+			const headingAt = rows.findIndex(row => plain(row).includes(band.title));
 			expect(headingAt, `${band.kind}/${preset}: heading missing`).toBe(0);
 
-			const headings = rows.filter(row => plain(row).includes(title));
+			const headings = rows.filter(row => plain(row).includes(band.title));
 			expect(headings.length, `${band.kind}/${preset}: more than one heading`).toBe(1);
 			expect(rows.length, `${band.kind}/${preset}: a band is a heading PLUS body`).toBeGreaterThan(1);
 		}
@@ -164,10 +147,7 @@ const RULE_RUN = /[─━═]{3,}/;
 
 test("G5: no band body emits a rule — for every kind, under every preset", () => {
 	for (const preset of PRESETS) {
-		const bands = ALL_KINDS.map((b) =>
-			"preset" in b && b.preset === undefined ? ({ ...b, preset } as Band) : b,
-		);
-		const rendered = renderBands(bands, ctx({ preset, glyphs: glyphsFor(preset) }));
+		const rendered = renderBands(ALL_KINDS, ctx({ preset, glyphs: glyphsFor(preset) }));
 		for (const row of rendered) {
 			expect(row, `${preset}: ${row}`).not.toMatch(RULE_RUN);
 		}
@@ -186,9 +166,6 @@ test("G5: a single band kind on its own emits no rule either", () => {
 test("G5: a realistic screen of every kind emits no rule", () => {
 	const screen: Band[] = [
 		{ kind: "statRow", stats: tiles },
-		{ kind: "note", text: "Cost is a floor: 34,870 requests could not be priced." },
-		{ kind: "chart", title: "Daily cost", chart, source: "all time" },
-		{ kind: "legend", items: legendItems },
 		{ kind: "table", title: "Top models", columns, rows, source: "all time" },
 	];
 	const rendered = renderBands(screen, ctx());
@@ -198,7 +175,13 @@ test("G5: a realistic screen of every kind emits no rule", () => {
 // ─── G4: exactly one blank line between consecutive bands ────────────────────
 
 test("G4: exactly one blank line separates consecutive bands", () => {
-	const rendered = renderBands([{ kind: "chart", title: "A", chart }, { kind: "note", text: "B" }], ctx());
+	const rendered = renderBands(
+		[
+			{ kind: "table", title: "A", columns, rows },
+			{ kind: "statRow", stats: tiles },
+		],
+		ctx(),
+	);
 	const joined = rendered.join("\n");
 	expect(joined).toContain("\n\n");
 	// Never two in a row, and never a leading or trailing blank.
@@ -212,14 +195,17 @@ test("G4: exactly one blank line separates consecutive bands", () => {
 test("G4: an empty band contributes nothing and leaves no gap", () => {
 	const withEmpty = renderBands(
 		[
-			{ kind: "chart", title: "A", chart },
+			{ kind: "statRow", stats: tiles },
 			{ kind: "table", title: "empty", columns, rows: { kind: "inline", rows: [] } },
-			{ kind: "note", text: "B" },
+			{ kind: "table", title: "Models", columns, rows },
 		],
 		ctx(),
 	);
 	const withoutEmpty = renderBands(
-		[{ kind: "chart", title: "A", chart }, { kind: "note", text: "B" }],
+		[
+			{ kind: "statRow", stats: tiles },
+			{ kind: "table", title: "Models", columns, rows },
+		],
 		ctx(),
 	);
 	expect(withEmpty).toEqual(withoutEmpty);
@@ -229,50 +215,39 @@ test("G4: an empty band list renders nothing at all", () => {
 	expect(renderBands([], ctx())).toEqual([]);
 });
 
-test("G4: a chart whose renderer returns nothing contributes nothing", () => {
+test("G4: an empty table contributes nothing and leaves no gap", () => {
 	const rendered = renderBands(
 		[
-			{ kind: "note", text: "before" },
-			{ kind: "chart", title: "empty chart", chart: { type: "bars", axis: "day", render: () => [] } },
-			{ kind: "note", text: "after" },
+			{ kind: "statRow", stats: [{ label: "A", value: "1" }] },
+			{ kind: "table", title: "empty", columns, rows: { kind: "inline", rows: [] } },
+			{ kind: "statRow", stats: [{ label: "B", value: "2" }] },
 		],
 		ctx(),
 	);
-	// Exactly ONE blank line between the two notes: the empty chart contributes
+	// Exactly ONE blank line between the two stat rows: the empty table contributes
 	// nothing and leaves no gap of its own.
-	expect(rendered).toHaveLength(3);
-	expect(rendered[1]).toBe("");
-	expect(plain(rendered[0] as string)).toBe("before");
-	expect(plain(rendered[2] as string)).toBe("after");
+	expect(rendered).toHaveLength(5);
+	expect(rendered[2]).toBe("");
+	expect(plain(rendered[3] as string)).toContain("B");
+	expect(plain(rendered[4] as string)).toContain("2");
 });
 
 // ─── G2: the heading line ────────────────────────────────────────────────────
 
-test("G2: the heading is icon + bold accent title + dim meta on ONE line", () => {
-	const [first] = renderBands([{ kind: "chart", title: "Daily cost", chart, source: "all time" }], ctx());
+test("G2: the heading is icon + bold title + dim meta on ONE line", () => {
+	const [first] = renderBands([{ kind: "table", title: "Models", columns, rows, source: "all time" }], ctx());
 	expect(first).toBeDefined();
 	// One line carries all three parts; a rule would have become a second line.
 	expect(first?.includes("\n")).toBe(false);
-	expect(first).toContain("Daily cost");
+	expect(first).toContain("Models");
 	expect(first).toContain("all time");
 	expect(first?.startsWith(" ")).toBe(false);
 	expect(first?.endsWith(" ")).toBe(false);
 });
 
 test("G2: a band with no meta still renders a heading", () => {
-	const [first] = renderBands([{ kind: "chart", title: "Daily cost", chart }], ctx());
-	expect(first).toContain("Daily cost");
-});
-
-test("G2: a chart with no source states its axis in the meta", () => {
-	// The web puts the bucket unit in the card description ("Per hour",
-	// "Per UTC day"); the renderer owns that, and stating it beats a chart that
-	// silently picks one.
-	const [first] = renderBands(
-		[{ kind: "chart", title: "Activity", chart: { type: "bars", axis: "Per hour", render: () => ["x"] } }],
-		ctx(),
-	);
-	expect(first).toContain("Per hour");
+	const [first] = renderBands([{ kind: "table", title: "Models", columns, rows }], ctx());
+	expect(first).toContain("Models");
 });
 
 test("G2: table headings carry an icon and the band title", () => {
@@ -281,7 +256,7 @@ test("G2: table headings carry an icon and the band title", () => {
 	expect(first?.startsWith(" ")).toBe(false);
 });
 
-// ─── G3: statRow and note have no heading and no icon ───────────────────────
+// ─── G3: a statRow has no heading and no icon ───────────────────────────────
 
 test("G3: a statRow is tiles only — no heading line, no icon", () => {
 	const rendered = renderBands([{ kind: "statRow", stats: tiles }], ctx());
@@ -298,88 +273,12 @@ test("G3: a statRow is tiles only — no heading line, no icon", () => {
 	expect(rendered[1]).toContain("$2,582.33");
 });
 
-test("G3: a note is one dim line with no heading and no icon", () => {
-	const rendered = renderBands([{ kind: "note", text: "This is not a zero." }], ctx());
-	expect(rendered).toHaveLength(1);
-	expect(plain(rendered[0] as string)).toBe("This is not a zero.");
-});
-
-test("G3: statRow and note render identically without a preceding band", () => {
-	// No heading means these two are the page's FIRST line and its inline
-	// caveat — mirroring StatGrid sitting directly under PageHeader.
-	const alone = renderBands([{ kind: "note", text: "x" }], ctx());
-	const after = renderBands([{ kind: "note", text: "a" }, { kind: "note", text: "x" }], ctx());
-	expect(plain(after[after.length - 1] as string)).toBe(plain(alone[0] as string));
-});
-
-// ─── legend: the deliberate G4 exception ────────────────────────────────────
-
-test("legend produces NO blank line before it and exactly one after", () => {
-	const rendered = renderBands(
-		[
-			{ kind: "chart", title: "Activity", chart },
-			{ kind: "legend", items: legendItems },
-			{ kind: "note", text: "after" },
-		],
-		ctx(),
-	);
-	const noteAt = rendered.findIndex((r) => plain(r) === "after");
-	// The two legend rows sit directly beneath the chart's own rows — in the web
-	// a legend lives INSIDE the card, so no blank line separates them. The only
-	// blank line in the block is the one immediately before the note.
-	const beforeNote = rendered.slice(0, noteAt - 1);
-	expect(beforeNote.some((r) => r === "")).toBe(false);
-	expect(beforeNote.some((r) => plain(r).includes("Main agent"))).toBe(true);
-	expect(rendered[noteAt - 1]).toBe("");
-	expect(noteAt).toBe(rendered.length - 1);
-});
-
-test("legend emits no heading of its own", () => {
-	const [first] = renderBands([{ kind: "legend", items: legendItems }], ctx());
-	expect(first).not.toContain("Legend");
-	expect(first).toContain("Main agent");
-});
-
-test("legend renders a row per item with a right-aligned share", () => {
-	const rendered = renderBands([{ kind: "legend", items: legendItems }], ctx());
-	expect(rendered).toHaveLength(2);
-	expect(rendered[0]).toContain("Main agent");
-	expect(rendered[0]).toContain("72.0%");
-	expect(rendered[1]).toContain("28.0%");
-	// Shares are right-aligned in a fixed column so the decimals line up.
-	expect(rendered.map(plain)[0]?.indexOf("72.0%")).toBe(rendered.map(plain)[1]?.indexOf("28.0%"));
-});
-
-test("legend shares right-align even when they are DIFFERENT lengths", () => {
-	// The test above cannot fail if the padding is removed: "72.0%" and "28.0%"
-	// are both five characters, so their start indices coincide whether or not
-	// the share is padded. Alignment only becomes observable when the shares
-	// differ in width — which is the real case (a 0.4% tail beside a 92.1%
-	// leader). `92.1%` is five cells and `0.4%` is four, so a padded legend
-	// pushes the short one one cell further RIGHT, flush with its neighbour.
-	const items: LegendItem[] = [
-		{ label: "Main agent", share: 0.921 },
-		{ label: "Subagents", share: 0.004 },
-	];
-	const rows = renderBands([{ kind: "legend", items }], ctx()).map(plain);
-	expect(rows).toHaveLength(2);
-	expect(rows[0]).toContain("92.1%");
-	expect(rows[1]).toContain("0.4%");
-
-	// The share column is right-aligned, so both shares END at the same offset
-	// from the end of their row. Unpadded, `0.4%` ends one cell earlier and
-	// this fails — which is the whole point of the extra test.
-	const shareEndOffset = (row: string, share: string): number =>
-		row.trimEnd().length - (row.trimEnd().lastIndexOf(share) + share.length);
-	expect(shareEndOffset(rows[0] as string, "92.1%")).toBe(0);
-	expect(shareEndOffset(rows[1] as string, "0.4%")).toBe(0);
-
-	// And the rows are the same overall width, so the shares share a column.
-	expect(visibleWidth(rows[0] as string)).toBe(visibleWidth(rows[1] as string));
-});
-
-test("an empty legend contributes nothing", () => {
-	expect(renderBands([{ kind: "legend", items: [] }], ctx())).toEqual([]);
+test("G3: a statRow renders identically with or without a preceding band", () => {
+	// No heading means a statRow can be the page's FIRST line; it must not
+	// acquire or lose anything from being preceded by another band.
+	const alone = renderBands([{ kind: "statRow", stats: tiles }], ctx());
+	const after = renderBands([{ kind: "table", title: "T", columns, rows }, { kind: "statRow", stats: tiles }], ctx());
+	expect(after.slice(-alone.length)).toEqual(alone.slice());
 });
 
 // ─── Per-kind layout, as specified ──────────────────────────────────────────
@@ -435,13 +334,6 @@ test("statRow truncates the VALUE, never the label, when a tile is too narrow", 
 	for (const row of rendered) expect(visibleWidth(row as string)).toBeLessThanOrEqual(20);
 });
 
-test("a chart body is the renderer's rows verbatim, with a heading and nothing else", () => {
-	const rendered = renderBands([{ kind: "chart", title: "Daily", chart, source: "all time" }], ctx());
-	expect(rendered).toHaveLength(3); // heading + the two chart rows
-	expect(rendered[1]).toBe("███░░░");
-	expect(rendered[2]).toBe("██████");
-});
-
 test("a table renders a header and all its rows", () => {
 	const rendered = renderBands([{ kind: "table", title: "Models", columns, rows, source: "x" }], ctx());
 	// heading, header, two data rows.
@@ -495,8 +387,6 @@ test("a table body pads to aligned columns with single-space gutters, never tabs
 	expect(first.indexOf("$935.72")).toBeGreaterThan(0);
 });
 
-
-
 test("a meter at its column maximum fills its cell on the caution role", () => {
 	// usage-dashboard.ts:622-629: the host tints a full bar by status. A meter
 	// pinned at 100% is that same pressured state; below max it stays untinted.
@@ -536,10 +426,7 @@ test("every band kind renders on an EMPTY payload without throwing", () => {
 	for (const preset of PRESETS) {
 		const empty: Band[] = [
 			{ kind: "statRow", stats: [] },
-			{ kind: "chart", title: "", chart: { type: "bars", axis: "", render: () => [] } },
 			{ kind: "table", title: "", columns: [], rows: { kind: "inline", rows: [] } },
-			{ kind: "legend", items: [] },
-			{ kind: "note", text: "" },
 		];
 		expect(() => renderBands(empty, ctx({ preset, glyphs: glyphsFor(preset) }))).not.toThrow();
 	}
@@ -568,11 +455,12 @@ test("a zero or negative width does not throw", () => {
 });
 
 test("glyphs come from the glyph module: ascii differs and stays one cell wide", () => {
-	const u = renderBands([{ kind: "legend", items: legendItems }], ctx({ preset: "unicode" }));
-	const a = renderBands([{ kind: "legend", items: legendItems }], ctx({ preset: "ascii" }));
+	const u = renderBands([{ kind: "table", title: "Models", columns, rows }], ctx({ preset: "unicode" }));
+	const a = renderBands([{ kind: "table", title: "Models", columns, rows }], ctx({ preset: "ascii" }));
 	expect(u.join("\n")).not.toBe(a.join("\n"));
-	const fill = glyphsFor("ascii").barFill as string;
-	expect(a.join("")).toContain(fill);
+	// The ascii preset's data ink is the module's own fill; no Unicode block leaks in.
+	expect(a.join("")).not.toContain("█");
+	expect(glyphsFor("ascii").barFill).toBe("#");
 });
 // ─── Colour: roles come from the palette, never from tokens chosen here ─────
 
@@ -598,11 +486,6 @@ test("colour: statRow labels are muted+bold scaffolding and hints are dim", () =
 	expect(tokensUsed(rendered[2] as string)).toContain(PALETTE.dim);
 });
 
-test("colour: a note is entirely dim — it is prose, not data", () => {
-	const [row] = renderBands([{ kind: "note", text: "This is not a zero." }], ctx());
-	expect(tokensUsed(row as string)).toEqual([PALETTE.dim]);
-});
-
 test("colour: a table header is dim scaffolding but its numbers are DEFAULT text", () => {
 	const rendered = renderBands([{ kind: "table", title: "Models", columns, rows }], ctx());
 	const header = rendered[1] as string;
@@ -614,21 +497,6 @@ test("colour: a table header is dim scaffolding but its numbers are DEFAULT text
 	// reads as less important, and a table of numbers is the entire point.
 	expect(tokensUsed(firstRow)).not.toContain(PALETTE.dim);
 	expect(tokensUsed(firstRow)).toContain(PALETTE.label);
-});
-
-test("colour: a chart heading title is the heading role and its meta is muted", () => {
-	const [heading] = renderBands([{ kind: "chart", title: "Daily", chart, source: "all time" }], ctx());
-	expect(tokensUsed(heading as string)).toContain(PALETTE.heading);
-	expect(tokensUsed(heading as string)).toContain(PALETTE.meta);
-});
-
-test("colour: each legend swatch wears its own series colour", () => {
-	const rendered = renderBands([{ kind: "legend", items: legendItems }], ctx());
-	// Two items, two distinct series tokens.
-	const first = tokensUsed(rendered[0] as string).filter((t) => SERIES_COLORS.includes(t as never));
-	expect(first.length).toBeGreaterThan(0);
-	expect(tokensUsed(rendered[0] as string)).not.toEqual(tokensUsed(rendered[1] as string));
-	expect(tokensUsed(rendered[0] as string)).toContain(PALETTE.muted);
 });
 
 test("COLOUR LEAK: no literal colour escapes into the output", () => {

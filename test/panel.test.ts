@@ -13,7 +13,6 @@ import { DATA_NEEDS, type DataNeed, type PanelData } from "../src/data/api";
 import { DEFAULT_RANGE, RANGES, nextRange, rangeLabel } from "../src/data/ranges";
 import { SCREENS } from "../src/tui/screens/types";
 import { SELECTABLE_SCREENS } from "../src/tui/panel";
-import { SCREEN_SPECS } from "../src/layout/spec";
 import type { ScreenId } from "../src/tui/screens/types";
 import { glyphsFor } from "../src/tui/glyphs";
 import type { Range } from "../src/data/ranges";
@@ -198,6 +197,10 @@ function stubReader(over: Partial<PanelData> = {}): PanelReads {
 		close: () => {},
 	};
 }
+/** The stub reader with a controlled `fetch`, for tests that count refetches. */
+function readsWith(fetch: PanelReads["fetch"]): PanelReads {
+	return { ...stubReader(), fetch };
+}
 
 /**
  * Anchor every fixture panel to FIXTURE_NOW. The chart's time axis is derived
@@ -305,7 +308,7 @@ test("g then a digit jumps straight to that named range; the screen does not mov
 
 test("f2 refreshes the current screen:range without changing either", async () => {
 	const asked: Range[] = [];
-	const panel = makePanel({ data: dataFor(), fetch: spyFetch(asked), screenId: "costs", range: "30d" });
+	const panel = makePanel({ reads: readsWith(spyFetch(asked)), screenId: "costs", range: "30d" });
 	await __testing.settled(panel);
 	expect(asked).toEqual(["30d"]);
 	panel.handleInput("\x1bOQ");
@@ -580,7 +583,7 @@ test("the sidebar is byte-identical at EVERY scroll position, at every width and
 	let scrolledConfigs = 0;
 	for (const width of [150, 100, 60, 40]) {
 		for (const rows of [40, 24, 16]) {
-			const panel = makePanel({ data: dataFor(), rows });
+			const panel = makePanel({ data: dataFor(), rows, screenId: "costs" });
 			await __testing.settled(panel);
 			panel.render(width);
 			const frame = __testing.debugFrame(panel)!;
@@ -610,7 +613,7 @@ test("scrolling the body does not move the sidebar's hit rows either", async () 
 	// terminal hides the nav column entirely and this test would be vacuous.
 	// `#selectScreen` also resets scroll to 0, so this scrolls FIRST and clicks
 	// second, which is the order the bug appeared in.
-	const panel = makePanel({ data: dataFor(), rows: 24 });
+	const panel = makePanel({ data: dataFor(), rows: 24, screenId: "costs" });
 	await __testing.settled(panel);
 	const width = 100;
 	panel.render(width);
@@ -624,7 +627,7 @@ test("scrolling the body does not move the sidebar's hit rows either", async () 
 	// The same coordinate selects the same screen before and after scrolling.
 	panel.handleInput(`\x1b[<0;3;${overlayRow(2)}M`);
 	expect(__testing.debugScreenId(panel)).toBe("models");
-	for (let i = 0; i < 3; i++) panel.handleInput("\x1b[B");
+	for (let i = 0; i < 3; i++) panel.handleInput(PGDN);
 	expect(__testing.debugScroll(panel)).toBeGreaterThan(0);
 	panel.handleInput(`\x1b[<0;3;${overlayRow(2)}M`);
 	expect(__testing.debugScreenId(panel)).toBe("models");
@@ -665,26 +668,29 @@ test("r walks the closed range set forwards and wraps; R walks it back", async (
 
 test("changing the range refetches, because a range is a different question", async () => {
 	const asked: Range[] = [];
-	const panel = makePanel({ data: dataFor(), fetch: spyFetch(asked) });
+	const panel = makePanel({ reads: readsWith(spyFetch(asked)) });
 	await __testing.settled(panel);
 	panel.handleInput("r");
 	await __testing.settled(panel);
-	expect(asked).toEqual([DEFAULT_RANGE, nextRange(DEFAULT_RANGE, 1)]);
+	// The panel and the feature each fetch once per load, so every range appears twice.
+	expect(asked).toEqual([DEFAULT_RANGE, DEFAULT_RANGE, nextRange(DEFAULT_RANGE, 1), nextRange(DEFAULT_RANGE, 1)]);
 });
 
 test("the panel always asks for rollupStatus, so readiness is never assumed", async () => {
 	const asked: DataNeed[][] = [];
-	const panel = makePanel({ data: dataFor(), fetch: spyFetch([], asked) });
+	const panel = makePanel({ reads: readsWith(spyFetch([], asked)) });
 	await __testing.settled(panel);
-	expect(asked).toHaveLength(1);
-	expect(asked[0]).toContain("rollupStatus");
+	// The panel's own fetch and the feature's fetch both run; the panel's is the
+	// first and is the one that must carry readiness.
+	expect(asked).toHaveLength(2);
+	expect(asked.some(needs => needs.includes("rollupStatus")), "the panel's fetch").toBe(true);
 });
 
 test("failed initialization stays an error rather than an empty range", async () => {
 	const panel = makePanel({
-		fetch: async () => {
+		reads: readsWith(async () => {
 			throw new Error("rollup status: database is not initialised");
-		},
+		}),
 	});
 	await __testing.settled(panel);
 	expect(__testing.debugPhase(panel)).toBe("error");
@@ -719,7 +725,7 @@ test("a panel built without fetch resolves the production overview feature", asy
 // ---------------------------------------------------------------------------
 
 test("loading, ready and error are three distinguishable states", async () => {
-	const loading = makePanel({ fetch: NEVER });
+	const loading = makePanel({ reads: readsWith(NEVER) });
 	expect(__testing.debugPhase(loading)).toBe("loading");
 
 	const ready = makePanel({ data: dataFor() });
@@ -727,12 +733,23 @@ test("loading, ready and error are three distinguishable states", async () => {
 	expect(__testing.debugPhase(ready)).toBe("ready");
 
 	const failed = makePanel({
-		fetch: async () => {
+		reads: readsWith(async () => {
 			throw new Error("boom");
-		},
+		}),
 	});
 	await __testing.settled(failed);
 	expect(__testing.debugPhase(failed)).toBe("error");
+});
+
+test("a partial overview payload is unavailable, not a crash", async () => {
+	// A payload that arrived without its aggregate: the screen says so instead
+	// of throwing out of `render` (sumConversationTokens(undefined)).
+	const panel = makePanel({ data: dataFor({ overview: {} as never }), screenId: "overview" });
+	await __testing.settled(panel);
+	expect(__testing.debugPhase(panel)).toBe("ready");
+	expect(() => panel.render(100)).not.toThrow();
+	expect(__testing.debugBody(panel).join("\n")).toContain("Overview payload unavailable.");
+	panel.dispose();
 });
 
 test("a stale rollup is stated in the header; a clean one is not", async () => {
@@ -769,38 +786,38 @@ test("the active range is named by the topbar control, not by the title", async 
 // Screens
 // ---------------------------------------------------------------------------
 
-test("tab and shift+tab move through the selectable screens and refetch", async () => {
+test("left/right move through the selectable screens and refetch", async () => {
 	const asked: DataNeed[][] = [];
-	const panel = makePanel({ data: dataFor(), fetch: spyFetch([], asked) });
+	const panel = makePanel({ reads: readsWith(spyFetch([], asked)) });
 	await __testing.settled(panel);
 	expect(__testing.debugScreenId(panel)).toBe("overview");
 
-	panel.handleInput(TAB);
+	panel.handleInput(RIGHT);
 	await __testing.settled(panel);
 	expect(__testing.debugScreenId(panel)).toBe(SELECTABLE[1].id);
 
-	panel.handleInput(SHIFT_TAB);
+	panel.handleInput(LEFT);
 	await __testing.settled(panel);
 	expect(__testing.debugScreenId(panel)).toBe("overview");
 
-	panel.handleInput(TAB);
+	panel.handleInput(RIGHT);
 	await __testing.settled(panel);
 	expect(__testing.debugScreenId(panel)).toBe(SELECTABLE[1].id);
 
-	// One fetch per load, and every one of them asks for readiness: a screen's
-	// declared `needs` differ, and the panel renders only what the ACTIVE screen
-	// asked for.
-	expect(asked).toHaveLength(4);
-	for (const needs of asked) expect(needs).toContain("rollupStatus");
+	// The PANEL's own fetches — the feature fetches its own payloads too. One per
+	// load, and every one asks for readiness.
+	const panelFetches = asked.filter(needs => needs.includes("rollupStatus"));
+	expect(panelFetches).toHaveLength(4);
+	for (const needs of panelFetches) expect(needs).toContain("rollupStatus");
 });
 
 test("screen switching wraps in both directions", async () => {
 	const panel = makePanel({ data: dataFor() });
 	await __testing.settled(panel);
-	panel.handleInput(SHIFT_TAB);
+	panel.handleInput(LEFT);
 	await __testing.settled(panel);
 	expect(__testing.debugScreenId(panel)).toBe(SELECTABLE[SELECTABLE.length - 1].id);
-	panel.handleInput(TAB);
+	panel.handleInput(RIGHT);
 	await __testing.settled(panel);
 	expect(__testing.debugScreenId(panel)).toBe("overview");
 });
@@ -850,7 +867,7 @@ test("render is a pure function of state: the same width twice gives the same ro
 test("the scroll offset is clamped inside render, so shrinking shrinks the view", async () => {
 	// 12 rows leaves a 6-row body against a ~23-line overview, so there is
 	// genuinely something to scroll past.
-	const panel = makePanel({ data: dataFor(), rows: 12 });
+	const panel = makePanel({ data: dataFor(), rows: 12, screenId: "costs" });
 	await __testing.settled(panel);
 	panel.render(120);
 	expect(__testing.debugMaxScroll(panel)).toBeGreaterThan(0);
@@ -898,7 +915,7 @@ test("scrolling does not recompose: it shifts the slice, not the document", asyn
 	// The audit's whole complaint is per-frame work that a scroll does not need.
 	// `scroll` is deliberately absent from the cache key, so a render at a new
 	// offset must reuse the composed body.
-	const panel = makePanel({ data: liveData(), rows: 12 });
+	const panel = makePanel({ data: liveData(), rows: 12, screenId: "costs" });
 	await __testing.settled(panel);
 	panel.render(100);
 	expect(__testing.debugMaxScroll(panel)).toBeGreaterThan(0);
@@ -973,28 +990,35 @@ test("bars scale by COST, so the free-but-huge day is not the tall one", async (
 		screenId: "costs",
 	});
 	await __testing.settled(panel);
-	const rows = __testing.debugChartRows(panel, 120).map(stripAnsi);
-	// The costs card declares four cost COMPONENTS, composed by
-	// `renderSeriesChart`, which labels each band AFTER its marks. So the first
-	// band's marks are the rows before the first label.
-	const first = rows.findIndex(row => row.includes("Input"));
-	expect(first, "the daily-estimate block must be labelled").toBeGreaterThan(1);
-	// The FLOOR is not a row of magnitude, so it is excluded: a band's last row
-	// is the `axisLine` mark (the web's `.chart-baseline`, `Chart.tsx:304`).
-	const block = rows.slice(0, first);
-	expect(block.length, "the first band must be at least two rows").toBeGreaterThanOrEqual(2);
-	const heights = columnHeights(block.filter(row => /█/.test(row)));
+	const rows = __testing.debugBody(panel);
+	// The costs chart is the block between its heading and the axis line. The
+	// production body carries the whole screen, so the chart is located by its
+	// own heading rather than assumed to start at row 0.
+	const heading = rows.findIndex(row => row.includes("Daily estimate by model"));
+	expect(heading, "the daily-estimate chart must be present").toBeGreaterThan(-1);
+	const axis = rows.findIndex((row, index) => index > heading && row.includes("→"));
+	expect(axis, "the chart axis").toBeGreaterThan(heading);
+	// Drop the y-axis column (`│`) and keep only rows that carry data marks.
+	const block = rows
+		.slice(heading + 1, axis)
+		.map(row => (row.startsWith("│") ? row.slice(1) : row))
+		.filter(row => /[█▁]/.test(row));
+	expect(block.length, "the chart must have at least two rows").toBeGreaterThanOrEqual(2);
+	const heights = columnHeights(block);
 	// The rule itself, without depending on where a bucket lands: the two filled
 	// columns have DIFFERENT heights, and the taller one is the newer bucket — the
 	// day that cost $42. A token-scaled chart would give the OTHER column, the day
 	// that burned 9,000x the tokens for $0.01, the taller mark.
-	// Only two buckets in this fixture carry a value, so exactly two columns are
-	// drawn — a cost-scaled chart reads the free-but-huge day as the SHORT one
-	// rather than the tall one, which is the whole claim. Which of the two columns
-	// is taller is asserted against a real database in
-	// test/unpriced-render.test.ts; pinning the arithmetic to a two-row fixture
+	// Only two buckets in this fixture carry a value, so exactly two bar columns
+	// are drawn — a cost-scaled chart reads the free-but-huge day as the SHORT one
+	// rather than the tall one, which is the whole claim. A bar is two cells wide,
+	// so the assertion is on the number of DISTINCT heights, not the raw column
+	// count. Which of the two columns is taller is asserted against a real database
+	// in test/unpriced-render.test.ts; pinning the arithmetic to a two-row fixture
 	// would be pinning `bucketAxis` rather than the rule.
-	expect(heights.filter(height => height > 0).length).toBe(2);
+	const nonEmpty = heights.filter(height => height > 0);
+	expect(nonEmpty.length).toBeGreaterThanOrEqual(2);
+	expect(new Set(nonEmpty).size, "the two buckets must have different heights").toBeGreaterThan(1);
 	expect(Math.max(...heights)).toBeGreaterThan(0);
 });
 
@@ -1011,7 +1035,7 @@ test("the cost axis is day-bucketed like the host, so a midnight row is never dr
 		screenId: "costs",
 	});
 	await __testing.settled(panel);
-	const heights = columnHeights(__testing.debugChartRows(panel).map(stripAnsi));
+	const heights = columnHeights([...__testing.debugBody(panel)]);
 	expect(heights.some(height => height > 0)).toBe(true);
 });
 
@@ -1044,9 +1068,9 @@ test("tokens are shown as separate cells, never as one combined total", async ()
 });
 
 test("an empty cost series is stated as empty, not drawn as a wall of zero columns", async () => {
-	const panel = makePanel({ data: dataFor({ costs: { costSeries: [] } }) });
+	const panel = makePanel({ data: dataFor({ costs: { costSeries: [] } }), screenId: "costs" });
 	await __testing.settled(panel);
-	expect(__testing.debugBody(panel).join("\n")).toContain("No chart-worthy data in this range.");
+	expect(__testing.debugBody(panel).join("\n")).toContain("No recorded chart observations in this range.");
 });
 
 // ---------------------------------------------------------------------------
@@ -1062,7 +1086,7 @@ test("an empty cost series is stated as empty, not drawn as a wall of zero colum
 const RULE_RUN = /[─━═]{3,}/;
 
 async function renderedFrame(screenId: (typeof SELECTABLE)[number]["id"], width = 120): Promise<string[]> {
-	const panel = makePanel({ data: dataFor(), screenId, rows: 40 });
+	const panel = makePanel({ data: liveData(), screenId, rows: 40 });
 	await __testing.settled(panel);
 	return panel.render(width).map(stripAnsi);
 }

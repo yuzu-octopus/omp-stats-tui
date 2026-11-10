@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import register, { showcaseSectionFrom } from "../src/index";
+import register from "../src/index";
 
 /**
  * A minimal fake host. It records what the extension registers so the test can
@@ -23,33 +23,21 @@ function fakePi() {
 	return { pi, commands };
 }
 
-test("the extension registers exactly two commands: /stats-tui and /stats-test", () => {
-	// Both, and ONLY both. An extension registering a name the host already provides
-	// appears in the palette and is never run (ADR 0002), so the list is pinned
-	// exactly rather than checked for a superset.
+test("the extension registers exactly one command: /stats-tui", () => {
+	// An extension registering a name the host already provides appears in the
+	// palette and is never run (ADR 0002), so the list is pinned exactly rather
+	// than checked for a superset.
 	const { pi, commands } = fakePi();
 	register(pi);
-	expect(commands.map(c => c.name)).toEqual(["stats-tui", "stats-test"]);
+	expect(commands.map(c => c.name)).toEqual(["stats-tui"]);
 });
 
-test("both commands carry a description and a callable handler", () => {
+test("the command carries a description and a callable handler", () => {
 	const { pi, commands } = fakePi();
 	register(pi);
-	expect(commands).toHaveLength(2);
+	expect(commands).toHaveLength(1);
 	for (const command of commands) {
 		expect(command.options.description).toBeString();
 		expect(typeof command.options.handler).toBe("function");
 	}
-});
-
-test("/stats-test opens a section named by its argument, and falls back for a typo", () => {
-	// The optional argument is free: an id, a jump letter or a label all resolve,
-	// and anything else yields `undefined` — which the panel reads as "open the
-	// first section". A typo in an argument to a playground should not be an error.
-	expect(showcaseSectionFrom("")).toBeUndefined();
-	expect(showcaseSectionFrom("charts")).toBe("charts");
-	expect(showcaseSectionFrom("CHARTS")).toBe("charts");
-	expect(showcaseSectionFrom("c")).toBe("charts");
-	expect(showcaseSectionFrom("Stat tiles")).toBe("tiles");
-	expect(showcaseSectionFrom("nonsense")).toBeUndefined();
 });

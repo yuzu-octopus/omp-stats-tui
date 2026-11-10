@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { TabBar } from "@oh-my-pi/pi-tui";
 import type { SymbolPreset, Theme } from "@oh-my-pi/pi-tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
-import { SCREEN_SPECS } from "../src/layout/spec";
+import { SCREENS } from "../src/tui/screens/types";
 import { STATS_ICONS } from "../src/tui/icons";
 import { TAB_BAR_INDENT, TAB_SHORT, buildTabs, tabBarTheme } from "../src/tui/tabs";
 import { TAB_INK } from "../src/tui/palette";
@@ -25,7 +25,7 @@ import { TAB_INK } from "../src/tui/palette";
 const PRESETS: readonly SymbolPreset[] = ["unicode", "nerd", "ascii"];
 
 /** The screens the strip actually shows. */
-const SHOWN = SCREEN_SPECS;
+const SHOWN = SCREENS;
 
 /** A background SGR — the luminance step the active tab must carry. */
 const BG = /\x1b\[4[89];/;
@@ -85,8 +85,8 @@ describe("TAB_SHORT", () => {
 
 	test("keys are the screen ids, and nothing else", () => {
 		for (const preset of PRESETS) {
-			expect(new Set(Object.keys(TAB_SHORT[preset])).size).toBe(SCREEN_SPECS.length);
-			for (const spec of SCREEN_SPECS) {
+			expect(new Set(Object.keys(TAB_SHORT[preset])).size).toBe(SCREENS.length);
+			for (const spec of SCREENS) {
 				expect(TAB_SHORT[preset]).toHaveProperty(spec.id);
 			}
 		}
@@ -97,7 +97,7 @@ describe("TAB_SHORT", () => {
 		const PUA = /^[\u{E000}-\u{F8FF}\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]$/u;
 		// No invented PUA: every glyph is one STATS_ICONS.nerd already ships.
 		const known = new Set(Object.values(STATS_ICONS.nerd));
-		for (const spec of SCREEN_SPECS) {
+		for (const spec of SCREENS) {
 			expect(TAB_SHORT.nerd[spec.id]).toMatch(PUA);
 			expect(known.has(TAB_SHORT.nerd[spec.id])).toBe(true);
 		}

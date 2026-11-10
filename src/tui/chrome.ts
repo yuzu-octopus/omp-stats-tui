@@ -39,7 +39,7 @@ import { rangeMeta } from "@oh-my-pi/omp-stats/client/data/range";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { RANGES, type Range } from "../data/ranges";
-import { isDrawableScreen, specForScreen, type ScreenSpec } from "../layout/spec";
+import { screenById, type ScreenId } from "./screens/types";
 import { describeSyncProgress, type SyncEvent } from "../sync/client";
 import { formatInteger } from "./format";
 import { glyph, type SymbolPreset } from "./glyphs";
@@ -106,8 +106,7 @@ export interface NavItem {
 	hotkey: string;
 	/**
 	 * The icon this row paints, carried by the ITEM rather than derived from the
-	 * id: a nav that is not the screen registry (the showcase's sections) has no
-	 * `TAB_ICON` entry, so the row must bring its own glyph.
+	 * id: a nav list is data and owns its own glyphs.
 	 */
 	icon: IconRole;
 }
@@ -120,8 +119,8 @@ export interface NavGroup {
 /**
  * Second keys of the `g <key>` jumps. The web's verbatim (nav.ts) except
  * `activity`, which has no web section (OURS: the free initial `a`).
- * Every drawable screen has an entry; a jump that paints a page the panel
- * cannot honestly fill would waste the keystroke.
+ * Every screen has an entry; a jump that paints a page the panel cannot honestly
+ * fill would waste the keystroke.
  */
 const HOTKEYS: Record<string, string> = {
 	overview: "o",
@@ -143,8 +142,8 @@ const HOTKEYS: Record<string, string> = {
  * order here is the order on screen`). Usage keeps the web's order with
  * `providers` beside the screens it bills; Activity leads with the OURS
  * `activity` summary, then the web's `requests`, `errors`, `traces`; Insights
- * keeps `tools`, `projects`, `gain`, `frustration`. `NAV_GROUPS` drops any id
- * the IR does not describe.
+ * keeps `tools`, `projects`, `gain`, `frustration`. Every id here has a
+ * `HOTKEYS` entry; the flatMap drops any that does not.
  */
 const GROUPS: Record<string, readonly string[]> = {
 	Usage: ["overview", "models", "costs", "providers"],
@@ -153,14 +152,14 @@ const GROUPS: Record<string, readonly string[]> = {
 };
 
 /**
- * The nav, with labels resolved from the layout IR.
+ * The nav, with labels resolved from the screen registry.
  *
  * Two derivations, both deliberate:
  *
- *   - DRAWABILITY comes from {@link isDrawableScreen}, the same predicate
- *     `SELECTABLE_SCREENS` uses, so a screen cannot be arrow-selectable and
- *     missing from the sidebar, or present in the sidebar with no body to draw.
- *     `test/screens.test.ts` pins that the two can never drift.
+ *   - IDENTITY comes from `SCREENS` through {@link screenById}, the same
+ *     registry `SELECTABLE_SCREENS` uses, so a screen cannot be arrow-selectable
+ *     and missing from the sidebar, or present in the sidebar with no body to
+ *     draw. `test/screens.test.ts` pins that the two can never drift.
  *   - ORDER comes from `GROUPS`, NOT from `SELECTABLE_SCREENS`. The nav is
  *     grouped for reading and the number row is not, so deriving one order from
  *     the other would change which screen a digit selects.
@@ -171,25 +170,25 @@ const GROUPS: Record<string, readonly string[]> = {
 export const NAV_GROUPS: readonly NavGroup[] = Object.entries(GROUPS).map(([heading, ids]) => ({
 	heading,
 	items: ids.flatMap(id => {
-		const spec = specForScreen(id);
+		const screen = screenById(id as ScreenId);
 		const hotkey = HOTKEYS[id] ?? "";
-		return spec && isDrawableScreen(id) && hotkey !== ""
-			? [{ id: spec.id, label: spec.label, hotkey, icon: TAB_ICON[spec.id as keyof typeof TAB_ICON] }]
+		return hotkey !== ""
+			? [{ id: screen.id, label: screen.label, hotkey, icon: TAB_ICON[screen.id] }]
 			: [];
 	}),
 }));
 
 /**
  * Resolve one jump letter to its screen, case-insensitively like the web's
- * `e.key.toLowerCase()` lookup. Null for digits, for undrawable screens, and
- * for anything that is not a single letter.
+ * `e.key.toLowerCase()` lookup. Null for digits, for screens with no jump letter,
+ * and for anything that is not a single letter.
  */
-export function screenForHotkey(key: string): ScreenSpec["id"] | null {
+export function screenForHotkey(key: string): ScreenId | null {
 	if (key.length !== 1) return null;
 	const lower = key.toLowerCase();
 	for (const group of NAV_GROUPS) {
 		for (const item of group.items) {
-			if (item.hotkey === lower) return item.id as ScreenSpec["id"];
+			if (item.hotkey === lower) return item.id as ScreenId;
 		}
 	}
 	return null;
@@ -336,12 +335,10 @@ export interface Sidebar {
  */
 /**
  * THE NAV IS A PARAMETER, NOT A CONSTANT. `groups` defaults to `NAV_GROUPS`, so
- * the panel calls the 4-arg form and gets the real registry; the showcase passes
- * its own sections and gets the SAME geometry, ink ladder, measurements and
- * hover/active rules. The icon travels on the item (`NavItem.icon`) rather than
- * being looked up from the id, because a nav that is not the screen registry has
- * no `TAB_ICON` entry. `showcase/nav.ts` is now a list of rows, not a second
- * painter.
+ * callers that want the real registry use the 4-arg form; the geometry, ink
+ * ladder, measurements and hover/active rules are the same for any list. The
+ * icon travels on the item (`NavItem.icon`) rather than being looked up from the
+ * id, because a nav list is data and owns its own glyphs.
  */
 const SIDEBAR_CACHE = new WeakMap<Theme, Map<string, Sidebar>>();
 /** Identity of a nav list in the cache: a frozen array's identity is stable. */
@@ -379,7 +376,7 @@ export function sidebar(
  * argument whose identity — not its value — carries the styling; a string key
  * would collide two themes that happen to share a preset. `groups` is keyed by
  * identity too, for the same reason: two nav lists with equal contents are still
- * two lists, and the showcase's is not the panel's.
+ * two lists, and identity is what the cache keys on.
  *
  * The returned `lines` array is SHARED. Callers read it; nothing writes to it.
  */

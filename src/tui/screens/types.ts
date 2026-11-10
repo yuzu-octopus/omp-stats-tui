@@ -1,5 +1,3 @@
-import type { DataNeed } from "../../data/api";
-
 import { overviewScreen } from "./overview";
 import { activityScreen } from "./activity";
 import { modelsScreen } from "./models";
@@ -14,14 +12,14 @@ import { tracesScreen } from "./traces";
 import { frustrationScreen } from "./frustration";
 
 /**
- * Every dashboard screen, and every screen's data contract, in one closed set.
+ * Every dashboard screen's identity, in one closed set.
  * This module is DATA: a `Screen` record per screen and nothing else. There is no
  * switch over `ScreenId` anywhere in the panel, because a switch is a second place
  * to add a screen and the registry is the only place that should know one exists.
  *
  * Production bodies are `FeatureController.render()` strings (ADR 0007). A
- * registry entry carries the identity and the fetch contract the nav and the
- * panel read — never a render body, which would be a second grammar for the
+ * registry entry carries the id and labels the nav and panel read — never a
+ * render body or a fetch contract, which would be a second grammar for the
  * same screen.
  */
 export type ScreenId =
@@ -44,11 +42,6 @@ export interface Screen {
 	label: string;
 	/** Tab-strip label. Measured, not assumed: test/screens.test.ts pins this at 8 cells. */
 	short: string;
-	/**
-	 * Exactly what this screen fetches, and nothing more. Empty means it fetches
-	 * nothing — a design decision, not an omission.
-	 */
-	needs: readonly DataNeed[];
 }
 
 /** Frozen, ordered, and the ONLY list of screens. Tab order is registry order. */

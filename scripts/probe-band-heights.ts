@@ -46,9 +46,9 @@ const lines = readFileSync(path, "utf8").replace(ANSI, "").split("\n");
 /**
  * The chart body: past the overlay's sidebar gutter and inside the frame.
  *
- * The showcase wraps its body in `│ … │`, so the trailing border has to come off
+ * The panel wraps its body in `│ … │`, so the trailing border has to come off
  * too — a label line still reading `│ Input  │` matches no label set, which is
- * how a whole showcase frame once measured as containing zero bands.
+ * how a whole frame once measured as containing zero bands.
  */
 const body = (line: string): string => {
 	if (!line.startsWith("│")) return line.replace(/│/g, " ");

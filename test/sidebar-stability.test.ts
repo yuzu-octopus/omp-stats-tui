@@ -22,7 +22,7 @@
  * height, not the column width.
  */
 import { expect, test } from "bun:test";
-import { SCREEN_SPECS } from "../src/layout/spec";
+import { SCREENS } from "../src/tui/screens/types";
 import { __testing, SELECTABLE_SCREENS } from "../src/tui/panel";
 import { NAV_GROUPS, screenForHotkey, sidebar } from "../src/tui/chrome";
 import { hitTest } from "../src/tui/mouse";
@@ -122,11 +122,11 @@ test("every screen on the arrow cycle has a row in the nav", () => {
 
 test("the nav and the tab strip draw the same screens in different orders", () => {
 	// Recorded, not endorsed: below MIN_SIDEBAR_ROWS the panel swaps the sidebar
-	// for the strip (`panel.ts:620-626`) and the strip follows `SCREEN_SPECS`. Two
+// for the strip (`panel.ts:620-626`) and the strip follows `SCREENS`. Two
 	// controls, two orders. This pins the fact so the ordering change that follows
 	// is measurable.
 	const navOrder = NAV_GROUPS.flatMap(g => g.items.map(i => i.label));
-	const stripOrder = SCREEN_SPECS.map(s => s.label);
+const stripOrder = SCREENS.map(s => s.label);
 	expect(navOrder.indexOf("Activity")).toBeGreaterThan(navOrder.indexOf("Costs"));
 	expect(stripOrder.indexOf("Activity")).toBeLessThan(stripOrder.indexOf("Costs"));
 });
@@ -137,7 +137,7 @@ test("the nav and the tab strip draw the same screens in different orders", () =
  * THE JUMP TARGET MUST NOT DEPEND ON WHICH CONTROL IS VISIBLE.
  *
  * The sidebar and the tab strip deliberately order the same ten screens
- * differently — `NAV_GROUPS` is a navigation order, `SCREEN_SPECS` is the IR's
+ * differently — `NAV_GROUPS` is a navigation order, `SCREENS` is the registry
  * declaration order, and they are different jobs. That is agreed and not being
  * unified.
  *
@@ -156,9 +156,9 @@ test("the nav and the tab strip draw the same screens in different orders", () =
 test("every jump letter lands on the nav item that owns it, not on a position", () => {
 	for (const group of NAV_GROUPS) {
 		for (const item of group.items) {
-			expect(screenForHotkey(item.hotkey), `letter "${item.hotkey}" → ${item.id}`).toBe(item.id);
+			expect(screenForHotkey(item.hotkey), `letter "${item.hotkey}" → ${item.id}`).toBe(item.id as ScreenId);
 			// Case-insensitive, like the web's `e.key.toLowerCase()`.
-			expect(screenForHotkey(item.hotkey.toUpperCase())).toBe(item.id);
+			expect(screenForHotkey(item.hotkey.toUpperCase())).toBe(item.id as ScreenId);
 		}
 	}
 });
@@ -183,7 +183,7 @@ test("every screen the strip can show that has a nav row is reachable by its own
 	// about IDENTITY: for any screen shown in both, the jump and the nav name the
 	// same thing, or the two controls are not showing the same ten screens.
 	const navIds = NAV_GROUPS.flatMap(g => g.items.map(i => i.id));
-	for (const spec of SCREEN_SPECS) {
+	for (const spec of SCREENS) {
 		if (!navIds.includes(spec.id)) continue;
 		const item = NAV_GROUPS.flatMap(g => g.items).find(i => i.id === spec.id)!;
 		expect(screenForHotkey(item.hotkey), `${spec.id}`).toBe(spec.id);

@@ -571,7 +571,30 @@ export function emptyData(): PanelData {
  */
 export function blankData(): PanelData {
 	return {
-		overview: { byAgentType: [], timeSeries: [] } as unknown as PanelData["overview"],
+		overview: {
+			overall: {
+				totalRequests: 0,
+				successfulRequests: 0,
+				failedRequests: 0,
+				errorRate: 0,
+				totalInputTokens: 0,
+				totalOutputTokens: 0,
+				totalCacheReadTokens: 0,
+				totalCacheWriteTokens: 0,
+				cacheRate: 0,
+				cacheSavings: 0,
+				totalCost: 0,
+				unpricedRequests: 0,
+				totalPremiumRequests: 0,
+				avgDuration: 0,
+				avgTtft: 0,
+				avgTokensPerSecond: 0,
+				firstTimestamp: 0,
+				lastTimestamp: 0,
+			},
+			byAgentType: [],
+			timeSeries: [],
+		},
 		modelDashboard: { byModel: [], modelSeries: [], modelPerformanceSeries: [] },
 		costs: { costSeries: [] },
 		folders: [],

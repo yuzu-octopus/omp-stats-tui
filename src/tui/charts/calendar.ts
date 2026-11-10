@@ -43,8 +43,8 @@ function layoutKey(weeks: number, today: Date): string {
  * Keyed on the POINTS ARRAY REFERENCE, so a caller that rebuilds `points` every
  * frame gets no hit — hand it the payload array rather than a `filter`/`map`
  * copy. The array is read as immutable while it lives: mutating one in place
- * would serve a stale grid. `render/screen.ts`'s IR probe maps a fresh array
- * per call, so it caches nothing and stays correct.
+ * would serve a stale grid. A caller that maps a fresh array per call caches
+ * nothing and stays correct.
  *
  * The WeakMap drops a payload's layouts with the payload. The inner Map is a
  * small LRU because `weeks` tracks the terminal width and `today` the day, and

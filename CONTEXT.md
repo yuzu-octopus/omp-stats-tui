@@ -184,62 +184,27 @@ The terminal supports time/turn/call axes, idle compression, zoom/pan/fit/focus,
 span search/details, tool durations/errors and child navigation. Upstream root discovery considers at most
 300 candidates; a searchable loaded list is not exhaustive session history.
 
-### The layout IR
+### The drawing grammar
 
 **Band**:
-The unit of vertical layout a screen is composed from — `statRow`, `chart`, `table`, `legend`,
-`note`, or `custom` (`src/layout/spec.ts`). A screen is a vertical stack of bands with exactly one
-blank line between consecutive bands, and no band body may emit a full-width rule
-(`src/tui/band.ts` G4–G5).
+The unit of vertical layout a controller composes from — a measured `statRow` of tiles or a
+`table` (`src/tui/band.ts`). Bands are stacked with exactly one blank line between consecutive
+bands, and no band body may emit a full-width rule (`src/tui/band.ts` G4–G5).
 _Not to be confused with_: a web card. A card carries its own border and header; a band carries
 neither and gets both from the grammar.
 
-**ScreenSpec**:
-One screen's declared pure layout: its id, labels, `needs`, and `Band[]` (`src/layout/spec.ts`).
-The IR is NOT the production render path — every `/stats-tui` screen is a `FeatureController` that draws
-its own body (`render(width, height)`). A `ScreenSpec` is live only for four jobs: the shipped `/stats-test`
-showcase, the nav/tabs identity, the review probes, and the panel's fixture/test branch (`options.fetch`
-injected). The reason is settled: a static band grammar cannot express focus, search, sort, staged
-loading or retained state.
-_Not to be confused with_: `FeatureController`, or the pure registry `Screen` record that defers rendering
-to `renderScreen`. Adding a `Band[]` changes what `/stats-test` draws and which ids `tabs.ts`/`chrome.ts`
-expose — and changes nothing a user sees in `/stats-tui`.
+**Screen**:
+One dashboard screen's identity — `id`, `label`, `short` (`src/tui/screens/types.ts`). The
+registry is nav data: `SELECTABLE_SCREENS`, the tab strip and the sidebar read it, and `/stats-tui`
+renders a `FeatureController` body for the active id. A screen declares no layout and no fetch
+contract; the controller owns both.
+_Not to be confused with_: `FeatureController`. The registry names a screen; the controller
+renders it.
 
-**IR scope map** — which file survives for which reason, so this is not re-derived:
-
-| File | Kept because |
-|---|---|
-| `src/layout/spec.ts` | `/stats-test` band declarations; `tabs.ts`/`chrome.ts`/`panel.ts` read `SCREEN_SPECS` and `isDrawableScreen` for the real nav |
-| `src/layout/resolve.ts` | the showcase and `probe-render.ts` resolve every `MetricRef` through it |
-| `src/layout/host-derived.ts` | `resolve.ts`'s named figures — 18 `HOST_DERIVED` entries (three `agentTokens:*` variants and 15 metrics) — imported by `resolve.ts` alone |
-| `src/tui/band.ts` | draws band primitives for `render/screen.ts`; production `features/presentation.ts` also reuses metric-grid/table drawing, without adopting static screen specs or metric-ref resolution |
-| `src/tui/render/screen.ts` | the showcase's and `probe-render.ts`'s renderer, plus one **fixture-only** branch in `panel.ts:780` — reachable only when `options.fetch` is injected, because `#feature()` returns `undefined` in that case. The real worker path always has a controller |
-| `src/tui/charts/*` | **both** paths — `features/core/*` import them directly on `/stats-tui`, so these are production chart code, not IR |
-| `src/tui/screens/*.ts` | registry METADATA only (`id`/`label`/`short`/`status`/`needs`) for `SELECTABLE_SCREENS` and the digit row; the `render` bodies are unreachable in production and only `errors-screen.test.ts`/`activity.test.ts` still call them |
-
-**Which test exercises production.** `__testing.makePanel` injects a `fetch` (the caller's or a fixture loader) unless `reads` is set, so `#feature()` returns `undefined` by default and `#bodyLines` renders through `renderScreenWith`. Panel body tests built on `makePanel` therefore exercise the fixture branch, never a `FeatureController`; a controller-path panel test must construct the panel without an injected `fetch`.
-
-**MetricRef**:
-A declared read of one figure — which payload, which field, which row (`src/layout/spec.ts`).
-The IR says what a tile measures; `src/layout/resolve.ts` says how that declaration reads against
-real data. A value that cannot be resolved is `null`, never a blank cell a human has to notice.
-_Not to be confused with_: a formatter. A ref names the value; a formatter decides how it reads.
-
-**Resolve**:
-The act of answering a `MetricRef` from a payload (`resolveCell` / `resolveNumber` /
-`resolveLabel` in `src/layout/resolve.ts`). This is the pure IR's value-resolution boundary;
-interactive controllers reuse upstream formatters for their own detail/list presentations.
-
-**Resolver**:
-The test harness's name for the same code: `test/parity.test.ts` calls the web's own functions
-and asserts the resolver answers identically on one shared fixture.
-
-**Parity**:
-Agreement with the web dashboard on the same input and reachable workflow. Fixture arithmetic parity
-(`test/parity.test.ts`) compares upstream functions and the resolver; it does not prove keyboard focus,
-selection, lazy details, paid judging or broker behavior. Full parity needs the mounted workflow matrix
-as well as integrated consumer-observable tests.
-_Not to be confused with_: pixel equivalence or source implementation. Neither proves exercised acceptance.
+**Which test exercises production.** `__testing.makePanel` builds a stub `PanelReads` from the
+passed `data` (or the caller's `reads`), so `#feature()` always resolves a real controller and
+`#bodyLines` renders `feature.render(...)`. Panel body tests built on `makePanel` therefore
+exercise the production controller path.
 
 **Symbol preset**:
 The person's choice of glyph repertoire — `unicode`, `nerd`, or `ascii`. It is a setting and never a
@@ -257,7 +222,7 @@ The width class a total terminal width falls into — `wide`, `medium`, `narrow`
 (`src/tui/responsive.ts`). Each band fixes what chrome the frame may spend: a full sidebar, an icon
 rail, or none; and a full, condensed or minimal topbar. The band is derived from the breakpoint table
 (`BREAKPOINTS` in `src/tui/layout.ts`) rather than restated beside it, so a retuned threshold flows
-through. Do not confuse it with a band in the layout IR, which is vertical space rather than width.
+through. Do not confuse it with a band in the drawing grammar, which is vertical space rather than width.
 
 **Frame policy**:
 One width's answer: its frame band, sidebar and topbar modes, column count and whether a hint row fits

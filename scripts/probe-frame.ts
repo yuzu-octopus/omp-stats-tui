@@ -21,6 +21,7 @@ const ANSI = /\x1b\[[0-9;]*m/g;
 const WIDTHS = [150, 100, 60, 40];
 const summary: string[] = [];
 const blocks: string[] = [];
+const panels: StatsPanel[] = [];
 
 /** The nav column's cells for the nav rows of the last frame. */
 const navCells = (panel: StatsPanel, width: number): { cells: readonly string[]; width: number } | null => {
@@ -38,6 +39,7 @@ const navCells = (panel: StatsPanel, width: number): { cells: readonly string[];
 
 for (const width of WIDTHS) {
 	const panel = __testing.makePanel({ data: liveData(), range: "30d", rows: 40 });
+	panels.push(panel);
 	await __testing.settled(panel);
 	const atRest = navCells(panel, width);
 	const frame = panel.render(width);
@@ -64,5 +66,6 @@ for (const width of WIDTHS) {
 		`--- FRAME@${width} @scroll${maxScroll} (body scrolled=${bodyMoved}, nav SCROLL-STABLE=${stable})\n${scrolled.join("\n")}`,
 	);
 }
+for (const panel of panels) panel.dispose();
 console.log(summary.join("\n"));
 console.log(blocks.join("\n\n"));

@@ -193,8 +193,8 @@ export const VALUE_WIDTH = 12;
 /**
  * `planLayout` is PURE in `(width, rows, preset)` and the panel calls it on every
  * render, so it memoizes. The returned plan is SHARED and must be treated as
- * read-only: the panel and the showcase panel spread it before overriding
- * `bodyRows`, and nothing writes into it.
+ * read-only: the panel spreads it before overriding `bodyRows`, and nothing
+ * writes into it.
  *
  * Bounded because a resize drag walks every width: past the limit the map is
  * cleared rather than growing for the life of the process. Clearing is safe —

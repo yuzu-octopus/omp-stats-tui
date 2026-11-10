@@ -1,24 +1,25 @@
 /**
- * Shared band drawing primitives for the pure IR and production metric/table widgets.
+ * Shared drawing primitives for production metric grids and measured tables.
  *
  * THE PROBLEM THIS FIXES. The panel read as a stack of text blocks with a
  * `───` rule above every section, which is what a terminal looks like when each
  * screen invented its own structure. `/usage` draws ZERO rules inside its body.
  * F21 found exactly four band shapes in the web dashboard; F23 turned them into
  * six invariants (G1–G6) that a renderer can follow without making a layout
- * decision. This module IS that renderer.
+ * decision. This module IS that renderer, and `features/presentation.ts` is its
+ * production consumer: controllers format their own values and pass them in, so
+ * the grammar owns geometry while the feature owns meaning.
  *
  * ── The invariants, and why each exists ─────────────────────────────────────
  *
  * **G1 — a band is a heading line plus body lines.** The heading is omitted for
- * `statRow` and `note` (G3) and present for `chart`, `table`.
+ * `statRow` (G3) and present for `table`.
  *
  * **G2 — the heading is** `` `${icon} ${boldAccent(title)}` `` with, when meta
  * exists, `  ${dim(meta)}` appended on THE SAME LINE. Never a rule.
  *
- * **G3 — `statRow` and `note` have no heading and no icon.** They are the page's
- * first line and its inline caveat, mirroring F21's `StatGrid` sitting directly
- * under `PageHeader` and the web's prose caveats (`CostsRoute.tsx:77`).
+ * **G3 — `statRow` has no heading and no icon.** It is the page's first line,
+ * mirroring F21's `StatGrid` sitting directly under `PageHeader`.
  *
  * **G4 — exactly one blank line between consecutive bands.** No leading blank,
  * no trailing blank, no doubles. A band that renders nothing contributes
@@ -35,32 +36,26 @@
  * **G6 — the only rule in the whole panel is the `PanelDivider` between body and
  * footer**, exactly as `usage-dashboard.ts:573` has exactly one.
  *
- * `legend` is the deliberate exception to G4: in the web a legend lives INSIDE
- * the chart card, directly beneath it (`OverviewRoute.tsx:181-244`). So it is a
- * continuation — no heading, no blank line before, one after.
- *
  * ── Why `bands` is a parameter and not part of the data contract ────────────
  * F23's seam is deliberate. Putting presentation on the data contract would let
  * any screen bypass the grammar by returning pre-rendered lines — which is the
  * exact failure being fixed. The data contract is deliberately NOT extended;
  * bands are passed in beside it.
  *
- * ── Why the types below are declared here and not imported ─────────────────
- * `src/layout/spec.ts` is owned by another agent and is in flux, so importing
- * from it would make this file's compilation depend on their schedule. The
- * shapes below are MINIMAL STRUCTURAL mirrors of the IR's union: same fields,
- * same discriminants, no extra constraint, so they are assignable in both
- * directions and the two definitions can be reconciled without churn.
+ * ── Why the types below are declared here ──────────────────────────────────
+ * The shapes are minimal and structural: a controller formats its own values
+ * and hands them over as strings, so the grammar never needs to know which
+ * payload a tile came from. Keeping the types here also keeps the drawing layer
+ * free of any dependency on the feature layer that calls it.
  */
 
 import type { ThemeColor } from "@oh-my-pi/pi-tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatPercent } from "./format";
 import { glyph, type GlyphSet, type SymbolPreset } from "./glyphs";
 import { statsIcon, type IconRole } from "./icons";
-import { PALETTE, SERIES_COLORS } from "./palette";
+import { PALETTE } from "./palette";
 
-// ─── Minimal structural types (mirror the IR; see the header note) ───────────
+// ─── Minimal structural types (see the header note) ───────────────────────────
 
 export interface StatTile {
 	label: string;
@@ -73,12 +68,6 @@ export interface StatTile {
 	spark?: readonly number[];
 }
 
-export interface ChartSpec {
-	type: "bars" | "heatmap" | "sparkline" | "rankedBars" | "shareBar";
-	/** Human bucket label; becomes the heading meta when `source` is absent. */
-	axis?: string;
-	render: () => readonly string[];
-}
 export interface Column {
 	key: string;
 	header: string;
@@ -99,21 +88,11 @@ export interface Column {
 	priority?: number;
 }
 
-export type RowSource =
-	| { kind: "inline"; rows: readonly Record<string, string>[] }
-	| { kind: "series"; series: readonly Record<string, string>[] };
-
-export interface LegendItem {
-	label: string;
-	share: number;
-}
+export type RowSource = { kind: "inline"; rows: readonly Record<string, string>[] };
 
 export type Band =
 	| { kind: "statRow"; stats: readonly StatTile[] }
-	| { kind: "chart"; title: string; chart: ChartSpec; source?: string; preset?: SymbolPreset }
-	| { kind: "table"; title: string; columns: readonly Column[]; rows: RowSource; source?: string; selectedRow?: number }
-	| { kind: "legend"; items: readonly LegendItem[]; source?: string }
-	| { kind: "note"; text: string }
+	| { kind: "table"; title: string; columns: readonly Column[]; rows: RowSource; source?: string; selectedRow?: number };
 
 // ─── Colour ──────────────────────────────────────────────────────────────────
 
@@ -131,15 +110,6 @@ export type Band =
  * invite them to drift apart, and at terminal font sizes the distinction a
  * designer would draw is invisible.
  */
-
-/**
- * The colour of the Nth chart series. Cycling `SERIES_COLORS` means a chart
- * series and an omp status segment share a hue identity, because both are drawn
- * from the same list.
- */
-function seriesToken(ctx: BandRenderOptions, index: number): ThemeColor {
-	return ctx.seriesColorFor?.(index) ?? SERIES_COLORS[index % SERIES_COLORS.length];
-}
 
 export interface BandRenderOptions {
 	/** Outer width. No rendered row may exceed it. */
@@ -161,12 +131,6 @@ export interface BandRenderOptions {
 	fg: (color: ThemeColor, text: string) => string;
 	/** The theme's `bold`. Weight is an emphasis, not a colour. */
 	bold: (text: string) => string;
-	/**
-	 * Series colours for multi-series charts, already resolved to theme tokens
-	 * by the caller. Web parity: the dashboard assigns hues by RANK
-	 * (`buildColorLookup`), so the same key keeps the same hue across charts.
-	 */
-	seriesColorFor?: (index: number) => ThemeColor;
 	barHeight: number;
 	labelWidth: number;
 	valueWidth: number;
@@ -204,7 +168,7 @@ const TILE_GUTTER = 2;
 const TILE_MAX_WIDTH = 34;
 
 /** The icon each headed band kind carries (F23 §2.3). */
-const BAND_ICONS: Record<"chart" | "table", IconRole> = { chart: "time", table: "requests" };
+const BAND_ICONS: Record<"table", IconRole> = { table: "requests" };
 
 /**
  * How wide one tile must be: the widest line it owns, clamped to the ceiling.
@@ -327,7 +291,7 @@ function renderStatRow(stats: readonly StatTile[], ctx: BandRenderOptions): read
 
 			// Host parity: `/usage` tints a full/pressured figure by status
 			// (#statusColor, usage-dashboard.ts:617-621). The primary value is the
-			// tile the reader lands on, so it carries the emphasis the IR already
+			// tile the reader lands on, so it carries the emphasis the caller
 			// declares: bold + primary. Secondary values stay `label`.
 			const value = tile.emphasis === "primary"
 				? ctx.bold(ctx.fg(PALETTE.primary, tile.value))
@@ -366,7 +330,7 @@ function renderStatRow(stats: readonly StatTile[], ctx: BandRenderOptions): read
 		// old code emitted a blank line anyway. Interior to a multi-row grid that
 		// blank was doubled by the next tile row, and at the end of a band it was
 		// doubled by G4's separator: two consecutive blanks, which read as a section
-		// break that is not there (`test/render-screen.test.ts` asserts none). The
+		// break that is not there. The
 		// errors and tools screens both hit it, each with two tile rows where the
 		// first carried no hint.
 		//
@@ -385,20 +349,6 @@ function renderStatRow(stats: readonly StatTile[], ctx: BandRenderOptions): read
 		lines.push(...rows.slice(0, end));
 	}
 	return lines;
-}
-
-/**
- * `chart` — heading, then the chart's own rows verbatim. Zero rows of overhead:
- * the chart contributes only its marks (F23 §2.3).
- */
-function renderChart(band: Extract<Band, { kind: "chart" }>, ctx: BandRenderOptions): readonly string[] {
-	const preset = band.preset ?? ctx.preset;
-	// `source` wins; otherwise state the axis, which is what the web puts in
-	// the card description ("Per hour", "Per UTC day"). Stating it beats a chart
-	// that silently picks one (F23 §2.3).
-	const meta = band.source ?? band.chart.axis ?? "";
-	const body = band.chart.render().map((row) => clamp(row, ctx.innerWidth));
-	return body.length === 0 ? [] : [heading(BAND_ICONS.chart, band.title, meta, preset, ctx), ...body];
 }
 
 /**
@@ -475,7 +425,7 @@ function fitColumns(
 
 /** `table` — heading, header row, and every fetched data row for panel scrolling. */
 function renderTable(band: Extract<Band, { kind: "table" }>, ctx: BandRenderOptions): readonly string[] {
-	const all = band.rows.kind === "inline" ? band.rows.rows : band.rows.series;
+	const all = band.rows.rows;
 	if (band.columns.length === 0 || all.length === 0) return [];
 
 	// Steps 1 and 2 of the policy above. `width` is a hard ceiling the caller may
@@ -535,42 +485,6 @@ function renderTable(band: Extract<Band, { kind: "table" }>, ctx: BandRenderOpti
 	];
 }
 
-/**
- * `legend` — a CONTINUATION, not a band: no heading and no blank line before it
- * (G4's one deliberate exception), because in the web a legend lives inside the
- * chart card, directly beneath it (`OverviewRoute.tsx:181-244`). A terminal that
- * put a gap there would be reading the source less carefully than the browser
- * did (F23 §2.2).
- *
- * Shares sit in a fixed right-hand column so the decimal points line up.
- *
- * The swatch is ONE glyph. Two was a bar, not a key: the reader saw a magnitude
- * where the web's `.swatch` shows a single coloured square, and the extra cell
- * pushed the label one column right of where the chart's own row put it. The
- * COLOUR is what identifies the series; the glyph only has to exist.
- */
-function renderLegend(band: Extract<Band, { kind: "legend" }>, ctx: BandRenderOptions): readonly string[] {
-	if (band.items.length === 0) return [];
-	const labelWidth = Math.max(...band.items.map((i) => i.label.length));
-	const SHARE_COL = 7;
-
-	return band.items.map((item, index) => {
-		// Each swatch wears its OWN series colour, so a legend key is the same
-		// hue as its series elsewhere on the page — the web's `Legend` and ours
-		// are the same object for exactly this reason.
-		const swatch = ctx.fg(seriesToken(ctx, index), glyph(ctx.preset, "barFill"));
-		const label = ctx.fg(PALETTE.muted, padEndTo(item.label, labelWidth));
-		const share = padStartTo(formatPercent(item.share), SHARE_COL);
-		return clamp(`${swatch} ${label} ${share}`, ctx.width).trimEnd();
-	});
-}
-
-/** `note` — one dim line. Where "this is not a zero" and the unpriced caveat go. */
-function renderNote(band: Extract<Band, { kind: "note" }>, ctx: BandRenderOptions): readonly string[] {
-	if (band.text === "") return [];
-	return [clamp(ctx.fg(PALETTE.dim, band.text), ctx.width)];
-}
-
 /** G2: `${icon} ${boldAccent(title)}` plus `  ${dim(meta)}` on the same line. */
 function heading(
 	icon: IconRole,
@@ -599,23 +513,10 @@ export function renderBands(bands: readonly Band[], ctx: BandRenderOptions): rea
 	const lines: string[] = [];
 
 	for (const band of bands) {
-		const body =
-			band.kind === "statRow"
-				? renderStatRow(band.stats, ctx)
-				: band.kind === "chart"
-					? renderChart(band, ctx)
-					: band.kind === "table"
-						? renderTable(band, ctx)
-						: band.kind === "legend"
-							? renderLegend(band, ctx)
-							: renderNote(band, ctx);
-
+		const body = band.kind === "statRow" ? renderStatRow(band.stats, ctx) : renderTable(band, ctx);
 		if (body.length === 0) continue;
-
-		// G4: a continuation (legend) follows its chart directly; every other
-		// band is separated by one blank line.
-		const isContinuation = band.kind === "legend";
-		if (!isContinuation && lines.length > 0) lines.push("");
+		// G4: exactly one blank line between consecutive bands.
+		if (lines.length > 0) lines.push("");
 		lines.push(...body);
 	}
 

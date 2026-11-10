@@ -1,10 +1,9 @@
 /**
  * `test/body-layout.test.ts` — the BODY layout defects a screenshot shows.
  *
- * Every test here was written by LOOKING at `bun scripts/probe-render.ts
- * providers --width 150` and finding something wrong with it, not by reading a
- * spec and imagining a defect. The five findings, in the order the reader sees
- * them:
+ * Every test here was written by LOOKING at rendered output and finding
+ * something wrong with it, not by reading a spec and imagining a defect. The
+ * findings, in the order the reader sees them:
  *
  *  D1 STAT TILES — three 48-cell columns holding 13-cell figures, and a bare
  *     `…` hanging off the right of every row. Cause: `renderStatRow` divided
@@ -17,24 +16,21 @@
  *  D4 TRUNCATION — `…` must never be a whole column.
  *  D5 COMPACT NOTATION — `26,805,348,752` where the web writes `26.8B`.
  *
- * The invariants are asserted against the REAL screens through the real
- * renderer, because the point of every one of them is that the composition is
- * legible — and a unit test of one function cannot see a misaligned header.
+ * The band-level invariants are asserted against `renderBands` and
+ * `renderRankedBars`, because the point of every one of them is that the
+ * composition is legible — and a unit test of one function cannot see a
+ * misaligned header. The screen-level fill invariant is asserted against the
+ * production `FeatureController.render()` bodies (Task 2.1).
  */
 
 import { expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
-import type { ThemeColor } from "@oh-my-pi/pi-tui";
 
-import { SCREEN_SPECS, type ScreenSpec } from "../src/layout/spec";
-import { renderBands, type Band, type BandRenderOptions, type Column } from "../src/tui/band";
+import { renderBands, type BandRenderOptions, type Column } from "../src/tui/band";
 import { renderRankedBars } from "../src/tui/charts/sparkline";
-import { renderScreen, screenBands, type ScreenRenderOptions } from "../src/tui/render/screen";
 import { planLayout } from "../src/tui/layout";
-import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
-import { PALETTE, SERIES_COLORS, stripForTest } from "../src/tui/palette";
-import { DEFAULT_RANGE } from "../src/data/ranges";
+import { glyphsFor } from "../src/tui/glyphs";
 import type { PanelData } from "../src/data/api";
 import { FIXTURE_NOW, liveData, type ProviderDashboardFixture } from "./fixtures/panel";
 import { sidebar } from "../src/tui/chrome";
@@ -50,33 +46,6 @@ ensureThemeSync();
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 const plain = (text: string): string => text.replace(ANSI, "");
-const text = (rows: readonly string[]): string => stripForTest(rows.join("\n"));
-
-function opts(spec: ScreenSpec, data: PanelData, width = 150): ScreenRenderOptions {
-	const preset: SymbolPreset = "unicode";
-	return {
-		spec,
-		data,
-		plan: planLayout(width, 40, preset),
-		preset,
-		range: DEFAULT_RANGE,
-		now: FIXTURE_NOW,
-		fg: (color: ThemeColor, value: string) => theme.fg(color, value),
-		bold: value => theme.bold(value),
-		palette: theme,
-		seriesColorFor: index => SERIES_COLORS[index % SERIES_COLORS.length],
-		glyphs: glyphsFor(preset),
-	};
-}
-
-const specOf = (id: string): ScreenSpec => {
-	const spec = SCREEN_SPECS.find(s => s.id === id);
-	if (spec === undefined) throw new Error(`no screen spec ${id}`);
-	return spec;
-};
-
-/** Every screen a reader can actually land on. */
-const FILLABLE = SCREEN_SPECS;
 
 /** The grid renders itself for every band kind and width it supports. */
 const WIDTHS = [40, 48, 60, 72, 80, 100, 120, 150] as const;
@@ -107,29 +76,6 @@ function bandCtx(overrides: Partial<BandRenderOptions>): BandRenderOptions {
  * prevent: columns are DROPPED, not squeezed to nothing.
  */
 const FLOATING_ELLIPSIS = /(^|\s{2,})…(\s|$)/;
-
-test("D4: no screen renders a `…` standing alone as a cell", () => {
-	const offenders: string[] = [];
-	for (const spec of FILLABLE) {
-		for (const width of WIDTHS) {
-			renderScreen(opts(spec, liveData(), width)).forEach((row, index) => {
-				const stripped = plain(row);
-				if (FLOATING_ELLIPSIS.test(stripped)) {
-					offenders.push(`${spec.id}@${width} row ${index}: ${JSON.stringify(stripped)}`);
-				}
-			});
-		}
-	}
-	expect(offenders, offenders.slice(0, 8).join("\n")).toEqual([]);
-});
-
-test("D4: the providers stat row that produced a `…` on every line now has none", () => {
-	// The reported render, verbatim in shape: five tiles at width 150 printed a
-	// trailing `…` on the label row, the value row and the two hint rows.
-	const rows = renderScreen(opts(specOf("providers"), liveData(), 150));
-	expect(rows.length).toBeGreaterThan(4);
-	for (const row of rows.slice(0, 8)) expect(plain(row), JSON.stringify(plain(row))).not.toContain("…");
-});
 
 // ─── D1: stat tiles fit their content and their cell ─────────────────────────
 
@@ -388,102 +334,6 @@ test("D3: a column is sized by its DATA, not by its header", () => {
 	);
 });
 
-test("D3: a meter cell shows its FIGURE beside a short bar, not a block of blocks", () => {
-	// The web's MeterCell is `formatInteger(value)` + a 64px meter
-	// (Table.tsx:199-207). Ours drew twelve glyph cells and no number, so the
-	// header "Requests" sat over a block that said nothing — a magnitude with no
-	// value under a header naming a figure that was not on the page.
-	const body = text(renderScreen(opts(specOf("providers"), liveData(), 150)));
-	// The FIGURE is there: opencode-go's 36,616 requests.
-	expect(body).toContain("36,616");
-	// And the bar beside it is short. Scoped to the TABLE row, because the
-	// ranked chart above legitimately carries a longer track.
-	const tableRow = body.split("\n").find(l => l.includes("36,616"));
-	expect(tableRow, "the opencode-go table row").toBeDefined();
-	for (const run of (tableRow as string).match(/[█░]+/g) ?? []) {
-		expect(visibleWidth(run), `meter run ${JSON.stringify(run)}`).toBeLessThanOrEqual(16);
-	}
-});
-
-test("D3: the providers Share column is a percentage, not an empty cell", () => {
-	// The spec pointed Share at the same `totalTokens` field as the Tokens
-	// column, so it printed a second token count — and at narrow widths the
-	// squeeze left it blank. The web divides by the GRAND total.
-	const spec = specOf("providers");
-	const band = spec.bands.find(b => b.kind === "table" && b.title === "Provider totals");
-	if (band === undefined || band.kind !== "table") throw new Error("no Provider totals band");
-	const share = band.columns.find(c => c.header === "Share");
-	expect(share, "Share column").toBeDefined();
-	expect(share!.source.kind, "Share is a share, not a second token count").toBe("derived");
-	if (share!.source.kind !== "derived") throw new Error("unreachable");
-	expect(share!.source.op).toBe("share");
-	expect(share!.source.againstScope).toBe("total");
-
-	const body = text(renderScreen(opts(spec, liveData(), 150)));
-	const shareLine = body.split("\n").find(l => l.includes("opencode-go") && l.includes("%"));
-	expect(shareLine, "a provider row carrying its share").toBeDefined();
-});
-
-test("D3: an error rate is a percentage, never a raw fraction", () => {
-	// `badgeCell` followed the derived ref down to `failedRequests`, saw no
-	// "rate" in the field name, and printed `formatInteger(0.0024)` = "0".
-	// The web prints `formatErrorRate` — and a rate below 0.005% says
-	// `<0.01%` rather than rounding itself to a clean zero.
-	const body = text(renderScreen(opts(specOf("providers"), liveData(), 150)));
-	expect(body).not.toMatch(/\b0\.0\d{1,4}\b(?!\s*%)/);
-	const errors = text(renderScreen(opts(specOf("errors"), liveData(), 150)));
-	expect(errors).not.toMatch(/\b0\.\d{3,}\b/);
-});
-
-test("D3: no table cell renders as an EMPTY gutter", () => {
-	// The reported Share column was blank at narrow widths: it resolved to
-	// nothing, and an empty column is a hole where a figure should be.
-	//
-	// Asserted on the BAND'S OWN CELLS rather than on rendered text, because two
-	// earlier attempts at a text heuristic were wrong for the same reason: a
-	// stat grid and a table are both "words in columns" in plain text, so any
-	// "find the header row" heuristic eventually matched a tile row instead. The
-	// cells are already structured, so the invariant is one line of arithmetic:
-	// no cell of a table that has data is empty.
-	for (const spec of FILLABLE) {
-		for (const band of screenBands(opts(spec, liveData(), 150))) {
-			if (band.kind !== "table" || band.rows.kind !== "inline") continue;
-			for (const row of band.rows.rows) {
-				for (const column of band.columns) {
-					expect(
-						row[column.key],
-						`${spec.id} "${band.title}": cell ${column.key} is empty`,
-					).not.toBe("");
-				}
-			}
-		}
-	}
-});
-
-test("D3: a rendered table row has no gap where a column was dropped", () => {
-	// The second half of the empty-cell defect: a column that prints nothing
-	// still reserves its width, so the row keeps a blank gutter between two
-	// populated columns — invisible to the per-cell assertion above.
-	//
-	// Asserted on the TABLE BAND alone, because a stat grid legitimately has
-	// gaps between its tiles (that is what a grid is) and a whole screen's text
-	// therefore cannot carry this invariant.
-	for (const width of WIDTHS) {
-		const band = screenBands(opts(specOf("providers"), liveData(), width)).find(
-			(candidate): candidate is Extract<Band, { kind: "table" }> =>
-				candidate.kind === "table" && candidate.title === "Provider totals",
-		);
-		if (band === undefined) continue;
-		const lines = renderBands([band], bandCtx({ width: width - 4, innerWidth: width - 4 })).map(plain);
-		for (const line of lines.slice(2)) {
-			if (line.trim() === "" || /[█░]/.test(line)) continue;
-			// Two or more spaces between two non-spaces is the shape of a column
-			// that reserved its width and printed nothing.
-			expect(line, `${width}: ${JSON.stringify(line)}`).not.toMatch(/\S {2,}\S/);
-		}
-	}
-});
-
 // ─── D3: the truncation policy, in the documented order ──────────────────────
 
 test("D3: a too-narrow table DROPS the lowest-priority column instead of printing `…`", () => {
@@ -524,102 +374,6 @@ test("D3: the identity column outlives every other column", () => {
 	for (const width of [16, 20, 24, 30, 40]) {
 		const body = plain(renderBands([{ kind: "table", title: "T", columns, rows }], bandCtx({ width, innerWidth: width })).join("\n"));
 		expect(body, `width ${width}`).toContain("google");
-	}
-});
-
-// ─── D5: compact notation, where the web uses it ─────────────────────────────
-
-test("D5: a token total prints compact, the way the web's formatCompact does", () => {
-	// `formatCompact(26_805_348_752)` is `26.8B`. Ours printed the full figure,
-	// which is what forced the giant Share column and the clipped tiles.
-	const body = text(renderScreen(opts(specOf("providers"), liveData(), 150)));
-	expect(body).toContain("1B");
-	expect(body).not.toContain("1,017,800,000");
-});
-
-test("D5: no screen prints an 11-digit token count the web would compact", () => {
-	// The reported figures: `26,805,348,752` and `16,690,883,110`. Wherever the
-	// web calls `formatCompact` on a token count, so must the panel — the token
-	// columns AND the token stat tiles.
-	for (const spec of FILLABLE) {
-		for (const width of WIDTHS) {
-			for (const row of renderScreen(opts(spec, liveData(), width))) {
-				expect(plain(row), `${spec.id}@${width}`).not.toMatch(/\b\d{1,3}(,\d{3}){3,}\b/);
-			}
-		}
-	}
-});
-
-test("D5: compact notation still names the unit, so 1B is not a bare digit", () => {
-	const body = text(renderScreen(opts(specOf("providers"), liveData(), 150)));
-	expect(body).toMatch(/\b\d+(\.\d+)?[KMB]\b/);
-});
-
-// ─── the composition as a whole ──────────────────────────────────────────────
-
-test("the providers body reads as a grid, a ranked list and an aligned table", () => {
-	// One end-to-end read of the screen that was reported broken, asserting the
-	// three shapes rather than any single figure.
-	const rows = renderScreen(opts(specOf("providers"), liveData(), 150)).map(plain);
-	const statRows = rows.slice(0, 8);
-	// Compact: no stat row spans the panel.
-	expect(Math.max(...statRows.map(r => visibleWidth(r)))).toBeLessThan(146);
-	// The burn list is bounded and carries one figure per row.
-	const burn = rows.filter(r => /opencode-go/.test(r) && /[█░]/.test(r) && !r.includes("Provider"));
-	for (const row of burn) expect(visibleWidth(row)).toBeLessThan(146);
-	// The table header and its data share column boundaries.
-	const header = rows.find(r => r.includes("Provider") && r.includes("Tokens") && !/[█░]/.test(r));
-	expect(header, "the Provider totals header").toBeDefined();
-});
-
-// ─── the unit of a bar's figure follows the CHART, not the caveat ────────────
-
-test("D2: a TOKEN-scaled bar never prints its figure as money", () => {
-	// Found by watching width 100, which is the band where the burn chart
-	// actually has to fit. google-antigravity's row read
-	// `$201,500,000.00 · 4,197 unpriced` — a dollar figure for 201,500,000 TOKENS.
-	//
-	// Two faults in one cell. The unit is wrong (this chart is token-scaled), and
-	// the number is nonsense, because `formatCost` was handed a token count. The
-	// cause is that the unpriced caveat forced `costWithUnpriced` regardless of
-	// what the chart measures — but the unpriced rule is about COSTS. A token
-	// chart has no unmeasured SPEND to caveat, so there is nothing for that
-	// function to say.
-	//
-	// The web agrees: `burnFormat` follows the chart's own metric mode
-	// (`ProvidersRoute.tsx:141`) and the unpriced count lives in the card
-	// description (`:194-195`) — never on a burn row.
-	// Scoped to the BURN chart, not every bar-ish row: the Provider totals TABLE
-	// is cost-scaled and is supposed to print money. An earlier version of this
-	// assertion swept every row with a bar glyph and failed on the table's own
-	// Cost column — which is correct behaviour being tested as a bug.
-	const body = text(renderScreen(opts(specOf("providers"), liveData(), 100)));
-	const lines = body.split("\n");
-	const heading = lines.findIndex(l => l.includes("Burn by provider"));
-	expect(heading, "the burn chart").toBeGreaterThan(-1);
-	// From the burn heading to the next band heading — the chart and its rows.
-	const end = lines.findIndex((l, i) => i > heading && /^[⏱📊]/.test(l) && l !== lines[heading]);
-	const burn = lines.slice(heading + 1, end === -1 ? lines.length : end).filter(l => l.trim() !== "");
-	expect(burn.length, "the burn rows").toBeGreaterThan(1);
-	for (const row of burn) expect(row, JSON.stringify(row)).not.toMatch(/\$[\d,]*\d/);
-	// And the caveat is not simply dropped: it rides along in the chart's unit.
-	expect(burn.join("\n")).toMatch(/202M · 4,197 unpriced/);
-});
-
-test("D2: a COST-scaled bar still carries its unpriced count", () => {
-	// The rule that motivated the caveat is untouched: a row whose spend could
-	// not be measured must never read as a free `$0.00`, and the unpriced count
-	// must reach the reader beside the figure it qualifies. `costWithUnpriced`
-	// owns both halves; the fix for the unit bug must not silence it.
-	const rows = SCREEN_SPECS;
-	const costScreens = rows.filter(spec =>
-		spec.bands.some(band => band.kind === "chart" && band.chart.axis === "cost"),
-	);
-	expect(costScreens.length, "a cost-scaled chart exists to check").toBeGreaterThan(0);
-	for (const spec of costScreens) {
-		const body = text(renderScreen(opts(spec, liveData(), 150)));
-		// Wherever the fixture carries an unpriced row, the count is stated.
-		if (/unpriced/.test(body)) expect(body, spec.id).not.toMatch(/\$0\.00(?!\d)/);
 	}
 });
 

@@ -26,7 +26,7 @@ import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import { TabBar } from "@oh-my-pi/pi-tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 
-import { SCREEN_SPECS } from "../src/layout/spec";
+import { SCREENS } from "../src/tui/screens/types";
 import { TAB_SHORT, buildTabs, tabBarTheme } from "../src/tui/tabs";
 import { TAB_INK } from "../src/tui/palette";
 import { __testing, panelAction, type PanelAction } from "../src/tui/panel";
@@ -63,10 +63,10 @@ test("every TAB_SHORT entry is exactly one cell on every preset", () => {
 test("every spec has a tab", () => {
 	const tabs = buildTabs("unicode", theme, "overview");
 	const ids = tabs.map(tab => tab.id);
-	for (const spec of SCREEN_SPECS) {
+	for (const spec of SCREENS) {
 		expect(ids, spec.id).toContain(spec.id);
 	}
-	expect(ids).toEqual(SCREEN_SPECS.map(spec => spec.id));
+	expect(ids).toEqual(SCREENS.map(spec => spec.id));
 });
 
 test("the strip is ONE row at width 80 on every preset", () => {
@@ -104,9 +104,9 @@ test("the strip's active tab follows panelAction, and handleInput is never consu
 		// used to be this step and now drive the range control instead.
 		const action = panelAction("\t");
 		expect(action).toEqual({ type: "screen", by: 1 } satisfies PanelAction);
-		const next = SCREEN_SPECS[
-			(SCREEN_SPECS.findIndex(spec => spec.id === start) + 1) %
-			SCREEN_SPECS.length
+		const next = SCREENS[
+			(SCREENS.findIndex(spec => spec.id === start) + 1) %
+			SCREENS.length
 		];
 		// setActiveById is the external-sync path and does NOT fire onTabChange,
 		// which is what we want: panelAction already decided the change.

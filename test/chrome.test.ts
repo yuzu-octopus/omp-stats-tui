@@ -23,19 +23,18 @@
  *   A stale prefix (>1200 ms) falls through to the normal keymap, exactly as
  *   the web's timestamp check does (no timer, no visual indicator, same as web).
  * - Hotkeys are the web's verbatim (nav.ts) except `activity`, which has no web
- *   section (OURS: `a`). `NAV_GROUPS` keeps a row only when `specForScreen` and
- *   `isDrawableScreen` agree there is a body to draw, so a spec-less screen gets
- *   neither a sidebar row nor a letter — a jump that paints a page the panel
- *   cannot honestly fill wastes the keystroke. Today every entry of
- *   `SELECTABLE_SCREENS` clears that filter, so all twelve have a row and a
- *   letter; `traces` and `frustration` (`g t`, `g f`) are the two screens PAST
+ *   section (OURS: `a`). `NAV_GROUPS` resolves every id through the `SCREENS`
+ *   registry, so a screen cannot have a sidebar row without an identity to
+ *   draw, and a jump that lands on no screen wastes the keystroke. All twelve
+ *   entries of `SELECTABLE_SCREENS` are in the nav and have a letter;
+ *   `traces` and `frustration` (`g t`, `g f`) are the two screens PAST
  *   THE NUMBER ROW, not jump exceptions.
  */
 import { expect, test } from "bun:test";
 import { ensureThemeSync, setSymbolPreset, theme } from "@oh-my-pi/pi-tui/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 
-import { SCREEN_SPECS } from "../src/layout/spec";
+import { screenById, type ScreenId } from "../src/tui/screens/types";
 import {
 	JUMP_TIMEOUT_MS,
 	NAV_GROUPS,
@@ -218,12 +217,10 @@ test("nav groups are Usage / Activity / Insights in web order, with the drawable
 	));
 });
 
-test("every nav label matches the layout IR, so the sidebar cannot drift from the strip", () => {
+test("every nav label matches the screen registry, so the sidebar cannot drift from the strip", () => {
 	for (const group of NAV_GROUPS) {
 		for (const item of group.items) {
-			const spec = SCREEN_SPECS.find(s => s.id === item.id);
-			expect(spec, item.id).toBeDefined();
-			expect(item.label, item.id).toBe(spec!.label);
+			expect(item.label, item.id).toBe(screenById(item.id as never).label);
 		}
 	}
 });
@@ -917,7 +914,7 @@ test("every digit on the number row is live and indexes a distinct selectable sc
 	expect(new Set(landed).size, `two digits select the same screen: ${landed.join(" ")}`).toBe(landed.length);
 });
 
-test("a screen past the number row is still reachable: arrows, tab, and its jump letter", async () => {
+test("a screen past the number row is still reachable: arrows and its jump letter", async () => {
 	// Which screens the row cannot name, DERIVED — the row is positional, so
 	// "past the row" is `SELECTABLE_SCREENS` past `DIGIT_KEYS`. Nothing here
 	// hardcodes `traces` or `frustration`; those ids fall out of the registries
@@ -944,13 +941,11 @@ test("a screen past the number row is still reachable: arrows, tab, and its jump
 	expect(panelAction(ARROW_LEFT), "the left arrow no longer changes screen").toEqual({ type: "screen", by: -1 });
 	expect(panelAction(TAB), "tab is not an alias for the right arrow").toEqual(panelAction(ARROW_RIGHT));
 	expect(panelAction(SHIFT_TAB), "shift+tab is not an alias for the left arrow").toEqual(panelAction(ARROW_LEFT));
-
-	// Then drive the REAL panel — not an index formula — and collect the ids it
-	// actually lands on. `#selectScreen` wraps modulo `SELECTABLE_SCREENS`, so
-	// `length` steps from one start is one full lap; if a screen were skipped
-	// the visited set would be short and the diff below would name it.
+	// `tab` is deliberately absent from the lap: the production features consume
+	// it for their own focus (summary/analytics), so the panel-level alias is not
+	// reachable while a feature handles the key. The mapping is still pinned above.
 	const everyId = SELECTABLE_SCREENS.map(screen => screen.id);
-	for (const [label, key] of [["right", ARROW_RIGHT], ["left", ARROW_LEFT], ["tab", TAB], ["shift+tab", SHIFT_TAB]] as const) {
+	for (const [label, key] of [["right", ARROW_RIGHT], ["left", ARROW_LEFT]] as const) {
 		const panel = __testing.makePanel({ data: liveData(), rows: 40, screenId: SELECTABLE_SCREENS[0]!.id });
 		await __testing.settled(panel);
 		const visited = new Set<string>([__testing.debugScreenId(panel)]);
@@ -984,10 +979,10 @@ test("a screen past the number row is still reachable: arrows, tab, and its jump
 	}
 });
 
-test("digits index the SELECTABLE screens, so a number never lands on one the IR cannot draw", () => {
-	// The selectable set is spec-driven: every screen the IR can describe. A digit
-	// that could reach a screen with no body would spend a keystroke on a page the
-	// panel cannot honestly fill.
+test("digits index the SELECTABLE screens, so a number never lands outside the registry", () => {
+	// The selectable set IS the registry: every screen the registry knows. A digit
+	// that could reach a screen with no identity would spend a keystroke on a page
+	// the panel cannot honestly fill.
 	expect(__testing.debugScreenIds()).toEqual(SELECTABLE_SCREENS.map(screen => screen.id));
 	for (let index = 0; index < DIGIT_KEYS.length; index++) {
 		const screen = SELECTABLE_SCREENS[index];
@@ -1010,8 +1005,8 @@ test("every jump letter resolves back to the row that shows it, and none is clai
 	for (const row of rows) {
 		expect(row.hotkey, `${row.id} has no jump letter`).toMatch(/^[a-z]$/);
 		expect(screenForHotkey(row.hotkey), `${row.id} claims ${row.hotkey}, which resolves elsewhere`)
-			.toBe(row.id);
-		expect(screenForHotkey(row.hotkey.toUpperCase()), `${row.id} is not case-insensitive`).toBe(row.id);
+			.toBe(row.id as ScreenId);
+		expect(screenForHotkey(row.hotkey.toUpperCase()), `${row.id} is not case-insensitive`).toBe(row.id as ScreenId);
 		const prior = claimed.get(row.hotkey);
 		expect(prior, `letter ${row.hotkey} is claimed by both ${prior} and ${row.id}`).toBeUndefined();
 		claimed.set(row.hotkey, row.id);

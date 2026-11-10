@@ -1,32 +1,22 @@
 /**
- * `test/screens.test.ts` — ONE screen list, and the test that says so.
+ * `test/screens.test.ts` — ONE screen registry, and the test that says so.
  *
- * WHAT THIS FILE PINS. Two modules used to answer "is this a screen?" from the
- * same two inputs — the `SCREENS` registry and the `SCREEN_SPECS` table — with
- * two different rules:
+ * WHAT THIS FILE PINS. Two modules answer "is this a screen?" from the same
+ * input — the `SCREENS` registry — with no second rule:
  *
- *   - `panel.ts`'s `SELECTABLE_SCREENS` filtered the registry to ids with a
- *     spec;
- *   - `chrome.ts`'s `NAV_GROUPS` filtered a hand-written group map to ids with a
- *     spec AND a jump hotkey.
+ *   - `panel.ts`'s `SELECTABLE_SCREENS` IS `SCREENS`;
+ *   - `chrome.ts`'s `NAV_GROUPS` resolves every id through `screenById`.
  *
- * Nothing connected them. Each was internally consistent, so the failure mode was
- * silent and asymmetric: a screen could become arrow-selectable while vanishing
- * from the sidebar, or appear in the nav with no body to draw, and every test in
- * the suite would still pass because each module was only ever compared with
- * itself. That is the class of duplication that let a real bug survive several
- * passes here.
- *
- * Both now derive from {@link isDrawableScreen}. These tests are the reason that
- * stays true.
+ * Nothing connects them except the registry, so a screen cannot be
+ * arrow-selectable while missing from the sidebar, or present in the sidebar
+ * with no identity to draw. These tests are the reason that stays true.
  */
 
 import { expect, test } from "bun:test";
 
 import { NAV_GROUPS, screenForHotkey } from "../src/tui/chrome";
-import { SELECTABLE_SCREENS, panelAction, specById } from "../src/tui/panel";
-import { SCREENS, screenById } from "../src/tui/screens/types";
-import { isDrawableScreen, specForScreen, SCREEN_SPECS } from "../src/layout/spec";
+import { SELECTABLE_SCREENS, panelAction } from "../src/tui/panel";
+import { SCREENS, screenById, type ScreenId } from "../src/tui/screens/types";
 
 // ---------------------------------------------------------------------------
 // The drift assertion — the whole point
@@ -57,15 +47,15 @@ test("the two sets are equal in MEMBERSHIP, and that is the only equality claime
 	expect(inNav).toEqual(selectable);
 });
 
-test("neither list can contain a screen the IR cannot draw", () => {
-	// Both are derived from one predicate, so this is the invariant that would break
-	// FIRST if someone reintroduced a second rule.
-	for (const id of SELECTABLE_SCREENS.map(screen => screen.id)) expect(isDrawableScreen(id), id).toBe(true);
+test("neither list can contain a screen the registry does not know", () => {
+	// Both are derived from the one registry, so this is the invariant that would
+	// break FIRST if someone reintroduced a second list.
+	const known = new Set<string>(SCREENS.map(screen => screen.id));
+	for (const id of SELECTABLE_SCREENS.map(screen => screen.id)) expect(known.has(id), id).toBe(true);
 	for (const id of NAV_GROUPS.flatMap(group => group.items.map(item => item.id))) {
-		expect(isDrawableScreen(id), id).toBe(true);
+		expect(known.has(id), id).toBe(true);
 	}
 });
-
 
 // ---------------------------------------------------------------------------
 // What is NOT unified, stated so nobody "finishes" it by accident
@@ -115,7 +105,7 @@ test("every nav row has a jump letter, and every letter resolves to that row", (
 	expect(new Set(letters).size).toBe(letters.length);
 	for (const item of NAV_GROUPS.flatMap(group => group.items)) {
 		expect(item.hotkey).not.toBe("");
-		expect(screenForHotkey(item.hotkey), item.id).toBe(item.id);
+		expect(screenForHotkey(item.hotkey), item.id).toBe(item.id as ScreenId);
 	}
 });
 
@@ -128,29 +118,28 @@ test("a letter belonging to no nav row resolves to nothing", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The predicate itself
+// The registry itself
 // ---------------------------------------------------------------------------
 
-test("isDrawableScreen is the one rule, and it agrees with having a usable spec", () => {
-	for (const spec of SCREEN_SPECS) {
-		expect(isDrawableScreen(spec.id), spec.id).toBe(true);
-	}
+test("SCREENS is the one list, and SELECTABLE_SCREENS is that same list", () => {
+	// `SELECTABLE_SCREENS` is `SCREENS`, not a filtered copy: a screen the registry
+	// knows is a screen the digit row can reach.
+	expect(SELECTABLE_SCREENS).toBe(SCREENS);
 });
 
-test("specById and specForScreen are the same lookup", () => {
-	// `panel.ts`'s `specById` is now a delegation, so the panel's two questions
-	// about the spec table cannot be answered by two different tables.
-	for (const id of [...SELECTABLE_SCREENS.map(s => s.id), "traces", "nonsense"]) {
-		expect(specById(id as never)?.id).toBe(specForScreen(id)?.id);
-	}
-});
-
-test("every selectable screen's registry entry agrees with its spec", () => {
-	// The registry carries identity; the IR carries the body. A screen
-	// in one and not the other is the drift this whole refactor is about.
-	for (const screen of SELECTABLE_SCREENS) {
+test("screenById resolves every registry entry and throws on anything else", () => {
+	for (const screen of SCREENS) {
 		expect(screenById(screen.id).id).toBe(screen.id);
-		expect(specById(screen.id)?.id).toBe(screen.id);
+		expect(screenById(screen.id).label).toBe(screen.label);
+	}
+	expect(() => screenById("nonsense" as never)).toThrow();
+});
+
+test("every nav item's identity comes from the registry, not a second table", () => {
+	// The nav carries labels resolved through `screenById`; a label that disagrees
+	// with the registry is the drift this whole refactor is about.
+	for (const item of NAV_GROUPS.flatMap(group => group.items)) {
+		expect(screenById(item.id as never).label).toBe(item.label);
 	}
 });
 
@@ -162,39 +151,19 @@ test("every selectable screen's registry entry agrees with its spec", () => {
  * WHY THIS TEST EXISTS ALONGSIDE THE BEHAVIOURAL ONES ABOVE.
  *
  * Every behavioural assertion here was checked against a mutation that
- * re-introduces the duplication — replacing `NAV_GROUPS`' call to
- * `isDrawableScreen` with its own private `spec !== undefined` rule — and ALL
- * FOURTEEN STILL PASSED. That is not a gap in those tests; it is the reason this
- * one exists.
+ * re-introduces a second screen list — and ALL OF THEM STILL PASSED. That is not
+ * a gap in those tests; it is the reason this one exists.
  *
- * The two rules are currently EQUIVALENT, so a duplicated rule is behaviourally
- * INVISIBLE: it cannot be found by comparing outputs, because the outputs are
- * identical. Every behavioural test for "these cannot drift" is therefore vacuous
- * until the rules actually diverge — which is exactly the moment nobody is
- * watching.
- *
- * So the invariant is asserted where the duplication actually lives: the SOURCE.
- * Both modules must obtain "drawable" from the one predicate and neither may
- * re-state the rule. That is a fact about the code rather than about one run of
- * it, and it holds before the rules diverge as well as after.
+ * So the invariant is asserted where the duplication would live: the SOURCE.
+ * Neither consumer may name the deleted IR spec table, and both must obtain
+ * identity from the registry.
  */
-test("both screen lists derive drawability from the ONE predicate, not a private rule", async () => {
-	for (const file of ["src/tui/panel.ts", "src/tui/chrome.ts"]) {
-		const source = await Bun.file(`${import.meta.dir}/../${file}`).text();
-		expect(source, `${file} must call isDrawableScreen`).toContain("isDrawableScreen");
-		// Neither consumer may read `deferred` AT ALL. They both delegate entirely,
-		// so a `.deferred` anywhere in either file is a re-stated rule however it is
-		// spelled — `!spec.deferred`, `spec?.deferred`, `specById(id)!.deferred`.
-		// A pattern narrow enough to catch only one spelling was tried first and let
-		// a `specById(...)!.deferred` re-statement through, which is the same trap
-		// this guard exists to close.
-		expect(source, `${file} must not read \`deferred\` itself`).not.toContain(".deferred");
-	}
-});
-
-test("the predicate lives in the IR, so neither consumer owns the truth", async () => {
-	// If it were moved into either consumer, one would own the truth and the other
-	// would import it — the same coupling with a dependency edge added.
-	const spec = await Bun.file(`${import.meta.dir}/../src/layout/spec.ts`).text();
-	expect(spec).toContain("export function isDrawableScreen");
+test("both consumers derive identity from the registry, not a private table", async () => {
+	const panel = await Bun.file(`${import.meta.dir}/../src/tui/panel.ts`).text();
+	const chrome = await Bun.file(`${import.meta.dir}/../src/tui/chrome.ts`).text();
+	expect(panel).toContain("SELECTABLE_SCREENS");
+	expect(panel).not.toContain("specById");
+	expect(panel).not.toContain("isDrawableScreen");
+	expect(chrome).toContain("screenById");
+	expect(chrome).not.toContain("specForScreen");
 });

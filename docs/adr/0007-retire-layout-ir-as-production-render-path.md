@@ -1,65 +1,51 @@
-# The `ScreenSpec → renderScreen → renderBands` IR is retired as the production render path and kept for the showcase, the nav identity and the probes
+# The `ScreenSpec → renderScreen → renderBands` IR is deleted
 
-Status: **accepted**. Adopted by `19245dc`, which recorded the decision in `AGENTS.md` and
-`CONTEXT.md`; this file is the ADR that commit announced and did not write.
+Status: **accepted**, then **superseded by deletion**. Adopted by `19245dc` as a
+retirement, then deleted outright in the ground-up redesign: its only consumers were
+the `/stats-test` showcase, the review probes, the panel's fixture/test branch and the
+test suite, and every one of those now renders production `FeatureController`s.
 
-PR #1 (`c1396d3`) made the layout IR unreachable as a production render path. Before this ADR
-nobody had established that by reachability, only by assertion.
+PR #1 (`c1396d3`) made the layout IR unreachable as a production render path. The
+ground-up redesign removed the last non-production consumers and deleted the IR rather
+than keep a second grammar wearing a probe label.
 
-## The evidence
+## What was deleted
 
-Established by a source scan at the PR #1 baseline, before the UI refinement. A
-production screen is a `FeatureController` (`src/tui/features/types.ts`) whose
-`render(width, height)` returns `readonly string[]`; it does not render a static `ScreenSpec`.
-`src/tui/panel.ts` reaches `renderScreenWith` only at `:780`, *after* the
-`if (feature)` branch at `:772` returns, and `#feature()` returns `undefined` only when
-`options.fetch` is injected — the fixture path, not the worker path.
+- `src/layout/spec.ts` — the `ScreenSpec` declarations and `Band[]` data.
+- `src/layout/resolve.ts` — `MetricRef` resolution.
+- `src/layout/host-derived.ts` — the IR's named figures.
+- `src/tui/render/screen.ts` — `renderScreen` / `renderScreenWith`.
+- `src/tui/showcase/` — the `/stats-test` showcase, unregistered from `src/index.ts`.
+- The panel's fixture branch (`options.fetch` / `renderScreenWith`) and the injected
+  `fetch` test seam.
 
-What survives, and who still reaches it:
+## What replaced it
 
-| Consumer | Reaches | Job |
-|---|---|---|
-| `src/tui/showcase/panel.ts:436` | `renderScreen` | `/stats-test`, a **shipped** command registered in `src/index.ts:50` |
-| `src/tui/tabs.ts`, `src/tui/chrome.ts` | `SCREEN_SPECS`, `isDrawableScreen` | the real nav: sidebar rows, tab strip, `g` jump letters |
-| `src/tui/panel.ts:24` | `isDrawableScreen`, `specForScreen` | `SELECTABLE_SCREENS` and therefore the digit row and arrow cycling |
-| `scripts/probe-render.ts`, `scripts/probe-showcase.ts` | the whole IR | headless review at any width |
-| `src/tui/panel.ts:780` | `renderScreenWith` | the fixture/test branch only — reached when `options.fetch` is injected, which `__testing.makePanel` does by default |
+`/stats-tui` renders `FeatureController.render()` bodies only. Nav identity is data in
+`src/tui/screens/` (`SCREENS` / `screenById`); `SELECTABLE_SCREENS` is `SCREENS`
+directly. `src/tui/band.ts` survives as the shared drawing grammar — measured stat tiles
+and tables — reused by `src/tui/features/presentation.ts`. `scripts/probe-render.ts`
+builds the same `FeatureContext` the tests use and prints a controller's body.
 
-The fixture branch is why the IR is live in tests: `makePanel` injects `fetch` unless `reads` is set, so `#feature()` returns `undefined` by default and every `makePanel` body assertion renders through `renderScreenWith`, never a `FeatureController`.
-
-`src/tui/screens/*.ts` is metadata only in production. Its `render` bodies are unreachable;
-after `7c55cf3` the only surviving direct callers are `test/activity.test.ts` and
-`test/errors-screen.test.ts`.
-
-## Considered Options
+## Considered options (historical)
 
 - **Keep the IR live beside the controllers**, so a route change could still be expressed
-  as bands. Rejected: this is the two-grammars-fighting state the IR existed to prevent. The
-  conflict is already visible in this repo's history — `AGENTS.md:136` once forbade "a
-  replacement interaction model" in the same sentence that told a contributor to add a
-  `Band[]` for a production screen's layout. One instruction cannot be read two ways and
-  still be an instruction.
-- **Delete the IR outright.** Rejected: it is not dead. `/stats-test` is a registered
-  command that renders through `renderScreen`, and the production nav reads `SCREEN_SPECS`.
-  Deleting it would delete a shipped command and break the sidebar.
-- **Retire it as the production path and scope what is left.** Accepted.
+  as bands. Rejected: this is the two-grammars-fighting state the IR existed to prevent.
+  The conflict was already visible in this repo's history — `AGENTS.md:136` once forbade
+  "a replacement interaction model" in the same sentence that told a contributor to add
+  a `Band[]` for a production screen's layout. One instruction cannot be read two ways
+  and still be an instruction.
+- **Retire it as the production path and scope what is left.** Accepted first: the IR
+  stopped wearing a production costume while the showcase and probes remained.
+- **Delete the IR outright.** Accepted in the end: the remaining consumers were all
+  probe/test machinery, and the showcase was a second renderer whose bugs were its own.
+  The band primitives production actually reuses were kept; the declaration grammar and
+  its resolver were not.
 
 ## Consequences
 
-A `Band[]` in `src/layout/spec.ts` changes what `/stats-test` draws and which ids
-`tabs.ts`/`chrome.ts` expose. It changes **nothing** a user sees in `/stats-tui`. A
-contributor adding a production screen writes a `FeatureController` under
-`src/tui/features/`, not a static screen spec. The UI refinement's `features/presentation.ts`
-reuses `renderBands` locally for metric-grid/table drawing, with already formatted values,
-current theme and selection styling. It does not restore the `MetricRef` resolution pipeline
-as a production interaction model: focus, search, sort, staged loading and retained state
-remain controller-owned.
-
-`src/tui/charts/*` is the deliberate exception and is **not** IR: `features/core/*` imports
-`compose.ts`, `sparkline.ts`, `heatmap.ts` and `calendar.ts` directly, so those are
-production chart code shared by both paths. CONTEXT.md's IR scope map carries the
-file-by-file table so this split is not re-derived.
-
-The IR's own invariants (G4 one blank line between bands, G5 no full-width rule inside a
-band) still bind `/stats-test` and are still asserted in `test/band.test.ts`. They no longer
-constrain `/stats-tui`, whose only rule is the `PanelDivider` between body and footer.
+A production screen is a `FeatureController` under `src/tui/features/`; adding a screen
+means a controller plus a registry identity row, not a static spec. The shared drawing
+grammar's invariants (G4 one blank line between bands, G5 no full-width rule inside a
+band) still bind the primitives in `src/tui/band.ts`. `/stats-tui`'s only rule is the
+`PanelDivider` between body and footer.

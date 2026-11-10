@@ -59,8 +59,8 @@ const NO_HIT: MouseHit = { type: "none" };
  * Which screen a sidebar body-row means, or null for headings and padding.
  * Derived by walking `groups` the way `sidebar()` paints it: one heading row per
  * group, then one row per item. A regrouped nav moves its own rows. `groups`
- * defaults to `NAV_GROUPS`; the showcase passes its own sections so the walk
- * agrees with the nav it actually paints.
+ * defaults to `NAV_GROUPS`; a caller can pass its own groups so the walk agrees
+ * with the nav it actually paints.
  */
 export function sidebarHit(navRow: number, groups: readonly NavGroup[] = NAV_GROUPS): string | null {
 	if (!Number.isInteger(navRow) || navRow < 0) return null;
@@ -122,8 +122,8 @@ export function rangeHit(line: string, col: number): Range | null {
  * span is inert body text.
  *
  * `hitSidebar` is injected so the geometry serves a nav that is not the screen
- * registry: it defaults to {@link sidebarHit} over `NAV_GROUPS`, and the
- * showcase passes the same walk over its own sections. The arithmetic above is
+ * registry: it defaults to {@link sidebarHit} over `NAV_GROUPS`, and a caller can
+ * pass the same walk over its own sections. The arithmetic above is
  * the only frame geometry; a second copy of it is the fork this parameter closes.
  */
 export function hitTest(

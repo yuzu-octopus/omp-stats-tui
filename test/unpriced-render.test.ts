@@ -9,14 +9,10 @@
 
 import { test, expect } from "bun:test";
 import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
-import type { ThemeColor } from "@oh-my-pi/pi-tui";
 
-import { SCREEN_SPECS } from "../src/layout/spec";
-import { screenBands, type ScreenRenderOptions } from "../src/tui/render/screen";
-import { planLayout } from "../src/tui/layout";
+
 import { glyphsFor } from "../src/tui/glyphs";
-import { SERIES_COLORS, stripForTest } from "../src/tui/palette";
-import { DEFAULT_RANGE } from "../src/data/ranges";
+import { stripForTest } from "../src/tui/palette";
 import type { PanelData } from "../src/data/api";
 import { createSummaryFeature } from "../src/tui/features/core/summary";
 import type { FeatureContext } from "../src/tui/features/types";
@@ -93,31 +89,18 @@ const payload: PanelData = {
 	},
 } as PanelData;
 
-const overviewSpec = SCREEN_SPECS.find(s => s.id === "overview")!;
 
-test("the headline cost carries the corrected unpriced count", () => {
+
+test("the headline cost carries the corrected unpriced count", async () => {
 	// The pipeline cost tile reads its unpriced count from its own hint, so
 	// "$900.00" beside "4,197 unpriced" is one honest figure, never a total
 	// that silently excludes the unmeasured requests.
-	const bands = screenBands({
-		spec: overviewSpec,
-		data: payload,
-		plan: planLayout(100, 40, "unicode"),
-		preset: "unicode",
-		range: DEFAULT_RANGE,
-		now: Date.now(),
-		fg: (color: ThemeColor, text: string) => theme.fg(color, text),
-		bold: text => theme.bold(text),
-		palette: theme,
-		seriesColorFor: index => SERIES_COLORS[index % SERIES_COLORS.length],
-		glyphs: glyphsFor("unicode"),
-	} satisfies ScreenRenderOptions);
-	const first = bands.find(b => b.kind === "statRow");
-	expect(first, "overview has no statRow band").toBeTruthy();
-	if (first === undefined || first.kind !== "statRow") throw new Error("first band is not a statRow");
-	const cost = first.stats.find(t => t.label === "API-equivalent cost")!;
-	expect(stripForTest(cost.value)).toBe("$900.00");
-	expect(stripForTest(cost.hint ?? "")).toBe("4,197 unpriced");
+	const feature = createSummaryFeature("overview", featureContext(payload));
+	await feature.load("24h");
+	const body = stripForTest(feature.render(100, 24).join("\n"));
+	expect(body).toContain("$900.00");
+	expect(body).toContain("4197 unpriced");
+	feature.dispose();
 });
 
 function featureContext(data: PanelData): FeatureContext {

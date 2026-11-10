@@ -1,7 +1,7 @@
 import { getKeybindings, matchesKey, routeSgrMouseInput, TabBar, type Component, type SgrMouseEvent, type TUI } from "@oh-my-pi/pi-tui";
 import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import { ensureThemeSync, theme as activeTheme, type Theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
+import { ensureThemeSync, theme as activeTheme, type Theme } from "@oh-my-pi/pi-tui/theme";
 
 import type { DataNeed, PanelData } from "../data/api";
 import { StatsReadClient } from "../data/client";
@@ -16,14 +16,11 @@ import type { ReadStage } from "../data/protocol";
 import type { LiveStatus } from "@oh-my-pi/omp-stats/shared-types";
 import { DEFAULT_RANGE, nextRange, RANGES, type Range } from "../data/ranges";
 import type { SyncEvent } from "../sync/client";
-import { glyph, glyphsFor, type SymbolPreset } from "./glyphs";
+import type { SymbolPreset } from "./glyphs";
 import { statsIcon } from "./icons";
-import { SERIES_COLORS } from "./palette";
 // `MIN_USABLE_WIDTH` floors the narrowed body plan — see `render`.
 import { MIN_USABLE_WIDTH, planLayout, type LayoutPlan } from "./layout";
 import { SCREENS, screenById, type Screen, type ScreenId } from "./screens/types";
-import { isDrawableScreen, specForScreen } from "../layout/spec";
-import { renderScreenWith } from "./render/screen";
 import {
 	JUMP_TIMEOUT_MS,
 	chipFor,
@@ -110,11 +107,6 @@ export const EXACT_DIRTY_LIMIT = 96;
 
 const NO_ROWS: readonly string[] = [];
 
-
-
-/** The fetch the panel drives, narrowed so a test can answer with fixtures. */
-export type PanelFetch = (needs: readonly DataNeed[], range: Range) => Promise<PanelData>;
-
 /**
  * The reads the panel and its features share. Production is one
  * `StatsReadClient` worker child; a test injects a stub so the controller path
@@ -138,8 +130,6 @@ export interface StatsPanelOptions {
 	done: () => void;
 	/** Defaults to `tui.requestRender()`. Injected so a test can count repaints. */
 	requestRender?: () => void;
-	/** Production reads run in a cancellable standalone worker. */
-	fetch?: PanelFetch;
 	/** Test seam: the shared reads. Defaults to one worker-backed client. */
 	reads?: PanelReads;
 	/** Opening range. Defaults to the closed set's own default. */
@@ -172,27 +162,15 @@ export type PanelAction =
 
 
 /**
- * The IR spec for a screen id, or `undefined` when the registry has no spec.
- *
- * A named delegation rather than an inline `SCREEN_SPECS.find`, so the lookup and
- * the drawability predicate below are stated side by side in one place: they are
- * two questions about the same table, and the second is derived from the first.
- */
-export function specById(id: ScreenId) {
-	return specForScreen(id);
-}
-
-/**
  * The screens a key can land on, in the order the DIGIT ROW uses — which is the
  * registry's own order and deliberately NOT the sidebar's, because the two answer
  * different questions (`1`-`9`/`0` index this list; the nav is grouped for
  * reading). Order is part of this constant's contract and is not derived from
  * `NAV_GROUPS`.
  *
- * "Drawable" is NOT decided here. This filter asks {@link isDrawableScreen} — the
- * same predicate `NAV_GROUPS` uses — so the number row and the sidebar cannot
- * disagree about which screens exist. That duplication is what
- * `test/screens.test.ts` now pins shut.
+ * Every registry screen is selectable: `NAV_GROUPS` reads the same `SCREENS`
+ * list, so the number row and the sidebar cannot disagree about which screens
+ * exist. `test/screens.test.ts` pins that the two can never drift.
  *
  * TWELVE SCREENS, TEN DIGITS — and that is the design, not a conflict. PR #1
  * added `traces` and `frustration`, taking this registry to twelve while the
@@ -218,9 +196,7 @@ export function specById(id: ScreenId) {
  * same list, so removing an entry also removes the screen from the tab strip,
  * the sidebar and arrow cycling.
  */
-export const SELECTABLE_SCREENS: readonly Screen[] = SCREENS.filter(
-	screen => isDrawableScreen(screen.id),
-);
+export const SELECTABLE_SCREENS: readonly Screen[] = SCREENS;
 
 /**
  * Translate one input into one action, or null for a key this panel does not
@@ -375,7 +351,6 @@ interface PanelState {
 	featureHits: FeatureHit[];
 	/** Last frame's outputs, untruncated, so a test reads what was composed. */
 	source: readonly string[];
-	chart: readonly string[];
 	title: string;
 }
 
@@ -401,7 +376,6 @@ interface FrameCache {
 	sidebarWidth: number;
 	plan: LayoutPlan;
 	source: readonly string[];
-	chart: readonly string[];
 	bodyHits: FeatureHit[];
 	featureHits: FeatureHit[];
 }
@@ -468,7 +442,6 @@ export class StatsPanel implements Component {
 			bodyHits: [],
 			featureHits: [],
 			source: NO_ROWS,
-			chart: NO_ROWS,
 			title: "Stats",
 		};
 		STATE.set(this, this.#state);
@@ -489,7 +462,7 @@ export class StatsPanel implements Component {
 		this.#panel.addChild(this.#footer);
 
 		// The worker owns initialization and synchronous queries; rendering never waits.
-		if (!options.fetch) this.#reads.subscribe(status => {
+		this.#reads.subscribe(status => {
 			if (this.#state.closed) return;
 			const previous = this.#liveStatus;
 			this.#liveStatus = status;
@@ -512,7 +485,7 @@ export class StatsPanel implements Component {
 	// --- load ----------------------------------------------------------------
 
 	/**
-	 * `rollupStatus` is requested on EVERY load, whatever the screen declares.
+	 * `rollupStatus` is requested on EVERY load, whatever the screen reads.
 	 * It is the only read that refuses to answer when the database was never
 	 * initialised, and that refusal is the whole difference between "no usage
 	 * in this window" and "the panel has no idea". Every other read degrades to
@@ -520,14 +493,10 @@ export class StatsPanel implements Component {
 	 * to reach that state unannounced.
 	 */
 	#needs(): readonly DataNeed[] {
-		// The SPEC's needs, or the registry's when no spec exists — never a
-		// hand-maintained map beside them, which is the shim this replaced.
-		const declared = specById(this.#state.screenId)?.needs ?? screenById(this.#state.screenId).needs;
-		return declared.includes("rollupStatus") ? declared : [...declared, "rollupStatus"];
+		return ["rollupStatus"];
 	}
 
 	#feature(): FeatureController | undefined {
-		if (this.#options.fetch) return undefined;
 		const id = this.#state.screenId;
 		let feature = this.#features.get(id);
 		if (feature) return feature;
@@ -593,14 +562,12 @@ export class StatsPanel implements Component {
 					const feature = this.#feature();
 					await feature?.load(range);
 					if (this.#superseded(generation)) return;
-					const needs = feature ? ["rollupStatus"] as const : this.#needs();
-					const data = this.#options.fetch
-						? await this.#options.fetch(needs, range)
-						: await this.#reads.fetch(needs, range, stage => {
-							if (this.#superseded(generation)) return;
-							state.readStage = stage;
-							this.#changed();
-						});
+				const needs = this.#needs();
+				const data = await this.#reads.fetch(needs, range, stage => {
+					if (this.#superseded(generation)) return;
+					state.readStage = stage;
+					this.#changed();
+				});
 					if (this.#superseded(generation)) return;
 					state.data = data;
 					state.error = null;
@@ -615,10 +582,10 @@ export class StatsPanel implements Component {
 						this.#changed();
 						// Traces refresh on their own; 5 s keeps the tail live without
 						// turning the refresh timer into a per-second session scan.
-						if (!this.#options.fetch) this.#refreshTimer = setTimeout(() => {
-							this.#refreshTimer = undefined;
-							this.#load();
-						}, state.screenId === "traces" ? 5_000 : 30_000);
+					this.#refreshTimer = setTimeout(() => {
+						this.#refreshTimer = undefined;
+						this.#load();
+					}, state.screenId === "traces" ? 5_000 : 30_000);
 					}
 				}
 			})(),
@@ -660,7 +627,7 @@ export class StatsPanel implements Component {
 			determinate: sync?.phase === "syncing" && sync.total > 0,
 			error: state.syncError,
 			dirtyHours: state.data?.rollupStatus?.dirtyHours ?? 0,
-			live: this.#options.fetch ? false : this.#liveStatus !== undefined,
+			live: this.#liveStatus !== undefined,
 			lastSyncedAt: state.lastSyncedAt,
 			now: this.#options.now?.() ?? Date.now(),
 		};
@@ -718,9 +685,9 @@ export class StatsPanel implements Component {
 	/**
 	 * Compose the frame once per key, or hand back the last composition.
 	 *
-	 * On a hit, the state the composition wrote is restored (`source`, `chart`,
-	 * `bodyHits`, `featureHits`): the mouse router and the test seam read
-	 * those, and they must describe the frame actually on screen.
+	 * On a hit, the state the composition wrote is restored (`source`, `bodyHits`,
+	 * `featureHits`): the mouse router and the test seam read those, and they must
+	 * describe the frame actually on screen.
 	 */
 	#frame(width: number, rows: number, preset: SymbolPreset): FrameCache {
 		const state = this.#state;
@@ -729,7 +696,6 @@ export class StatsPanel implements Component {
 		if (cached !== undefined && cached.key === key && cached.theme === this.#theme &&
 			cached.data === state.data && cached.liveStatus === this.#liveStatus) {
 			state.source = cached.source;
-			state.chart = cached.chart;
 			state.bodyHits = cached.bodyHits;
 			state.featureHits = cached.featureHits;
 			return cached;
@@ -770,18 +736,17 @@ export class StatsPanel implements Component {
 		// A terminal shorter than the chrome keeps NO nav row at all: a row the
 		// frame cannot afford pushes the bottom border off the screen, which is
 		// the one failure a `render(width)`-only assertion never catches.
-		const spec = specById(state.screenId);
 		const column = policy.sidebar === "full" && rows >= MIN_SIDEBAR_ROWS;
 		let strip: readonly string[] = NO_ROWS;
-		if (!column && spec !== undefined && rows > MIN_PANEL_ROWS) {
-			const tabs = buildTabs(preset, this.#theme, spec.id);
+		if (!column && rows > MIN_PANEL_ROWS) {
+			const tabs = buildTabs(preset, this.#theme, state.screenId);
 			const stripWidth = Math.max(1, width - TAB_BAR_INDENT);
 			// A narrow viewport shows the active route and its neighbours, not two
 			// rows of twelve anonymous icons. Keyboard jumps/cycling retain all routes.
 			const count = stripWidth < 16 ? 1 : stripWidth < 32 ? 3 : stripWidth < 60 ? 5 : tabs.length;
-			const active = tabs.findIndex(tab => tab.id === spec.id);
+			const active = tabs.findIndex(tab => tab.id === state.screenId);
 			const start = Math.max(0, Math.min(tabs.length - count, active - Math.floor(count / 2)));
-			this.#tabBar.setTabs(count === tabs.length ? tabs : tabs.slice(start, start + count), spec.id);
+			this.#tabBar.setTabs(count === tabs.length ? tabs : tabs.slice(start, start + count), state.screenId);
 			strip = this.#tabBar.render(stripWidth);
 		}
 		const nav = column ? sidebar(this.#theme, preset, state.screenId, state.hoveredSidebarId) : null;
@@ -826,7 +791,7 @@ export class StatsPanel implements Component {
 			key, theme: this.#theme, data: state.data, liveStatus: this.#liveStatus,
 			headerLines, topbarRows: topLines.length, stripRows: strip.length,
 			topbar: top, nav, sidebarWidth, plan, source,
-			chart: state.chart, bodyHits: state.bodyHits, featureHits: state.featureHits,
+			bodyHits: state.bodyHits, featureHits: state.featureHits,
 		};
 		this.#frameCache = frame;
 		state.composes++;
@@ -836,7 +801,7 @@ export class StatsPanel implements Component {
 	render(width: number): readonly string[] {
 		const state = this.#state;
 		const rows = this.#options.rows ?? this.#tui.terminal.rows ?? 40;
-		if (!this.#options.fetch && activeTheme && this.#theme !== activeTheme) {
+		if (activeTheme && this.#theme !== activeTheme) {
 			this.#theme = activeTheme;
 			if (this.#featureContext) this.#featureContext.theme = activeTheme;
 		}
@@ -877,7 +842,7 @@ export class StatsPanel implements Component {
 		// `brand + active range` (chrome.ts's topbar). Host parity for the shape
 		// is `/usage`, whose panel title is `Usage · Details` — panel, then
 		// section (usage-dashboard.ts:913).
-		state.title = `Stats · ${specById(state.screenId)?.label ?? "Overview"}`;
+		state.title = `Stats · ${screenById(state.screenId).label}`;
 		this.#panel.title = state.title;
 		this.#header.setLines(frame.headerLines);
 		this.#header.setHeight(frame.headerLines.length);
@@ -910,7 +875,6 @@ export class StatsPanel implements Component {
 	#bodyLines(plan: LayoutPlan, preset: SymbolPreset): readonly string[] {
 		const state = this.#state;
 		const phase = this.#phase();
-		state.chart = NO_ROWS;
 		state.bodyHits = [];
 		state.featureHits = [];
 		if (phase === "loading") return loadingLines(this.#theme, state.readStage);
@@ -947,45 +911,8 @@ export class StatsPanel implements Component {
 			}
 			return [...noticeLines, ...rendered];
 		}
-		const spec = specById(state.screenId);
-		// Pure IR fixtures/probes use declarative layouts; production controllers render above.
-		if (!spec) return [this.#theme.fg("muted", `No layout spec for "${state.screenId}".`)];
-		const rendered = renderScreenWith({
-			spec,
-			data,
-			plan,
-			preset,
-			range: state.range,
-			now: this.#options.now?.() ?? Date.now(),
-			fg: (color, text) => this.#theme.fg(color, text),
-			bold: text => this.#theme.bold(text),
-			palette: this.#theme,
-			seriesColorFor: index => this.#seriesColor(index),
-			glyphs: glyphsFor(preset),
-		});
-		// The chart rows the IR composed, kept for the tests that assert cost
-		// scaling against the REAL frame. The charts are the IR's now, so this
-		// captures what the screen drew rather than keeping a second local chart.
-		state.chart = rendered.chart;
-		if (!state.syncError && notices.length === 0) return rendered.lines;
-		return [
-			...(state.syncError ? [
-				this.#theme.fg("error", "Background sync failed"),
-				...wrapTextWithAnsi(stripTerminalSequences(state.syncError), plan.innerWidth)
-					.map(line => this.#theme.fg("warning", line)),
-				"",
-			] : []),
-			...notices.flatMap(line => wrapTextWithAnsi(line, plan.innerWidth)),
-			...(notices.length ? [""] : []),
-			...rendered.lines,
-		];
+		return [this.#theme.fg("muted", `No feature for "${state.screenId}".`)];
 	}
-
-	/** Series hue by rank, matching the web's `buildColorLookup`. */
-	#seriesColor(index: number): ThemeColor {
-		return SERIES_COLORS[((index % SERIES_COLORS.length) + SERIES_COLORS.length) % SERIES_COLORS.length];
-	}
-
 
 	#footerLine(plan: LayoutPlan, width: number): string {
 		const state = this.#state;
@@ -1067,8 +994,7 @@ export class StatsPanel implements Component {
 				return;
 			case "screenId": {
 				const index = SELECTABLE_SCREENS.findIndex(screen => screen.id === action.id);
-				// A jump only ever lands on a drawable screen: NAV_GROUPS filters
-				// spec-less screens out, so an unknown id is inert.
+				// A jump only ever lands on a registered screen: an unknown id is inert.
 				if (index !== -1) this.#selectScreen(index);
 				return;
 			}
@@ -1234,13 +1160,28 @@ const LOADS = new WeakMap<StatsPanel, Promise<void>>();
 
 export interface PanelTestState {
 	data?: PanelData;
-	fetch?: PanelFetch;
-	/** Controller-path reads. When set (and `fetch` is not), the panel omits `fetch`. */
+	/** Shared reads. Defaults to a stub backed by `data`. */
 	reads?: PanelReads;
 	range?: Range;
 	screenId?: ScreenId;
 	rows?: number;
 	now?: () => number;
+}
+
+/**
+ * The reads a panel test gets when it passes `data` and no `reads`: the fixture
+ * answers every fetch and every API path, so `#feature()` resolves a real
+ * controller and the body is the production render path.
+ */
+function stubReads(data: PanelData | undefined): PanelReads {
+	return {
+		fetch: async () => data ?? {},
+		api: async <T>(path: string): Promise<T> =>
+			((data as unknown as Record<string, unknown> | undefined)?.[path.split("/").pop() ?? ""] ?? []) as T,
+		subscribe: () => () => {},
+		requestSync: async () => ({}) as LiveStatus,
+		close: () => {},
+	};
 }
 
 const ANSI = /\x1b\[[0-9;]*m/g;
@@ -1254,7 +1195,6 @@ const stripAnsi = (text: string) => text.replace(ANSI, "");
 export const __testing = {
 	makePanel(state: PanelTestState = {}): StatsPanel {
 		ensureThemeSync();
-		const controller = state.reads !== undefined && state.fetch === undefined;
 		const panel = new StatsPanel({
 			// A TUI with no terminal behind it: nothing here reads it, because
 			// `rows` is supplied and the frame size comes from state.
@@ -1262,8 +1202,7 @@ export const __testing = {
 			theme: activeTheme,
 			done: () => {},
 			requestRender: () => {},
-			...(controller ? {} : { fetch: state.fetch ?? (async () => state.data as PanelData) }),
-			reads: state.reads,
+			reads: state.reads ?? stubReads(state.data),
 			range: state.range,
 			screenId: state.screenId,
 			rows: state.rows ?? 40,
@@ -1292,10 +1231,6 @@ export const __testing = {
 	debugFrame: (panel: StatsPanel) => STATE.get(panel)!.mouse,
 	debugHoverTab: (panel: StatsPanel) => STATE.get(panel)!.hoveredStripId,
 	debugHoverSidebar: (panel: StatsPanel) => STATE.get(panel)!.hoveredSidebarId,
-	debugChartRows: (panel: StatsPanel, width = 120): readonly string[] => {
-		panel.render(width);
-		return STATE.get(panel)!.chart;
-	},
 	debugBody: (panel: StatsPanel): readonly string[] => {
 		panel.render(120);
 		return STATE.get(panel)!.source.map(stripAnsi);

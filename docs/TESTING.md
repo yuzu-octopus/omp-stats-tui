@@ -10,7 +10,7 @@ bun --version
 command -v bun
 ```
 
-Verified runtime: compiled **omp 18.6.1**, standalone **Bun 1.4.2**, Linux arm64. Bun must be on the PATH inherited by omp: the compiled host still launches a separate Bun stats worker. Other omp versions/platforms are not claimed verified.
+Verified runtime: compiled **omp 18.18.2**, standalone **Bun 1.4.2**, Linux arm64. Bun must be on the PATH inherited by omp: the compiled host still launches a separate Bun stats worker. Other omp versions/platforms are not claimed verified.
 
 Use an interactive terminal, initially about 100 columns by 40 rows. Print/headless/RPC modes cannot display this overlay. No browser server or upstream omp source checkout is required.
 
@@ -109,7 +109,9 @@ bun test
 bun run build
 ```
 
-Latest observed suite: **905 passed, 0 failed, 61 files**, 102,929 assertions. Production build and the dependency-patch check passed. After integrating current maintainer `main`, the UI was reviewed again on the compiled host at **40x30, 100x40 and 160x45** across all twelve routes; initialization was excluded from the settled-body review. Representative light/Unicode, dark/ASCII and custom/Nerd reviews also passed, including observed custom ANSI colors.
+Latest observed suite: **932 passed, 0 failed, 62 files**, 103,289 assertions. Production build and the dependency-patch check passed. After integrating current maintainer `main`, the UI was reviewed again on the compiled host at **40x30, 100x40 and 160x45** across all twelve routes; initialization was excluded from the settled-body review. Representative light/Unicode, dark/ASCII and custom/Nerd reviews also passed, including observed custom ANSI colors.
+
+**Panel body tests exercise the fixture branch by default.** `__testing.makePanel` injects a `fetch` unless `reads` is set, so `#feature()` returns `undefined` and `#bodyLines` renders through `renderScreenWith`. A composed-body assertion through `makePanel` therefore pins the IR fixture path, not a `FeatureController`; a controller-path panel test must construct the panel without an injected `fetch`.
 
 Mounted scenarios included literal `q[]` search/clear, populated and filtered-empty lists, real recorded savings and quota histories, blank trace-title fallback, nested child navigation, minimap range selection, quiet-day details, missing-judge quote dismissal and an intentional missing-Bun read failure. Ctrl+C restored zero overlays, the normal screen and a visible editor cursor. These are local/recorded scenarios, not paid judging or credentialed networking. Prior packed-install coverage is documented in the [workflow roadmap](plans/2026-10-05-dashboard-parity.md); UI review details are in the [refinement plan](plans/2026-10-06-ui-polish.md).
 

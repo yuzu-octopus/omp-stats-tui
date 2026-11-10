@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`omp-stats-tui` is a plugin extension for compiled omp **18.6.1**. `/stats-tui` mounts a fullscreen terminal overlay over the upstream stats records; built-in `/stats` remains the separate browser command.
+`omp-stats-tui` is a plugin extension for compiled omp **18.18.2**. `/stats-tui` mounts a fullscreen terminal overlay over the upstream stats records; built-in `/stats` remains the separate browser command.
 
 The active [execution roadmap](docs/plans/2026-10-05-dashboard-parity.md) supersedes the older plan's subset, read-only and version constraints. Twelve interactive screen controllers are integrated in production, including Traces and Frustration. The local mounted workflow/theme/package matrix and integrated suite are verified; paid execution and credentialed broker verification remain external. Source lives under `src/`; compiled-host installation loads `dist/index.js` after `bun install` and `bun run build`.
 
@@ -17,12 +17,12 @@ Settled design, in order:
 3. `StatsPanel` mounts one retained `FeatureController` per screen from `src/tui/features/`. Controllers own focus/search/sort/selection/details and chart controls; the panel owns global navigation, scrolling and mount lifetime.
 4. One persistent `StatsReadClient` (`src/data/client.ts`) talks by NDJSON pipes to `scripts/data-worker.ts`. That child owns initialization, synchronous DB/file reads, upstream `handleApi(Request)` routing and patched `StatsLive({ workers: 1 })`. Initial ingest and transcript watching publish unsolicited live status; committed-data invalidation refreshes the active route without resetting controller controls. Manual `s` requests sync on this same owner.
 5. Local provider usage and subscription-window/account reads have independent states. Request details/transcripts and quota reads load on demand. Cached Frustration remains passive; the real standalone judge opens lazily only for requested judging, with estimate, explicit `y` confirmation and cancellation.
-6. The `ScreenSpec → renderScreen → renderBands` IR is NOT the production render path (ADR 0007). Production screens are retained `FeatureController`s from `src/tui/features/`, which own focus/search/sort/selection/details and render their own bodies; no production screen renders from a `ScreenSpec`. The IR survives for three named jobs — the shipped `/stats-test` showcase (`src/tui/showcase/panel.ts` calls `renderScreen` on showcase specs), the nav/tabs identity (`src/tui/tabs.ts` and `src/tui/chrome.ts` read `SCREEN_SPECS`), and the review probes (`scripts/probe-render.ts`, `scripts/probe-showcase.ts`). `src/tui/panel.ts` also reaches `renderScreenWith`, but only on the fixture path (`options.fetch` injected), after the controller branch has already returned. Static `expandable` metadata is not an implemented action. The reason is settled, not stylistic: a static band grammar cannot express focus, search, sort, staged loading or retained state. See CONTEXT.md's IR scope map for which file survives for which reason.
+6. The `ScreenSpec → renderScreen → renderBands` IR is NOT the production render path (ADR 0007). `/stats-tui` bodies are `FeatureController.render()` from `src/tui/features/`, which own focus/search/sort/selection/details; no production screen renders from a `ScreenSpec`. The IR is live only for four jobs: the shipped `/stats-test` showcase (`src/tui/showcase/panel.ts:436` calls `renderScreen` on showcase specs), the nav/tabs identity (`src/tui/tabs.ts` and `src/tui/chrome.ts` read `SCREEN_SPECS`), the review probes (`scripts/probe-render.ts`, `scripts/probe-showcase.ts`), and the fixture/test branch of `src/tui/panel.ts` (`options.fetch` injected), which reaches `renderScreenWith` only after the controller branch has declined to render. Static `expandable` metadata is not an implemented action. The reason is settled, not stylistic: a static band grammar cannot express focus, search, sort, staged loading or retained state. See CONTEXT.md's IR scope map for which file survives for which reason.
 7. Production `features/presentation.ts` reuses band drawing primitives for metric grids and measured tables; `charts/time-series.ts` owns shared core/Provider/Gain bucket plots. This is widget reuse, not a return to static `ScreenSpec` bodies or `MetricRef`-driven controller state.
 
 **There is NO webserver and NO plugin-owned SQL workaround.** The 100-line unpriced-count `WORKAROUND` that once lived in `src/data/api.ts` was deleted in PR #1 and must not come back: it re-implemented the rollup union and could not correct rollups the dependency had already cached. Synthetic localhost `Request`s call upstream handlers inside the isolated worker without binding a socket. Reuse upstream aggregators, shared types and pure client/data helpers, not React components or a second data backend.
 
-**Dependency corrections are shipped, not patched at runtime** (ADR 0008). Standard Bun `patchedDependencies` plus `bun.lock` apply the committed stats 18.6.1 patch: pricing-v2 historic replay, rollup-v3 invalidation, selected-range recent requests before limit, provider `outputTokens`, and standalone live ingestion. Absent provider/model cards are unknown spend; explicit free cards and recorded zero charges remain zero. The production bundle includes the corrected stats dependency. `bun install` is therefore correctness-critical, not just setup — see §CI for why `verify:patch` runs immediately after it and why `node_modules` is not cached.
+**Dependency corrections are shipped, not patched at runtime** (ADR 0008). Standard Bun `patchedDependencies` plus `bun.lock` apply the committed stats 18.18.2 patch (`patches/@oh-my-pi%2Fomp-stats@18.18.2.patch`): pricing-v2 historic replay, rollup-v3 invalidation, selected-range recent requests before limit, provider `outputTokens`, and standalone live ingestion. Absent provider/model cards are unknown spend; explicit free cards and recorded zero charges remain zero. The production bundle includes the corrected stats dependency. `bun install` is therefore correctness-critical, not just setup — see §CI for why `verify:patch` runs immediately after it and why `node_modules` is not cached.
 
 **Theme is current per render.** The panel reads the initialized host theme at render time and updates mutable `FeatureContext.theme`; primitives receive theme/paint arguments. Sparkline, bar, calendar and timeline ink is coloured per character/series using active omp roles and shared series/legend identity. Avoid an eager module-scope singleton read or permanently captured theme. Each terminal cell has one foreground/background, not separately coloured braille dots.
 
@@ -66,7 +66,7 @@ There is a `package.json`, a `bun.lock`, `node_modules`, and a `.gitignore`. All
 
 ## Development Commands
 
-### Compiled-host commands (18.6.1)
+### Compiled-host commands (18.18.2)
 
 ```sh
 # Fast feedback loop: loads extensions, prints load errors to stderr,
@@ -110,7 +110,7 @@ bun test
 bun scripts/probe-render.ts [screenId] [--width N] [--range 24h] [--preset P]
 ```
 
-`bun test` is the runner: **905 pass / 0 fail across 61 files**. Pure IR tests assert bands/resolved refs; feature-controller tests assert consumer-visible workflows. Mounted host verification remains separate from fixture coverage.
+`bun test` is the runner: **932 pass / 0 fail across 62 files**. Pure IR tests assert bands/resolved refs; feature-controller tests assert consumer-visible workflows. **The panel test seam runs the fixture branch by default, not production:** `__testing.makePanel` injects a `fetch` (the caller's or a fixture loader) unless `reads` is set, `#feature()` returns `undefined` whenever `options.fetch` is set, and `#bodyLines` then falls through to `renderScreenWith`. Every `makePanel` body assertion therefore exercises the IR fixture path unless it passes `reads`; a controller-path panel test must build the panel without an injected `fetch`. Mounted host verification remains separate from fixture coverage.
 
 ### CI
 
@@ -189,7 +189,7 @@ Supporting source worth knowing:
 
 ## Runtime & Tooling Constraints
 
-- **Supported runtime:** compiled omp 18.6.1, standalone Bun 1.4.2; stats/TUI/coding-agent packages are pinned to 18.6.1.
+- **Supported runtime:** compiled omp 18.18.2, standalone Bun 1.4.2; stats/TUI/coding-agent packages are pinned to 18.18.2 (`package.json`, `src/index.ts` `PINNED`).
 - **Production entry:** `bun run build` emits `dist/index.js` and `dist/data-worker.js`; the manifest loads the bundle. Direct source loading is not the supported compiled-host entry.
 - **Module ownership:** bundle local stats/private dependencies; externalize only supported host API specifiers through the exact-match build resolver. Preserve host theme/keybinding/native singletons. Never discover a host source root or mutate installed packages to repair runtime resolution. The committed Bun dependency patch is the reproducible upstream correction.
 - **Imports:** static public TUI/coding-agent roots plus supported named theme/chrome subpaths. Private overlays are not runtime APIs. The real standalone judge subpath resolves from the installed runtime coding-agent dependency in standalone Bun, not the compiled host registry; its resources open lazily when requested.
@@ -200,7 +200,7 @@ Supporting source worth knowing:
 
 ## Testing & QA
 
-**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **905 pass / 0 fail across 61 files**. Full TypeScript `--noEmit` checking passes after integrating maintainer corrections and repairing the local incomplete typing installation; do not repeat the roadmap's old 19 diagnostics as current.
+**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **932 pass / 0 fail across 62 files**. Full TypeScript checking passes (`bun check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
 
 **Unit-testable:**
 
@@ -216,8 +216,8 @@ Supporting source worth knowing:
 
 **Two guards are load-bearing and were restored deliberately — do not let them lapse:**
 
-- `test/theme-fidelity.test.ts` scans **all of `src/**/*.ts`** (`Bun.Glob`), features included, and asserts that every colour token at a use site is one `PALETTE`/`SERIES_COLORS`/`SIDEBAR_INK`/`TAB_INK` role rather than a bare literal, that no hex literal appears outside `palette.ts`, and that `palette.ts` is the only module emitting a colour escape. It includes a negative control and a non-empty reference-set assertion, so the scan cannot pass vacuously. Feature modules are in scope because that is where a hand-picked colour actually appears; the file also pins that no features module hand-draws its own glyph or private colour table.
-- `test/chrome.test.ts`'s number-row block pins the digit/jump contract for the **twelve**-screen registry: each of the ten digits is live and indexes a distinct `SELECTABLE_SCREENS` entry, each digitless screen is reachable by arrows, `tab` and its `g` letter, and the *count* of digitless screens is pinned so a thirteenth fails on purpose. It deliberately does **not** assert `SELECTABLE_SCREENS.length <= 10` — that invariant is unsatisfiable at twelve and would only ever yield a permanently red assertion. `DIGIT_KEYS` there is a deliberate mirror of `panel.ts`'s module-private `DIGITS`; the two must move together.
+- `test/theme-fidelity.test.ts` scans **all of `src/**/*.ts`** (`Bun.Glob`) lexically — comments and string spans are walked, not regex-matched — and asserts that every colour token passed to `fg()`/`bg()` is one the theme declares, that every colour token at a use site is named by `PALETTE`/`SERIES_COLORS`/`SIDEBAR_INK`/`TAB_INK` rather than a bare literal, that no hex literal appears outside `palette.ts`, and that `palette.ts` is the only module emitting a colour escape. It also asserts no module reads the host `theme` singleton at import time and none dynamically imports an `@oh-my-pi` specifier. A negative control (a token the theme does not declare is rejected) and a non-empty reference-set assertion keep the scan from passing vacuously. Scoped to `src/tui/features/**`, it additionally pins that no features module hand-draws a **data-ink or rule** glyph and that none declares a **second colour table** (a `Record<K, ThemeColor>` annotation, or an object literal with two or more theme-token entries).
+- `test/chrome.test.ts`'s number-row block pins the digit/jump contract for the **twelve**-screen registry: each of the ten digits is live (`panelAction` owns it) and indexes a distinct `SELECTABLE_SCREENS` entry; the digitless set is **derived** from the registries, not hardcoded to `traces`/`frustration`, and each member is proven reachable through a real panel by arrows, `tab` and its `g` letter; and `DIGITLESS_SCREENS` pins the *count* of digitless screens, so adding a thirteenth fails that tripwire and forces a decision — re-declare the row, drop a screen, or raise the number deliberately. It deliberately does **not** assert `SELECTABLE_SCREENS.length <= 10` — that invariant is unsatisfiable at twelve and would only ever yield a permanently red assertion. `DIGIT_KEYS` there is a deliberate mirror of `panel.ts`'s module-private `DIGITS`; the two must move together.
 **Mounted verification is separate from unit tests.** Phase 1 exercised actual compiled-host mount/navigation/resize/sync/errors/dismissal. Later observations include no host DB startup, blocked-worker navigation/resize (86 ms, not a guarantee), actual unknown-price `N/A`, persistent-worker automatic ingestion of one root plus two child JSONL sessions (eight requests), and request details/associated trace opened. They do not establish the whole route/broker/paid/custom-theme matrix; the parent integration owner runs the affected suite and mounted matrix after edits settle.
 
 **Correctness traps that tests should cover:**

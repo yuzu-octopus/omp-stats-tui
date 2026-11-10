@@ -9,7 +9,7 @@ Fullscreen local usage-stats panel for [omp](https://github.com/can1357/oh-my-pi
 
 ## Install
 
-Prerequisites: [Bun](https://bun.sh) ≥ 1.4.2 and supported compiled omp **18.6.1** on `PATH`. Stats reads and live ingestion require a standalone `bun` executable even when omp itself is compiled.
+Prerequisites: [Bun](https://bun.sh) ≥ 1.4.2 and supported compiled omp **18.18.2** on `PATH`. Stats reads and live ingestion require a standalone `bun` executable even when omp itself is compiled.
 
 For the PR checkout commands, manual acceptance checklist, safety limits and troubleshooting, see the [testing guide](docs/TESTING.md).
 
@@ -22,7 +22,7 @@ omp plugin link .
 ```
 
 > [!IMPORTANT]
-> Both install and build are required. The manifest loads `dist/index.js`; the build bundles locally owned stats/private modules, keeps supported host APIs external, and emits `dist/data-worker.js`. Bun applies the committed `patchedDependencies` patch for stats 18.6.1 through `bun.lock`; the corrected dependency is included in the shipped bundle, not repaired at runtime.
+> Both install and build are required. The manifest loads `dist/index.js`; the build bundles locally owned stats/private modules, keeps supported host APIs external, and emits `dist/data-worker.js`. Bun applies the committed `patchedDependencies` patch for stats 18.18.2 through `bun.lock`; the corrected dependency is included in the shipped bundle, not repaired at runtime.
 
 The runtime `pi-coding-agent` dependency supplies real standalone judging to the worker. Its judge/auth resources are opened lazily only when a judging action requests them; passive statistics do not start paid work. Keep runtime dependencies installed alongside the distribution.
 
@@ -114,9 +114,9 @@ bun scripts/probe-render.ts all --width 100 --width 60
 omp models -e /abs/path/to/omp-stats-tui/dist/index.js
 ```
 
-`probe-render` renders the pure chart/layout IR, not the interactive controller workflow. It accepts `--range` from the six keys and `--preset unicode|nerd|ascii`. Controller acceptance needs a mounted host in addition to fixture/render tests. Other probes: `bun run scripts/probe-data.ts`, `bun run scripts/probe-glyphs.ts`.
+`probe-render` renders the pure chart/layout IR, not the interactive controller workflow. It accepts `--range` from the six keys and `--preset unicode|nerd|ascii`. Controller acceptance needs a mounted host in addition to fixture/render tests. Panel body tests built on `__testing.makePanel` also exercise the fixture/IR branch — `makePanel` injects a `fetch` unless `reads` is set, so `#feature()` resolves `undefined` by default and `#bodyLines` falls through to `renderScreenWith`; a controller-path panel test must construct the panel without an injected `fetch`. Other probes: `bun run scripts/probe-data.ts`, `bun run scripts/probe-glyphs.ts`.
 
-`bun test` currently passes **905 tests across 61 files**, and the full TypeScript `--noEmit` check passes. CI (`.github/workflows/ci.yml`) runs both, plus a build and an `omp models -e` extension-load smoke check, on every push to `main` and every PR. Because the panel's money honesty depends on a dependency patch Bun applies at install time, CI asserts `bun run verify:patch` immediately after `bun install --frozen-lockfile` — if you ever cache `node_modules`, its key must include both `bun.lock` and `patches/*.patch`.
+`bun test` currently passes **932 tests across 62 files**, and the full TypeScript check (`bun check`) passes. CI (`.github/workflows/ci.yml`) runs both, plus a build and an `omp models -e` extension-load smoke check, on every push to `main` and every PR. Because the panel's money honesty depends on a dependency patch Bun applies at install time, CI asserts `bun run verify:patch` immediately after `bun install --frozen-lockfile` — if you ever cache `node_modules`, its key must include both `bun.lock` and `patches/*.patch`.
 Source-mode development uses standalone Bun and installed dependencies. `StatsReadClient` resolves `scripts/data-worker.ts` relative to its source module; the production build's `__STATS_READ_WORKER__` macro instead resolves `./data-worker.js` relative to `dist/index.js`. Workers use absolute paths, inherit the host working directory for project/judge configuration, and receive the active agent directory plus `OMP_PROFILE`/`PI_PROFILE`; `PI_BUNDLED` is cleared. Launching compiled omp from another directory does not relocate the worker. Directly loading `src/index.ts` in compiled omp is not the supported distribution entry.
 
 ## Architecture
@@ -125,7 +125,7 @@ Source-mode development uses standalone Bun and installed dependencies. `StatsRe
 - `src/tui/panel.ts` mounts twelve `FeatureController`s from `src/tui/features/`, owns global navigation/scroll/disposal and injects the reader/theme/clipboard/open-trace context.
 - `src/data/client.ts` owns one persistent isolated `StatsReadClient` per mounted panel. `scripts/data-worker.ts` initializes the upstream DB, runs synchronous queries/transcript reads and owns patched upstream `StatsLive({ workers: 1 })` with initial ingest and transcript watching. Request/reply and unsolicited live status use NDJSON pipes. `s` calls this same live owner's `requestSync()`; committed-data updates refresh active queries without replacing controller state.
 - `src/data/api.ts` reuses upstream `handleApi(Request)` and data helpers inside the worker. Synthetic localhost requests open no socket; there is no plugin SQL workaround or independent backend.
-- `src/layout/spec.ts`, `src/layout/resolve.ts` and `src/tui/render/screen.ts` compose the pure chart/probe path (`ScreenSpec → renderScreen → renderBands`), not the interactive workflow.
+- `src/layout/spec.ts`, `src/layout/resolve.ts` and `src/tui/render/screen.ts` compose the pure chart/probe path (`ScreenSpec → renderScreen → renderBands`), not the interactive workflow; it is live only for `/stats-test`, the probes, and the panel's fixture/test branch.
 - `src/tui/features/presentation.ts` reuses `src/tui/band.ts` for production metric grids and measured tables, with injected theme/selection styling. Core list state formats only its visible row viewport.
 - `src/tui/charts/time-series.ts` is the shared production bucket plot used by core analytics, Providers and Gain. Other chart primitives cover calendars, categorical rates and trace timelines. Theme/paint arguments stay current per render; series/legend identity is shared, and each terminal cell has one color rather than independently colored braille dots.
 - `src/tui/chrome.ts`, `tabs.ts`, `footer.ts` and `responsive.ts` own navigation and responsive frame policy. Close disposes controllers/watchers and kills/reaps the child; late payloads cannot replace newer selections.

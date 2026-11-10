@@ -10,7 +10,7 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "test": "bun test",
-    "verify:patch": "bun -e \"const f='node_modules/@oh-my-pi/omp-stats/src/db.ts';const s=await Bun.file(f).text();if(!s.includes('messages_cost_unpriced_v2')){console.error('dependency patch NOT applied: '+f+' has no messages_cost_unpriced_v2 marker');process.exit(1)}console.log('dependency patch applied: '+f)\"",
+    "verify:patch": "bun run scripts/verify-patch.ts",
     "probe:data": "bun run scripts/probe-data.ts",
     "probe:glyphs": "bun run scripts/probe-glyphs.ts",
     "probe:render": "bun run scripts/probe-render.ts",
@@ -24,14 +24,14 @@
     ]
   },
   "dependencies": {
-    "@oh-my-pi/omp-stats": "18.7.0",
-    "@oh-my-pi/pi-coding-agent": "18.7.0"
+    "@oh-my-pi/omp-stats": "18.18.2",
+    "@oh-my-pi/pi-coding-agent": "18.18.2"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-tui": "18.7.0",
+    "@oh-my-pi/pi-tui": "18.18.2",
     "@types/bun": "^1.4.2"
   },
   "patchedDependencies": {
-    "@oh-my-pi/omp-stats@18.7.0": "patches/@oh-my-pi%2Fomp-stats@18.7.0.patch"
+    "@oh-my-pi/omp-stats@18.18.2": "patches/@oh-my-pi%2Fomp-stats@18.18.2.patch"
   }
 }

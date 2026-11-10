@@ -1,16 +1,10 @@
-diff --git a/node_modules/@oh-my-pi/omp-stats/.bun-tag-7a3a4b450be1ecfc b/.bun-tag-7a3a4b450be1ecfc
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@oh-my-pi/omp-stats/.bun-tag-ed825ee26d42165f b/.bun-tag-ed825ee26d42165f
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 92b8e69b4e5443c84c0f16abc547a75f95dd8cef..37211ac7f672334c33ff002ff076cc010901023b 100644
+index 052d71a42ca8208f7463db1e6deb9f6b1d05cdd2..07dea2450d5c472d4a04c2735e8a4aa41d672411 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -2,6 +2,15 @@
- 
- ## [Unreleased]
+@@ -78,6 +78,15 @@
+ - Improved dashboard responsiveness and efficiency by reducing unnecessary data refreshes and re-rendering, speeding up session synchronization, database access, package imports, and usage, model, and time-series requests, and avoiding repeated downloads of unchanged traces.
+ - Dashboard requests are now cancelled when no longer needed, improving responsiveness when switching sessions or closing trace views during loading.
  
 +### Added
 +
@@ -25,10 +19,10 @@ index 92b8e69b4e5443c84c0f16abc547a75f95dd8cef..37211ac7f672334c33ff002ff076cc01
  
  ### Fixed
 diff --git a/src/aggregator.ts b/src/aggregator.ts
-index 702453de48a66bdc4b8d41afd1b6d276a50ad768..c938ade746506619925f7bc74f7cd251c235827b 100644
+index 2ac9cda3266f229af53f247e1b8f04745bcc17ba..b5373fa7511ecfeedae6f1587c4906b2be75d930 100644
 --- a/src/aggregator.ts
 +++ b/src/aggregator.ts
-@@ -549,9 +549,10 @@ export async function getFolderStats(range?: string | null): Promise<FolderStats
+@@ -568,9 +568,10 @@ export async function getFolderStats(range?: string | null): Promise<FolderStats
  	return getStatsByFolder(getTimeRangeConfig(range).cutoff, FOLDER_LIMIT);
  }
  
@@ -42,10 +36,10 @@ index 702453de48a66bdc4b8d41afd1b6d276a50ad768..c938ade746506619925f7bc74f7cd251
  
  export async function getRecentErrors(range?: string | null, limit?: number): Promise<MessageStats[]> {
 diff --git a/src/client/api.ts b/src/client/api.ts
-index bc0259ce412c0c8bafe9deb909f02486e86ce297..dda9dd230d63b2b5f4de2f297ef22d19640286de 100644
+index d1769bb654e90198da037f6e0ce1694e132fcdfc..55d9a5974039ec64af8eb9addc066d35232b50fb 100644
 --- a/src/client/api.ts
 +++ b/src/client/api.ts
-@@ -81,8 +81,8 @@ export async function getCostDashboardStats(
+@@ -106,8 +106,8 @@ export async function getCostDashboardStats(
  	return fetchJson<CostDashboardStats>(`${API_BASE}/stats/costs?range=${encodeURIComponent(range)}`, { signal });
  }
  
@@ -56,60 +50,11 @@ index bc0259ce412c0c8bafe9deb909f02486e86ce297..dda9dd230d63b2b5f4de2f297ef22d19
  }
  
  export async function getRecentErrors(
-diff --git a/src/client/routes/OverviewRoute.tsx b/src/client/routes/OverviewRoute.tsx
-index 0a0741165df0e3bcc885dd0f2cbbd7aedcc779a4..355102d07b0e6f6cbf80c19dc55a654be44dfd89 100644
---- a/src/client/routes/OverviewRoute.tsx
-+++ b/src/client/routes/OverviewRoute.tsx
-@@ -63,7 +63,7 @@ const TOKEN_MIX = [
- 
- export function OverviewRoute({ active, range, onRequestClick }: OverviewRouteProps) {
- 	const overview = useQuery(["overview", range], () => getOverviewStats(range), { enabled: active });
--	const recent = useQuery(["recent-requests"], () => getRecentRequests(12), { enabled: active });
-+	const recent = useQuery(["recent-requests", range], () => getRecentRequests(12, range), { enabled: active });
- 	const [metric, setMetric] = useState<ActivityMetric>("requests");
- 	const meta = rangeMeta(range);
- 
-diff --git a/src/client/routes/RequestsRoute.tsx b/src/client/routes/RequestsRoute.tsx
-index ca2fbfa885a8af25b005c4215e4b9ff3c93e839a..b158f4c63bf9624266a842b874e703c0a834384d 100644
---- a/src/client/routes/RequestsRoute.tsx
-+++ b/src/client/routes/RequestsRoute.tsx
-@@ -47,23 +47,20 @@ type StatusFilter = "all" | RequestStatus;
- export function RequestsRoute({ active, range, onRequestClick }: RequestsRouteProps) {
- 	const [step, setStep] = useState(0);
- 	const limit = LOAD_STEPS[step];
--	const log = useQuery(["requests-log", limit], () => getRecentRequests(limit), { enabled: active });
-+	const log = useQuery(["requests-log", range, limit], () => getRecentRequests(limit, range), { enabled: active });
- 	const [search, setSearch] = useState("");
- 	const [status, setStatus] = useState<StatusFilter>("all");
- 	const meta = rangeMeta(range);
- 
- 	const view = useMemo(() => {
- 		const rows = log.data ?? [];
--		const cutoff = meta.spanMs === null ? null : Date.now() - meta.spanMs;
--		const inRange = cutoff === null ? rows : rows.filter(row => row.timestamp >= cutoff);
--		// The loaded window covers the whole range when the server ran out of rows
--		// or the oldest loaded row is already older than the range start. Stale
--		// rows belong to a smaller limit that is being replaced.
--		const complete = !log.stale && (rows.length < limit || (cutoff !== null && inRange.length < rows.length));
--		const counts: Record<StatusFilter, number> = { all: inRange.length, ok: 0, aborted: 0, failed: 0 };
--		for (const row of inRange) counts[requestStatus(row)]++;
--		return { loaded: rows.length, inRange, complete, counts, summary: summarizeRequests(inRange) };
--	}, [log.data, log.stale, limit, meta.spanMs]);
-+		// The server applies the range before its limit, so every loaded row is
-+		// in range. Stale rows still belong to a request being replaced.
-+		const complete = !log.stale && rows.length < limit;
-+		const counts: Record<StatusFilter, number> = { all: rows.length, ok: 0, aborted: 0, failed: 0 };
-+		for (const row of rows) counts[requestStatus(row)]++;
-+		return { loaded: rows.length, inRange: rows, complete, counts, summary: summarizeRequests(rows) };
-+	}, [log.data, log.stale, limit]);
- 
- 	const filtered = useMemo(() => {
- 		const needle = search.trim().toLowerCase();
 diff --git a/src/db.ts b/src/db.ts
-index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8c120be6b 100644
+index 6c816ffbae85516413b75fb27a6d16768156ab9a..77e1a964baef879e8f07662594af75cc57c05ad9 100644
 --- a/src/db.ts
 +++ b/src/db.ts
-@@ -35,21 +35,11 @@ const ZERO_USAGE_COST: UsageCost = {
+@@ -47,21 +47,11 @@ const ZERO_USAGE_COST: UsageCost = {
  };
  
  /**
@@ -136,7 +81,7 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
   */
  export function unpricedRequestSql(prefix = ""): string {
  	return `CASE WHEN ${prefix}total_tokens > 0 AND ${prefix}cost_total = 0
-@@ -104,11 +94,10 @@ const TOOL_CALLS_BACKFILL_KEY = "tool_calls_v2";
+@@ -117,11 +107,10 @@ const TOOL_CALLS_BACKFILL_KEY = "tool_calls_v3";
  // reach the inclusive 200K tier. A one-time full re-parse repairs them through
  // the cost-refreshing UPSERT in `insertMessageStats`.
  const COST_REINGEST_BACKFILL_KEY = "messages_cost_reingest_v1";
@@ -149,10 +94,10 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
 +// Historic zero rows lack source-price provenance; only replaying their session
 +// entries can distinguish absent costs from recorded zeros without guessing.
 +const COST_UNPRICED_BACKFILL_KEY = "messages_cost_unpriced_v2";
- function shouldResetBackfill(value: string | undefined): boolean {
- 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
- }
-@@ -374,20 +363,19 @@ function getBundledModelCost(provider: string, modelId: string): ModelCost | nul
+ // Rows predating the `cost_no_cache_input` column are NULL; ingest always
+ // writes a value, so one pass settles the column for good.
+ const NO_CACHE_INPUT_BACKFILL_KEY = "cost_no_cache_input_v1";
+@@ -554,13 +543,14 @@ function getBundledModelCost(provider: string, modelId: string): ModelCost | nul
  }
  
  function getCatalogCost(provider: string, modelId: string): ModelCost | null {
@@ -164,25 +109,24 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
  		return primaryCost;
  	}
  
-+	// Only established subscription aliases borrow API-equivalent reference
-+	// prices; matching a model id under any other provider is not a price card.
- 	const fallbackProvider = provider === "openai-codex" ? "openai" : provider === "xai-oauth" ? "xai" : null;
--	if (fallbackProvider) {
--		const fallbackCost = getBundledModelCost(fallbackProvider, modelId);
--		if (fallbackCost && hasBillableCost(fallbackCost)) {
--			return fallbackCost;
--		}
--	}
--
+-	// openai-codex has no catalog pricing-peer row (its bundled rows carry
+-	// their own prices); keep its first-party fallback here.
++	// Configured pricing peers borrow a reference price; a bare model-id match
++	// under another provider is not a price card.
+ 	const peer = pricingPeerFor(provider, modelId);
+ 	const fallbacks = peer
+ 		? peer.peers.map(peerProvider => [peerProvider, peer.peerId] as const)
+@@ -574,7 +564,8 @@ function getCatalogCost(provider: string, modelId: string): ModelCost | null {
+ 		}
+ 	}
+ 
 -	return null;
-+	const fallbackCost = fallbackProvider ? getBundledModelCost(fallbackProvider, modelId) : null;
-+	if (fallbackCost && hasBillableCost(fallbackCost)) return fallbackCost;
 +	// Older catalogs express free cards as explicit zero rates without a status.
 +	return primaryCost && model.pricingStatus !== "unknown" ? primaryCost : null;
  }
  
  /** Whether the catalog prices this model on a time-based (scheduled) card. */
-@@ -440,11 +428,7 @@ function hasRequestTimestamp(timestamp: number): boolean {
+@@ -627,11 +618,7 @@ function hasRequestTimestamp(timestamp: number): boolean {
  
  interface ResolvedCost {
  	cost: UsageCost;
@@ -195,22 +139,25 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
  	unpriced: boolean;
  }
  
-@@ -457,9 +441,11 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
+@@ -644,11 +631,13 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
  	const storedCost = raw ? normalizeUsageCost(raw) : undefined;
  	const catalogCost = getCatalogCost(stats.provider, stats.model);
  
--	// Scheduled prices are frozen per request, including explicitly free usage.
--	// Preserve legacy zero-cost subscription correction for unscheduled models.
--	if (storedCost && Number.isFinite(storedCost.total) && (storedCost.total !== 0 || catalogCost?.timeBased)) {
-+	// Preserve recorded prices, including explicit zero. Subscription providers
-+	// historically journal zero instead of their API-equivalent reference price;
-+	// retain that correction for flat cards, but scheduled charges stay frozen.
+-	// Recurring-tariff prices are frozen per request, including explicitly free
+-	// usage. Preserve legacy zero-cost subscription correction for other models;
+-	// dated rate cards reprice it at the card for the request's timestamp.
++	// Preserve recorded prices, including an explicit zero. Subscription
++	// providers historically journal zero instead of their API-equivalent
++	// reference price; retain that correction for flat cards, but scheduled
++	// charges stay frozen.
 +	const subscription = stats.provider === "openai-codex" || stats.provider === "xai-oauth";
-+	if (storedCost && Number.isFinite(storedCost.total) && (!subscription || storedCost.total !== 0 || catalogCost?.timeBased)) {
+ 	const recurring = catalogCost?.timeBased !== undefined && hasRecurringTariff(catalogCost.timeBased);
+-	if (storedCost && Number.isFinite(storedCost.total) && (storedCost.total !== 0 || recurring)) {
++	if (storedCost && Number.isFinite(storedCost.total) && (!subscription || storedCost.total !== 0 || recurring)) {
  		return { cost: storedCost, unpriced: false };
  	}
  
-@@ -475,7 +461,7 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
+@@ -664,7 +653,7 @@ function resolveStoredCost(stats: MessageStatsInput): ResolvedCost {
  			calculateCatalogCost(stats.provider, stats.model, stats.usage, stats.timestamp) ??
  			storedCost ??
  			ZERO_USAGE_COST,
@@ -219,7 +166,7 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
  	};
  }
  
-@@ -505,6 +491,7 @@ function backfillMissingCatalogCosts(database: Database): void {
+@@ -699,6 +688,7 @@ function backfillMissingCatalogCosts(database: Database): void {
  			SELECT id, provider, model, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
  			FROM messages
  			WHERE cost_total = 0 AND total_tokens > 0
@@ -227,15 +174,15 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
  		`)
  		.all() as CostBackfillRow[];
  
-@@ -845,6 +832,7 @@ export function insertMessageStats(stats: Iterable<MessageStatsInput>): number {
- 			WHERE entry_id = ? AND timestamp = ? AND session_file <> ?
- 		)
- 		ON CONFLICT(session_file, entry_id) DO UPDATE SET
+@@ -1169,6 +1159,7 @@ export function insertMessageStats(stats: Iterable<MessageStatsInput>): number {
+ 		],
+ 		identity: ["entry_id", "timestamp"],
+ 		upsert: `ON CONFLICT(session_file, entry_id) DO UPDATE SET
 +			timestamp = excluded.timestamp,
  			premium_requests = MAX(messages.premium_requests, excluded.premium_requests),
  			cost_input = excluded.cost_input,
  			cost_output = excluded.cost_output,
-@@ -957,14 +945,17 @@ function rowToMessageStats(row: any): MessageStats {
+@@ -1275,14 +1266,17 @@ function rowToMessageStats(row: any): MessageStats {
  	};
  }
  
@@ -243,7 +190,7 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
 +export function getRecentRequests(limit = 100, cutoff?: number | null): MessageStats[] {
  	if (!db) return [];
 +	const hasCutoff = cutoff !== undefined && cutoff !== null;
- 	const stmt = db.prepare(`
+ 	const stmt = db.query(`
 -		SELECT * FROM messages 
 -		ORDER BY timestamp DESC 
 +		SELECT * FROM messages
@@ -257,7 +204,7 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
  }
  
  export function getRecentErrors(limit = 100, cutoff?: number | null): MessageStats[] {
-@@ -1122,13 +1113,10 @@ function backfillReingestCosts(database: Database): void {
+@@ -1445,13 +1439,10 @@ function backfillReingestCosts(database: Database): void {
  }
  
  /**
@@ -274,37 +221,37 @@ index a285523340df2e6999578ab9940ce4169cf202b7..55773afb561e2283e695fdd20af368e8
 + * wipes on reopen; successful sync settles it alongside other backfills.
   */
  function backfillUnpricedCosts(database: Database): void {
- 	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(COST_UNPRICED_BACKFILL_KEY) as
-@@ -1136,10 +1124,12 @@ function backfillUnpricedCosts(database: Database): void {
+ 	const row = database.query("SELECT value FROM meta WHERE key = ?").get(COST_UNPRICED_BACKFILL_KEY) as
+@@ -1459,10 +1450,12 @@ function backfillUnpricedCosts(database: Database): void {
  		| undefined;
  	if (!shouldResetBackfill(row?.value)) return;
  
 -	database.run("DELETE FROM file_offsets");
 -	database
--		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
+-		.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 -		.run(COST_UNPRICED_BACKFILL_KEY, BACKFILL_PENDING);
 +	database.transaction(() => {
 +		database.run("DELETE FROM file_offsets");
 +		database
-+			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
++			.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 +			.run(COST_UNPRICED_BACKFILL_KEY, BACKFILL_PENDING);
 +	}).immediate();
  }
  
  /**
 diff --git a/src/live.ts b/src/live.ts
-index 579844838d1ce14c1ae40e452b89a1e148894b9f..7d03814de35c0fe18c03fc7dd260efd37a1ca17e 100644
+index baa652f12244c2054af1bf424f5f75c523213e4c..1a980b344e8e9c7c7996beeaabbd9fd7064c6608 100644
 --- a/src/live.ts
 +++ b/src/live.ts
-@@ -36,6 +36,7 @@ export class StatsLive {
+@@ -44,6 +44,7 @@ export class StatsLive {
  	#sync: LiveSyncStatus = { phase: "idle", current: 0, total: 0, processed: 0, lastSyncedAt: null, error: null };
  	#indexingHours = 0;
  	#listeners = new Set<Listener>();
 +	readonly #workers: number | undefined;
- 
- 	#started = false;
- 	#watcher: fs.FSWatcher | null = null;
-@@ -52,6 +53,11 @@ export class StatsLive {
+ 	/** Last frame sent to listeners; identical statuses are not re-sent. */
+ 	#lastFrame: string | null = null;
+ 	/** `PRAGMA data_version` at the last sync; null before the first. */
+@@ -64,6 +65,11 @@ export class StatsLive {
  	#refreshing = false;
  	#refreshAgain = false;
  
@@ -316,7 +263,7 @@ index 579844838d1ce14c1ae40e452b89a1e148894b9f..7d03814de35c0fe18c03fc7dd260efd3
  	status(): LiveStatus {
  		return { version: this.#version, sync: { ...this.#sync }, indexingHours: this.#indexingHours };
  	}
-@@ -123,6 +129,7 @@ export class StatsLive {
+@@ -135,6 +141,7 @@ export class StatsLive {
  			await initDb();
  			const result = await syncAllSessions({
  				files,
@@ -325,10 +272,10 @@ index 579844838d1ce14c1ae40e452b89a1e148894b9f..7d03814de35c0fe18c03fc7dd260efd3
  					if (visible) {
  						this.#sync = {
 diff --git a/src/rollup.ts b/src/rollup.ts
-index bcee47b06f75d91daa5d86ed14986a1c4d9ae454..66e19d7443cef4a4e365d62df10d6774925a2d4f 100644
+index 99b837586228dbf34f7c1e7cb250a603d7c2f962..80c5600db32b6cd620907e5adcb1fa320511f7dd 100644
 --- a/src/rollup.ts
 +++ b/src/rollup.ts
-@@ -52,7 +52,7 @@ const DAY_MS = 24 * HOUR_MS;
+@@ -53,7 +53,7 @@ const DAY_MS = 24 * HOUR_MS;
   * Bump when the rollup schema or fact definitions change: the tables are then
   * dropped and every hour is rebuilt from the raw tables.
   */
@@ -336,8 +283,8 @@ index bcee47b06f75d91daa5d86ed14986a1c4d9ae454..66e19d7443cef4a4e365d62df10d6774
 +const ROLLUP_VERSION = "3";
  const ROLLUP_VERSION_KEY = "rollup_version";
  /** Bump when the dirty-marking triggers change; they are then recreated in place. */
- const TRIGGER_VERSION = "3";
-@@ -810,6 +810,7 @@ export function getProviderTimeSeries({ cutoff, bucketMs }: RangeWindow): Provid
+ const TRIGGER_VERSION = "4";
+@@ -901,6 +901,7 @@ export function getProviderTimeSeries({ cutoff, bucketMs }: RangeWindow): Provid
  		bucket: number;
  		provider: string;
  		total_tokens: number;
@@ -345,7 +292,7 @@ index bcee47b06f75d91daa5d86ed14986a1c4d9ae454..66e19d7443cef4a4e365d62df10d6774
  		cost: number;
  		unpriced: number;
  		requests: number;
-@@ -817,12 +818,14 @@ export function getProviderTimeSeries({ cutoff, bucketMs }: RangeWindow): Provid
+@@ -908,12 +909,14 @@ export function getProviderTimeSeries({ cutoff, bucketMs }: RangeWindow): Provid
  		{ cutoff, bucketMs },
  		`${seriesBucket(bucketMs)} AS bucket, f.provider AS provider,
  		 SUM(f.input_tokens + f.output_tokens + f.cache_read_tokens + f.cache_write_tokens) AS total_tokens,
@@ -361,10 +308,10 @@ index bcee47b06f75d91daa5d86ed14986a1c4d9ae454..66e19d7443cef4a4e365d62df10d6774
  		unpricedRequests: row.unpriced,
  		requests: row.requests,
 diff --git a/src/server.ts b/src/server.ts
-index 162c56a21865b161fdba8ab215d54ae3c7bd39c5..bdf7a9013aefe151ffcb2ab947448d30fbcd038b 100644
+index 081f7e898fa13fb3e4721c272ba6335291a40e72..0386ce623816149ea0297d22344056e27e6f474d 100644
 --- a/src/server.ts
 +++ b/src/server.ts
-@@ -230,7 +230,7 @@ export async function handleApi(req: Request): Promise<Response> {
+@@ -276,7 +276,7 @@ export async function handleApi(req: Request): Promise<Response> {
  
  	if (path === "/api/stats/recent") {
  		const limit = url.searchParams.get("limit");
@@ -374,10 +321,10 @@ index 162c56a21865b161fdba8ab215d54ae3c7bd39c5..bdf7a9013aefe151ffcb2ab947448d30
  	}
  
 diff --git a/src/shared-types.ts b/src/shared-types.ts
-index f7e5a04787e6702ec1e56eb48c2954ee4825425e..8cf857976841dde1fb15f4e5f0bd82093c43e8db 100644
+index 73ccc60e0f32e13e778608c82d88aa5dfc6e0bb5..00b0b652a026fece2dace126883a77be833a3bc9 100644
 --- a/src/shared-types.ts
 +++ b/src/shared-types.ts
-@@ -415,6 +415,7 @@ export interface ProviderTimeSeriesPoint {
+@@ -868,6 +868,7 @@ export interface ProviderTimeSeriesPoint {
  	timestamp: number;
  	provider: string;
  	totalTokens: number;
@@ -386,7 +333,7 @@ index f7e5a04787e6702ec1e56eb48c2954ee4825425e..8cf857976841dde1fb15f4e5f0bd8209
  	/** Requests excluded because no public-equivalent subscription price exists. */
  	unpricedRequests: number;
 diff --git a/src/types.ts b/src/types.ts
-index e15d7502ff19c7d55f2425fb20034da0a7efd4fb..612bf1291f5c1592ccc8baba611d30f437f8135e 100644
+index d07bee087e8ab0628a1f71c379961b4297a545bd..aad7255f7b26d883873258058b511ca993ffaea0 100644
 --- a/src/types.ts
 +++ b/src/types.ts
 @@ -44,11 +44,10 @@ export interface MessageStats {

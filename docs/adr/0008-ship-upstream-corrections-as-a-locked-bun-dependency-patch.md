@@ -36,7 +36,7 @@ provider name.
 
 ## The decision
 
-`patches/@oh-my-pi%2Fomp-stats@18.6.1.patch`, applied through `package.json`'s
+`patches/@oh-my-pi%2Fomp-stats@18.18.2.patch`, applied through `package.json`'s
 `patchedDependencies` and recorded in `bun.lock`. Four corrections, each with its own
 CHANGELOG entry in the patch:
 

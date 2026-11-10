@@ -197,9 +197,10 @@ neither and gets both from the grammar.
 **ScreenSpec**:
 One screen's declared pure layout: its id, labels, `needs`, and `Band[]` (`src/layout/spec.ts`).
 The IR is NOT the production render path — every `/stats-tui` screen is a `FeatureController` that draws
-its own body. A `ScreenSpec` exists for three jobs: the shipped `/stats-test` showcase, the nav/tabs
-identity, and the review probes. The reason is settled: a static band grammar cannot express focus,
-search, sort, staged loading or retained state.
+its own body (`render(width, height)`). A `ScreenSpec` is live only for four jobs: the shipped `/stats-test`
+showcase, the nav/tabs identity, the review probes, and the panel's fixture/test branch (`options.fetch`
+injected). The reason is settled: a static band grammar cannot express focus, search, sort, staged
+loading or retained state.
 _Not to be confused with_: `FeatureController`, or the pure registry `Screen` record that defers rendering
 to `renderScreen`. Adding a `Band[]` changes what `/stats-test` draws and which ids `tabs.ts`/`chrome.ts`
 expose — and changes nothing a user sees in `/stats-tui`.
@@ -212,9 +213,11 @@ expose — and changes nothing a user sees in `/stats-tui`.
 | `src/layout/resolve.ts` | the showcase and `probe-render.ts` resolve every `MetricRef` through it |
 | `src/layout/host-derived.ts` | `resolve.ts`'s named figures — 18 `HOST_DERIVED` entries (three `agentTokens:*` variants and 15 metrics) — imported by `resolve.ts` alone |
 | `src/tui/band.ts` | draws band primitives for `render/screen.ts`; production `features/presentation.ts` also reuses metric-grid/table drawing, without adopting static screen specs or metric-ref resolution |
-| `src/tui/render/screen.ts` | the showcase's and `probe-render.ts`'s renderer, plus one **fixture-only** branch in `panel.ts:772` — reachable only when `options.fetch` is injected, because `#feature()` returns `undefined` in that case. The real worker path always has a controller |
+| `src/tui/render/screen.ts` | the showcase's and `probe-render.ts`'s renderer, plus one **fixture-only** branch in `panel.ts:780` — reachable only when `options.fetch` is injected, because `#feature()` returns `undefined` in that case. The real worker path always has a controller |
 | `src/tui/charts/*` | **both** paths — `features/core/*` import them directly on `/stats-tui`, so these are production chart code, not IR |
 | `src/tui/screens/*.ts` | registry METADATA only (`id`/`label`/`short`/`status`/`needs`) for `SELECTABLE_SCREENS` and the digit row; the `render` bodies are unreachable in production and only `errors-screen.test.ts`/`activity.test.ts` still call them |
+
+**Which test exercises production.** `__testing.makePanel` injects a `fetch` (the caller's or a fixture loader) unless `reads` is set, so `#feature()` returns `undefined` by default and `#bodyLines` renders through `renderScreenWith`. Panel body tests built on `makePanel` therefore exercise the fixture branch, never a `FeatureController`; a controller-path panel test must construct the panel without an injected `fetch`.
 
 **MetricRef**:
 A declared read of one figure — which payload, which field, which row (`src/layout/spec.ts`).

@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { renderHeatmap, weeksForWidth } from "../src/tui/charts/heatmap";
-import { calendarLayout } from "../src/tui/charts/calendar";
+import { __testing, calendarLayout } from "../src/tui/charts/calendar";
 import { glyphsFor, glyph } from "../src/tui/glyphs";
 import type { DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
 
@@ -318,4 +318,52 @@ test("no row ends in a newline and no row is empty", () => {
 		expect(row.includes("\n")).toBe(false);
 		expect(row.length).toBeGreaterThan(0);
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Layout cache (AGENTS.md: "Cache the heatmap layout").
+// ---------------------------------------------------------------------------
+
+test("two renders with equal (points, weeks) build the layout once", () => {
+	__testing.layoutBuilds = 0;
+	const points = [
+		point("2026-09-21", 10),
+		point("2026-09-28", 40),
+		point("2026-10-01", 100),
+		point("2026-10-02", 25),
+	];
+	const options = { ...opts(8), today: TODAY };
+	const first = renderHeatmap(points, options);
+	expect(__testing.layoutBuilds).toBe(1);
+	// The Activity screen's own sequence (summary.ts): probe `start`, read the
+	// totals, then let `renderHeatmap` lay the grid out — one cached layout.
+	const probe = calendarLayout(points, 8, TODAY);
+	expect(probe).toBe(calendarLayout(points, 8, TODAY));
+	expect(renderHeatmap(points, options)).toEqual(first);
+	expect(__testing.layoutBuilds).toBe(1);
+	// A different window is a different layout.
+	renderHeatmap(points, { ...options, weeks: 4, innerWidth: 10 });
+	expect(__testing.layoutBuilds).toBe(2);
+	// The key is the array IDENTITY, not its content: a rebuilt array builds again.
+	expect(renderHeatmap([...points], options)).toEqual(first);
+	expect(__testing.layoutBuilds).toBe(3);
+});
+
+test("a cache hit renders byte-identical output to a fresh layout", () => {
+	const points = [point("2026-09-30", 1), point("2026-10-01", 10), point("2026-10-02", 40), point("2026-10-04", 5)];
+	const options = {
+		...opts(12),
+		today: TODAY,
+		selectedDay: "2026-10-02",
+		selected: (cell: string) => `\x1b[7m${cell}\x1b[27m`,
+	};
+	__testing.layoutBuilds = 0;
+	const cold = renderHeatmap(points, options);
+	expect(__testing.layoutBuilds).toBe(1);
+	const warm = renderHeatmap(points, options);
+	expect(__testing.layoutBuilds).toBe(1);
+	expect(warm).toEqual(cold);
+	// A NEW array with equal content misses the cache, rebuilds, and must land
+	// on the same bytes — the cached layout is equivalent, not stale.
+	expect(renderHeatmap(points.map(entry => ({ ...entry })), options)).toEqual(cold);
 });

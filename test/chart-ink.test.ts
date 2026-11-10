@@ -552,7 +552,7 @@ test("an ALL-ZERO series is never shed to nothing — it always paints a floor",
 				// loudest-first and STOPPED, so a budget smaller than the series
 				// count left the tail bands with zero rows. A band with zero rows
 				// paints no floor, and that is the blank row the defect pointed at.
-				const peaks = series.map(s => Math.max(...s.values));
+				const peaks = series.map(s => Math.max(...s.values.map(value => value ?? 0)));
 				const markable = Math.min(height, labels && height >= count * 2 + 1 ? height - count : height);
 				expect(
 					bandHeights(peaks, markable).filter(rows => rows < 1),
@@ -809,11 +809,14 @@ test("renderTimeSeries says so when the host will not chart the range", () => {
  * FAIL on the swapped HEAD (floors only, no ink) and PASS after the fix.
  */
 const SHAPE_AXIS = Array.from({ length: 12 }, (_, i) => 1700000000000 + i * 86_400_000);
+// Deliberately NOT proportional: the host's `restatedColumns` drops a series
+// that is an exact multiple of another, and the shared-axis tests below need
+// several surviving series to prove anything.
 const shapeRows = (count: number) =>
 	Array.from({ length: count }, (_, s) => ({
 		key: `s${s}`,
 		label: `Series ${s}`,
-		values: SHAPE_AXIS.map((_, i) => (s + 1) * (i + 1)),
+		values: SHAPE_AXIS.map((_, i) => (s + 1) * (i + 1) + s * 5),
 	}));
 
 test("a 6-series stacked time-series at height 5 draws data ink", () => {

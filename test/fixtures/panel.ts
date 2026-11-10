@@ -28,6 +28,7 @@ import type {
 	ModelStats,
 	ModelTimeSeriesPoint,
 	ProviderDashboardStats,
+	ProviderWindowInsight,
 	TimeSeriesPoint,
 	ToolDashboardStats,
 } from "@oh-my-pi/omp-stats/shared-types";
@@ -98,6 +99,8 @@ export const BY_MODEL: readonly ModelStats[] = [
 		errorRate: 0.0031,
 		totalCost: 935.72,
 		unpricedRequests: 0,
+		totalCacheReadTokens: 512_000_000,
+		avgDuration: 9_800,
 		cacheRate: 0.961,
 	}),
 	modelRow({
@@ -108,6 +111,8 @@ export const BY_MODEL: readonly ModelStats[] = [
 		errorRate: 0,
 		totalCost: 0,
 		unpricedRequests: 4_197,
+		totalCacheReadTokens: 571_773_459,
+		avgDuration: 14_200,
 		cacheRate: 0.955,
 	}),
 	modelRow({
@@ -118,6 +123,8 @@ export const BY_MODEL: readonly ModelStats[] = [
 		errorRate: 0.0024,
 		totalCost: 0,
 		unpricedRequests: 0,
+		totalCacheReadTokens: 120_226_541,
+		avgDuration: 18_600,
 		cacheRate: 0.981,
 	}),
 ];
@@ -147,13 +154,14 @@ function costPoint(
 	model: string,
 	cost: number,
 	tokens: number,
+	unpricedRequests = 0,
 ): CostTimeSeriesPoint {
 	return {
 		timestamp,
 		model,
 		provider: "openrouter",
 		cost,
-		unpricedRequests: 0,
+		unpricedRequests,
 		costInput: cost * 0.1,
 		costOutput: cost * 0.05,
 		costCacheRead: cost * 0.8,
@@ -162,19 +170,44 @@ function costPoint(
 	};
 }
 
+// The SAME unpriced population BY_MODEL carries: the no-card model's 4,197
+// requests appear here too, so the costs route and the models route agree.
 export const COST_SERIES: readonly CostTimeSeriesPoint[] = [
 	costPoint(dayStart(20), "space-bunny-free", 0.01, 9_000_000),
 	costPoint(dayStart(0), "gpt-5.6-terra", 42, 1_000),
 	costPoint(dayStart(0), "space-bunny-free", 0.02, 4_000_000),
+	costPoint(dayStart(0), "gemini-3.7-flash-high", 0, 571_773_459, 4_197),
 ];
 
-export const TIME_SERIES: readonly TimeSeriesPoint[] = [23, 12, 5, 1].map((hoursAgo, index) => ({
-	timestamp: hourStart(hoursAgo),
-	requests: [420, 310, 180, 95][index],
-	errors: [4, 2, 9, 1][index],
-	tokens: [2_400_000, 1_900_000, 900_000, 400_000][index],
-	cost: [3.2, 1.1, 4.75, 0.4][index],
-}));
+/**
+ * A series that reaches both ends of the range set: daily buckets across the
+ * aggregate's 30-day window, then hourly buckets across the last 24 h. A chart
+ * at 24 h reads the hourly tail; a chart at 30 d reads the daily span. The error
+ * rate varies per point so Succeeded and Failed are not proportional — a
+ * proportional pair is a restatement, not two series.
+ */
+export const TIME_SERIES: readonly TimeSeriesPoint[] = [
+	...Array.from({ length: 29 }, (_, index) => {
+		const requests = 90 + ((index * 37) % 240);
+		return {
+			timestamp: dayStart(29 - index) + 12 * HOUR,
+			requests,
+			errors: 1 + ((index * 7) % 9),
+			tokens: requests * 4_000,
+			cost: Math.round(requests * 0.03 * 100) / 100,
+		};
+	}),
+	...Array.from({ length: 24 }, (_, index) => {
+		const requests = 420 - index * 12;
+		return {
+			timestamp: hourStart(23 - index),
+			requests,
+			errors: [4, 2, 9, 1][index % 4]!,
+			tokens: requests * 90_000,
+			cost: Math.round(requests * 0.09 * 100) / 100,
+		};
+	}),
+];
 
 export const BY_AGENT_TYPE: readonly AgentTypeStats[] = [
 	{
@@ -392,7 +425,8 @@ export const TOOLS: ToolDashboardStats = {
 	],
 };
 
-export const PROVIDERS: ProviderDashboardStats = {
+export type ProviderDashboardFixture = ProviderDashboardStats & { insights: ProviderWindowInsight[] };
+export const PROVIDERS: ProviderDashboardFixture = {
 	providers: [
 		{
 			provider: "openrouter",
@@ -448,6 +482,10 @@ export const PROVIDERS: ProviderDashboardStats = {
 		{ timestamp: dayStart(1), provider: "openrouter", totalTokens: 20_000_000, cost: 310.4, unpricedRequests: 0, requests: 420 },
 		{ timestamp: dayStart(0), provider: "opencode-go", totalTokens: 300_000_000, cost: 0, unpricedRequests: 0, requests: 9_100 },
 	],
+	insights: [
+		{ provider: "openrouter", windowKey: "day", windowLabel: "Daily", accounts: 2, cycles: 12, fractionConsumed: 0.42, estTokensPerWindow: 48_000_000, peakConcurrentFraction: 1.1, idealAccounts: 2, exhaustedEvents: 0 },
+		{ provider: "opencode-go", windowKey: "week", windowLabel: "Weekly", accounts: 1, cycles: 3, fractionConsumed: 0.08, estTokensPerWindow: 900_000_000, peakConcurrentFraction: 0.31, idealAccounts: 1, exhaustedEvents: 0 },
+	],
 };
 
 /**
@@ -467,15 +505,19 @@ export const GAIN: GainDashboardStats = {
 	project: null,
 	projects: ["/Users/yuzu/Documents/Projects/omp-stats-tui"],
 };
- /** 40 days of activity, with one conspicuously busy day for the heatmap peak. */
-export const DAILY_ACTIVITY: readonly DailyActivityPoint[] = Array.from({ length: 40 }, (_, i) => {
+export type DailyActivityFixture = DailyActivityPoint & { unpricedRequests?: number };
+/** 40 days of activity, with one conspicuously busy day for the heatmap peak. */
+export const DAILY_ACTIVITY: readonly DailyActivityFixture[] = Array.from({ length: 40 }, (_, i) => {
 	const daysAgo = 39 - i;
 	const busy = daysAgo === 12;
+	const requests = busy ? 2_004 : (i % 7) + 1;
 	return {
 		day: new Date(FIXTURE_NOW - daysAgo * DAY).toISOString().slice(0, 10),
 		cost: busy ? 611.4 : Math.round((i % 7) * 3.11 * 100) / 100,
-		requests: busy ? 2_004 : (i % 7) + 1,
+		requests,
 		totalTokens: (i % 7) * 1_200_000,
+		// Every seventh day is a no-card model's usage: unmeasured spend, not free.
+		unpricedRequests: i % 7 === 0 ? requests : 0,
 	};
 });
 
@@ -498,7 +540,7 @@ export function liveData(over: Partial<PanelData> = {}): PanelData {
 	recent,
 	errors,
 	tools: TOOLS,
-	providers: { providers: [...PROVIDERS.providers], hourly: [...PROVIDERS.hourly], series: [...PROVIDERS.series] },
+		providers: { providers: [...PROVIDERS.providers], hourly: [...PROVIDERS.hourly], series: [...PROVIDERS.series], insights: [...PROVIDERS.insights] } as ProviderDashboardFixture,
 	gain: { ...GAIN, bySource: { ...GAIN.bySource }, timeSeries: [...GAIN.timeSeries], projects: [...GAIN.projects] },
 	dailyActivity: [...DAILY_ACTIVITY],
 	rollupStatus: { dirtyHours: 0, dirtySessions: 0 },
@@ -536,7 +578,7 @@ export function blankData(): PanelData {
 		recent: [],
 		errors: [],
 		tools: { byTool: [], byToolModel: [], series: [] },
-		providers: { providers: [], hourly: [], series: [] },
+		providers: { providers: [], hourly: [], series: [], insights: [] } as ProviderDashboardFixture,
 		gain: { overall: { savedTokens: 0, savedBytes: 0, hits: 0, outputBytes: 0, originalBytes: 0, reductionPercent: null }, bySource: { snapcompact: { savedTokens: 0, savedBytes: 0, hits: 0, outputBytes: 0, originalBytes: 0, reductionPercent: null } }, timeSeries: [], project: null, projects: [] },
 		dailyActivity: [],
 		rollupStatus: { dirtyHours: 0, dirtySessions: 0 },

@@ -50,12 +50,12 @@
  * the dearer model draws the taller bar.
  */
 
-/** One series' values. Gaps are `0`: a day with no spend is a zero, not a hole. */
+/** One series' values. A `null` is a GAP: a bucket that recorded nothing, which renders no mark. */
 export interface SeriesChartSeries {
 	/** The series' name, from the route or the IR. Labels the band. */
 	label: string;
 	/** One value per bucket, oldest first. The same axis for every series. */
-	values: readonly number[];
+	values: readonly (number | null)[];
 }
 
 /**
@@ -176,7 +176,7 @@ export function bandHeights(peaks: readonly number[], budget: number): readonly 
  */
 export function bandMax(series: readonly SeriesChartSeries[]): number {
 	return series.reduce(
-		(shared, entry) => entry.values.reduce((peak, value) => (value > peak ? value : peak), shared),
+		(shared, entry) => entry.values.reduce<number>((peak, value) => (value !== null && value > peak ? value : peak), shared),
 		0,
 	);
 }

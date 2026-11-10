@@ -17,6 +17,7 @@ function deferred<T>() {
 	const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
 	return { promise, resolve, reject };
 }
+async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
 function context(api: FeatureReader["api"]): FeatureContext {
 	return { reader: { api, fetch: async () => ({}) }, theme, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {}, now: () => now };
 }
@@ -71,7 +72,8 @@ test("local provider load resolves and stays interactive while broker windows ar
 	const controller = createProvidersFeature(context(async <T>(path: string) => (path.endsWith("/providers") ? local : await windows.promise) as T));
 	await controller.load("24h");
 	expect(stripForTest(controller.render(110, 30).join("\n"))).toContain("local-only");
-	expect(controller.handleInput("v")).toBe(true);
+	// Broker I/O starts only when the Windows view is entered.
+	controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v");
 	windows.reject(new Error("broker offline"));
 	await Promise.resolve(); await Promise.resolve();
 	const text = stripForTest(controller.render(110, 30).join("\n"));
@@ -92,6 +94,7 @@ test("late account response never replaces the selected provider or duplicate ac
 	}));
 	await controller.load("24h");
 	controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v");
+	await settle();
 	controller.handleInput("p");
 	b.resolve({ windowInsights: windows, usageSeries: [account("b", "b-first", 0.9), account("b", "b-second", 0.3)] });
 	await Promise.resolve(); await Promise.resolve();
@@ -176,12 +179,12 @@ test("old-range window failure cannot replace the newest empty-snapshot state", 
 		return await (params?.range === "24h" ? old.promise : current.promise) as T;
 	}));
 	await controller.load("24h");
+	controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v");
 	await controller.load("1h");
 	current.resolve({ windowInsights: [], usageSeries: [] });
-	await Promise.resolve(); await Promise.resolve();
+	await settle();
 	old.reject(new Error("obsolete broker failure"));
-	await Promise.resolve(); await Promise.resolve();
-	controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v");
+	await settle();
 	const text = stripForTest(controller.render(120, 40).join("\n"));
 	expect(text).toContain("No usage snapshots in this range");
 	expect(text).not.toContain("obsolete broker failure");
@@ -241,7 +244,9 @@ test("burn tooltips aggregate Other and honor hidden series while legends expose
 
 test("retained account histories refresh independently of local and fleet-window failures", async () => {
 	const refreshWindows = deferred<{ windowInsights: ProviderWindowInsight[]; usageSeries: UsageWindowSeries[] }>();
+	const failedWindows = deferred<{ windowInsights: ProviderWindowInsight[]; usageSeries: UsageWindowSeries[] }>();
 	let refreshed = false;
+	let failing = false;
 	let accountLoads = 0;
 	const windows = [insight("a", "day")];
 	const controller = createProvidersFeature(context(async <T>(path: string, params?: Record<string, string>) => {
@@ -249,29 +254,35 @@ test("retained account histories refresh independently of local and fleet-window
 			if (refreshed) throw new Error("local refresh unavailable");
 			return local as T;
 		}
-		if (!params?.provider) return (refreshed ? await refreshWindows.promise : { windowInsights: windows, usageSeries: [] }) as T;
+		if (!params?.provider) return (failing ? await failedWindows.promise : refreshed ? await refreshWindows.promise : { windowInsights: windows, usageSeries: [] }) as T;
 		accountLoads++;
 		return { windowInsights: windows, usageSeries: [account("a", "remembered", refreshed ? 0.95 : 0.2)] } as T;
 	}));
 	await controller.load("24h");
-	await Promise.resolve(); await Promise.resolve();
 	controller.handleInput("\x1b[Z");
+	await settle();
 	controller.render(140, 50);
 	refreshed = true;
 	await controller.load("7d");
-	await Promise.resolve(); await Promise.resolve();
+	await settle();
 	let text = stripForTest(controller.render(140, 50).join("\n"));
 	expect(text).toContain("local refresh unavailable");
 	expect(text).toContain("Loading windows independently");
+	refreshWindows.resolve({ windowInsights: windows, usageSeries: [] });
+	await settle();
+	text = stripForTest(controller.render(140, 50).join("\n"));
 	expect(text).toContain("Account key remembered");
 	expect(text).toContain("Latest 95.0%");
 	expect(text).toContain("headroom 5.0%");
-	refreshWindows.reject(new Error("fleet offline"));
-	await Promise.resolve(); await Promise.resolve();
+	failing = true;
+	controller.handleInput("u");
+	await settle();
+	failedWindows.reject(new Error("fleet offline"));
+	await settle();
 	text = stripForTest(controller.render(140, 50).join("\n"));
 	expect(text).toContain("fleet offline");
 	expect(text).toContain("Latest 95.0%");
-	expect(accountLoads).toBe(2);
+	expect(accountLoads).toBe(3);
 	controller.dispose();
 });
 
@@ -287,8 +298,8 @@ test("retrying fleet and accounts does not issue a second account read when flee
 		return { windowInsights: windows, usageSeries: [account("a", "one", retry ? 0.6 : 0.3)] } as T;
 	}));
 	await controller.load("24h");
-	await Promise.resolve(); await Promise.resolve();
 	controller.handleInput("\x1b[Z");
+	await settle();
 	retry = true; controller.handleInput("u");
 	await Promise.resolve(); await Promise.resolve();
 	expect(stripForTest(controller.render(130, 50).join("\n"))).toContain("Latest 60.0%");
@@ -311,8 +322,8 @@ test("account rows select independent limit windows and retain identity through 
 		path.endsWith("/providers") ? local : { windowInsights: windows, usageSeries: params?.provider ? [day, week] : [] }
 	) as T));
 	await controller.load("24h");
-	await Promise.resolve(); await Promise.resolve();
 	controller.handleInput("\x1b[Z");
+	await settle();
 	controller.render(150, 50);
 	controller.handleInput("j");
 	controller.handleInput("o");
@@ -389,8 +400,8 @@ test("hidden account utilization omits numeric tooltip but preserves exhausted s
 		path.endsWith("/providers") ? local : { windowInsights: windows, usageSeries: params?.provider ? [missing] : [] }
 	) as T));
 	await controller.load("24h");
-	await Promise.resolve(); await Promise.resolve();
 	controller.handleInput("\x1b[Z");
+	await settle();
 	let text = stripForTest(controller.render(150, 50).join("\n"));
 	expect(text).toContain("Latest No numeric reading");
 	expect(text).toContain("shared@example: No reading (gap)");
@@ -440,4 +451,44 @@ test("provider tables and populated gain charts stay within narrow panel widths"
 		}
 	}
 	provider.dispose(); savings.dispose();
+});
+
+test("a malformed providers payload renders a defined error state instead of throwing", async () => {
+	const controller = createProvidersFeature(context(async <T>() => ({}) as T));
+	await controller.load("30d");
+	let lines: readonly string[] = [];
+	expect(() => { lines = controller.render(110, 30); }).not.toThrow();
+	expect(stripForTest(lines.join("\n"))).toContain("Providers payload missing");
+	controller.dispose();
+});
+
+test("load performs no broker window call; entering the Windows view does", async () => {
+	const paths: string[] = [];
+	const controller = createProvidersFeature(context(async <T>(path: string) => {
+		paths.push(path);
+		return (path.endsWith("/providers") ? local : { windowInsights: [], usageSeries: [] }) as T;
+	}));
+	await controller.load("30d");
+	expect(paths.some(path => path.includes("provider-windows"))).toBe(false);
+	controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v");
+	await settle();
+	expect(paths.some(path => path.includes("provider-windows"))).toBe(true);
+	controller.dispose();
+});
+
+test("an all-unpriced cost bucket reads N/A in the burn legend, never $0.00", async () => {
+	const series = [
+		{ timestamp: now - 24 * 3_600_000, provider: "p", totalTokens: 10, outputTokens: 5, requests: 2, cost: 5, unpricedRequests: 0 },
+		{ timestamp: now, provider: "p", totalTokens: 10, outputTokens: 5, requests: 2, cost: 0, unpricedRequests: 2 },
+	];
+	const controller = createProvidersFeature(context(async <T>(path: string) => (
+		path.endsWith("/providers") ? { ...local, series } : { windowInsights: [], usageSeries: [] }
+	) as T));
+	await controller.load("24h");
+	controller.handleInput("v");
+	controller.handleInput("m"); controller.handleInput("m"); controller.handleInput("m");
+	const text = stripForTest(controller.render(120, 50).join("\n"));
+	expect(text).toContain("N/A · 2 unpriced");
+	expect(text).not.toContain("$0.00");
+	controller.dispose();
 });

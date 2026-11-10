@@ -16,6 +16,10 @@ import type { GlyphSet } from "../glyphs";
  * zero-fill for quiet days, sqrt-compressed max-anchored levels, request
  * fallback for unpriced activity, and `null` for future dates. The colour
  * ramp arrives from `palette.heatRamp`, which ports `/usage`'s arithmetic.
+ *
+ * `calendarLayout` memoises on the `points` array reference, so hand it the
+ * payload array itself: a `filter`/`map` copy gets no hit, and mutating one
+ * in place would serve a stale grid.
  */
 
 /** Raw foreground reset. Deliberately not `theme.fg(...)` per cell: that would

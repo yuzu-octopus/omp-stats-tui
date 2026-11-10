@@ -1,5 +1,6 @@
 import { matchesKey, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { formatDurationMs, formatEstimatedCost, formatInteger } from "@oh-my-pi/omp-stats/client/data/formatters";
+import { costWithUnpriced } from "../format";
 import type { SessionSummary, SessionTrace, TraceToolStat } from "@oh-my-pi/omp-stats/shared-types";
 import type { Range } from "../../data/ranges";
 import type { FeatureContext, FeatureController } from "./types";
@@ -136,7 +137,10 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 			const responses = await Promise.all(queries);
 			if (closed || id !== generation || state) return;
 			const byFile = new Map<string, SessionSummary>();
-			for (const response of responses) for (const row of response) byFile.set(row.file, row);
+			for (const response of responses) {
+				if (!Array.isArray(response)) { error = "Session list payload is not an array"; return; }
+				for (const row of response) byFile.set(row.file, row);
+			}
 			sessions = [...byFile.values()];
 			sessionsLoaded = true;
 			const visible = sortedSessions();
@@ -153,6 +157,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 		try {
 			const trace = await ctx.reader.api<SessionTrace>("/api/session/trace", { file: view.file });
 			if (closed || id !== generation || state !== view) return;
+			if (!trace || !Array.isArray(trace.tracks) || !trace.summary) { error = "Trace payload missing tracks/summary"; return; }
 			const previous = view.scale;
 			view.scale = buildScale(trace.tracks, view.mode, view.compress);
 			view.viewport = view.trace ? remapViewport(previous, view.scale, view.viewport) : fit(view.scale);
@@ -283,7 +288,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 				lines.push(...metricGrid(ctx, w, [
 					{ label: "Sessions", value: sessionsLoaded ? formatInteger(all.length) : "–", hint: sessionsLoaded ? `${sessions.length} fetched candidates` : "recorded candidates pending", emphasis: "primary" },
 					{ label: "Requests", value: sessionsLoaded ? formatInteger(totals.requests) : "–", hint: sessionsLoaded ? `${totals.children} children included` : "waiting for recorded totals" },
-					{ label: "Cost", value: sessionsLoaded ? formatEstimatedCost(totals.cost, totals.unpriced) : "–", hint: "matching candidates only" },
+					{ label: "Cost", value: sessionsLoaded ? costWithUnpriced(totals.cost, totals.unpriced) : "–", hint: "matching candidates only" },
 				]));
 				hint(`↑/↓ select · Enter open · / search · o sort · D reverse · l reveal · + fetch · y copy · u refresh`);
 				hint(`At most 300 recent root candidates · ${Math.min(revealed, all.length)} revealed · ${all.length} matching · ${listSort} ${listDescending ? "↓" : "↑"}`);
@@ -297,7 +302,7 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 					{ key: "children", header: "Child", align: "right", priority: 3 },
 				], window.rows.map(row => ({
 					identity: sessionIdentity(row.title, row.file, row.folder), requests: formatInteger(row.requests),
-					duration: formatDurationMs(row.endedAt - row.startedAt), cost: formatEstimatedCost(row.costTotal, row.unpricedRequests),
+					duration: formatDurationMs(row.endedAt - row.startedAt), cost: costWithUnpriced(row.costTotal, row.unpricedRequests),
 					children: formatInteger(row.subagents),
 				})), index - window.offset));
 				const selected = all.find(row => row.file === sessionSelected);

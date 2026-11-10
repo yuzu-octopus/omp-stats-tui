@@ -9,7 +9,6 @@ import {
 	glyph,
 	glyphsFor,
 	HEAT_LEVELS,
-	BAR_LEVELS,
 	SPARK_LEVELS,
 } from "../src/tui/glyphs";
 import {
@@ -52,13 +51,10 @@ const FEATURE_ROLES = [
 	"legendKey",
 	"pointHollow",
 	"pointFilled",
-	"axisCorner",
 	"axisRule",
 	"plotSpine",
-	"plotGrid",
 	"trackMarker",
 	"playhead",
-	"plotCursor",
 ] as const satisfies readonly GlyphRole[];
 
 test("every feature-module role is exactly one cell wide under ALL THREE presets", () => {
@@ -89,12 +85,8 @@ test("the feature roles are all reachable from ALL_GLYPH_CLASS, so a detector ca
 
 test("ascii picks a fallback that disambiguates rather than one that merely looks right", () => {
 	// Each fallback below was chosen against the characters already in the ascii
-	// set. The two that could plausibly have gone wrong are pinned: a gridline
-	// that reused the axis's `-` would make them the same line (the exact
-	// confusion the dashed unicode gridline exists to prevent), and a playhead
+	// set. The one that could plausibly have gone wrong is pinned: a playhead
 	// that reused `|` would be indistinguishable from the plot spine.
-	expect(glyph("ascii", "plotGrid")).toBe(":");
-	expect(glyph("ascii", "plotGrid")).not.toBe(glyph("ascii", "axisRule"));
 	expect(glyph("ascii", "playhead")).toBe("v");
 	expect(glyph("ascii", "playhead")).not.toBe(glyph("ascii", "plotSpine"));
 	// The row cursor deliberately matches the host's own ascii `nav.cursor`, so a
@@ -344,10 +336,6 @@ test("a 7x53 heatmap is exactly 108 cells wide on every row, under both ladders"
 	}
 });
 
-test("BAR_LEVELS matches the eight vertical levels the daily bar chart downsamples into", () => {
-	expect(BAR_LEVELS).toBe(8);
-	expect(glyphsFor("unicode").sparkRamp).toHaveLength(BAR_LEVELS);
-});
 
 /**
  * The `nf-*` name each nerd PUA value is supposed to be. Source: the

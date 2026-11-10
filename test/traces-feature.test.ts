@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@oh-my-pi/pi-tui";
 import { ensureThemeSync, theme, type Theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionSummary, SessionTrace, TraceSpan, TraceTrack } from "@oh-my-pi/omp-stats/shared-types";
@@ -8,6 +8,7 @@ import { ancestors, buildLanes, buildScale, fit, overviewViewport, remapViewport
 import { renderTimeline } from "../src/tui/features/traces/render";
 import { glyph } from "../src/tui/glyphs";
 import { SPAN_COLORS } from "../src/tui/palette";
+import { __testing, type PanelReads } from "../src/tui/panel";
 
 ensureThemeSync();
 const START = 1_700_000_000_000;
@@ -474,5 +475,63 @@ test("native trace marks match the legend and retain selected backgrounds under 
 		for (const width of [40, 100, 160]) {
 			expect(renderTimeline({ ...options, selected: "main:marker:0", width }).every(line => visibleWidth(line) <= width)).toBe(true);
 		}
+	}
+});
+
+/** Every route answers `{}` — the shape a never-initialised aggregator returns. */
+function brokenContext(): FeatureContext {
+	return {
+		theme, now: () => START + 110_000, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
+		reader: {
+			fetch: async () => ({}),
+			async api<T>(): Promise<T> { return {} as T; },
+		},
+	};
+}
+
+test("missing session and trace payloads render a defined error state instead of throwing", async () => {
+	const feature = createTracesFeature(brokenContext());
+	await feature.load("30d");
+	expect(() => feature.render(100, 40)).not.toThrow();
+	expect(feature.render(100, 40).map(stripTerminalSequences).join("\n")).toContain("Session list payload is not an array");
+
+	await feature.openTrace?.(ROOT);
+	expect(() => feature.render(100, 40)).not.toThrow();
+	expect(feature.render(100, 40).map(stripTerminalSequences).join("\n")).toContain("Trace payload missing tracks/summary");
+	feature.dispose();
+});
+
+test("the traces refresh timer is 5s, not 1s", async () => {
+	// The interval lives in `StatsPanel.#load`, not in the feature: the panel
+	// owns the reload loop. Fake timers make the schedule observable.
+	jest.useFakeTimers();
+	try {
+		let loads = 0;
+		const reads = {
+			fetch: async () => {
+				loads++;
+				return { rollupStatus: { dirtyHours: 0, dirtySessions: 0 } };
+			},
+			api: async <T>() => [] as unknown as T,
+			subscribe: () => () => {},
+			requestSync: async () => {
+				throw new Error("sync is not exercised by this test");
+			},
+			close: () => {},
+		} satisfies PanelReads;
+		const panel = __testing.makePanel({ screenId: "traces", reads, now: () => START + 110_000 });
+		await __testing.settled(panel);
+		expect(loads).toBe(1);
+
+		// A 1s refresh would have reloaded by now; the traces timer is 5s.
+		jest.advanceTimersByTime(1_000);
+		expect(loads).toBe(1);
+
+		jest.advanceTimersByTime(4_000);
+		await __testing.settled(panel);
+		expect(loads).toBe(2);
+		panel.dispose();
+	} finally {
+		jest.useRealTimers();
 	}
 });

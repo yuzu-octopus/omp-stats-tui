@@ -237,17 +237,28 @@ class AnalyticsFeature implements FeatureController {
 		if (this.id === "costs") lines.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced.reduce((total, count) => total + count, 0))} unpriced · API estimate excludes unpriced usage, not free`));
 		if (this.id === "tools") lines.push(this.ctx.theme.fg("dim", "Attribution: invoking-turn tokens/cost split across tool calls."));
 		lines.push(...focusTabs(this.ctx, width, ["Chart", ...this.tables.map(table => table.title)], this.focus));
-		if (this.focus > 0) lines.push(...this.renderTable(this.focus - 1, width, height, filter));
 		const mode = this.mode();
+		const tableIndexes: number[] = [];
+		for (let i = 0; i < this.tables.length; i++) {
+			if (this.tables.every(table => table.rows.length === 0) && (this.focus > 0 || i > 0)) continue;
+			tableIndexes.push(i);
+		}
+		// The chart and the tables are the flexible regions; the chrome around
+		// them is fixed. The chart takes its share first, then the tables split
+		// what is left, so a tall frame grows both instead of ending in blank rows.
+		const available = Math.max(1, height - lines.length - 1);
+		const chartOverhead = mode ? 4 + mode.series.length : 0;
+		const chartPlot = mode ? Math.max(4, Math.round(available * (tableIndexes.length ? 0.45 : 1)) - chartOverhead) : 0;
+		let chartBlock: string[] = [];
 		if (mode) {
 			this.chart.reconcile(this.buckets, mode.series.map(series => series.key));
-			lines.push(mode.label);
+			chartBlock = [mode.label];
 			const unknown = this.unpriced.reduce((total, count) => total + count, 0);
 			if (this.id === "costs" && unknown > 0 && mode.series.every(s => s.values.every(value => value === 0)))
-				lines.push(`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`);
-			lines.push(...this.chart.render(this.ctx, width, this.buckets, mode.series, {
+				chartBlock.push(`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`);
+			chartBlock.push(...this.chart.render(this.ctx, width, this.buckets, mode.series, {
 				unit: mode.unit === "USD" ? "known-priced USD / day" : mode.unit, percent: mode.unit === "share", stacked: true,
-				format: mode.unit === "USD" ? formatCost : mode.unit === "share" ? formatPercent : formatCompact, height: 5,
+				format: mode.unit === "USD" ? formatCost : mode.unit === "share" ? formatPercent : formatCompact, height: chartPlot,
 				formatValue: mode.unit === "USD" ? (key, value, point) => value === null || value === undefined ? "—" : formatEstimatedCost(value, this.chart.mode % 2 === 0 ? this.costSeriesUnknown.get(key)?.[point] ?? 0 : this.unpriced[point] ?? 0) : undefined,
 			}));
 			this.chart.point = Math.min(this.chart.point, Math.max(0, this.buckets.length - 1));
@@ -255,15 +266,15 @@ class AnalyticsFeature implements FeatureController {
 			// The legend already contains the selected values; don't repeat it as prose.
 			if (this.id === "costs" && this.buckets.length) {
 				const timestamp = this.buckets[point];
-				lines.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced[point] ?? 0)} unpriced in selected UTC day`));
+				chartBlock.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced[point] ?? 0)} unpriced in selected UTC day`));
 				// Unpriced-only identities may not have a positive-cost chart series.
-				for (const p of this.costs?.costSeries ?? []) if (p.timestamp === timestamp && p.unpricedRequests > 0) lines.push(`${identity(p.model, p.provider)} · ${formatEstimatedCost(p.cost, p.unpricedRequests)} · ${formatInteger(p.unpricedRequests)} unpriced`);
+				for (const p of this.costs?.costSeries ?? []) if (p.timestamp === timestamp && p.unpricedRequests > 0) chartBlock.push(`${identity(p.model, p.provider)} · ${formatEstimatedCost(p.cost, p.unpricedRequests)} · ${formatInteger(p.unpricedRequests)} unpriced`);
 			}
 		}
-		for (let i = 0; i < this.tables.length; i++) {
-			if (this.tables.every(table => table.rows.length === 0) && (this.focus > 0 || i > 0)) continue;
-			if (i !== this.focus - 1) lines.push(...this.renderTable(i, width, height, filter));
-		}
+		const tableHeight = Math.max(5, Math.floor((available - chartBlock.length) / Math.max(1, tableIndexes.length)));
+		if (this.focus > 0) lines.push(...this.renderTable(this.focus - 1, width, tableHeight, filter));
+		lines.push(...chartBlock);
+		for (const index of tableIndexes) if (index !== this.focus - 1) lines.push(...this.renderTable(index, width, tableHeight, filter));
 		lines.push(this.ctx.theme.fg("dim", this.focus === 0 ? "Tab pane · m mode · n/v legend · ,/. point" : `Tab pane · / search · o/O sort · Enter ${this.id === "tools" ? "filter · d details · f/x tool" : "details"} · Esc clear`));
 		return wrap(lines, width);
 	}
@@ -281,7 +292,7 @@ class AnalyticsFeature implements FeatureController {
 		else if (this.id === "costs") columns.push(numeric("cost", "Estimate"), numeric("unpricedRequests", "Unpriced", 1), numeric("share", "Share", 3), ...(index === 0 ? [numeric("requests", "Requests", 2), numeric("perPricedRequest", "/ priced req", 4)] : []));
 		else columns.push(numeric("calls", "Calls"), numeric("errors", "Errors", 2), numeric("costShare", "Estimate", 1), numeric("totalTokensShare", "Tokens", 3), numeric("errorRate", "Error %", 4));
 		const title = table.title + (this.id === "tools" && index === 1 ? ` · Tool filter: ${filter ?? "All tools"}` : "");
-		return [...table.state.render(this.rows(index), width, Math.max(5, Math.min(14, Math.floor(height / this.tables.length))), columns, this.ctx, title)];
+		return [...table.state.render(this.rows(index), width, Math.max(1, height), columns, this.ctx, title)];
 	}
 
 	private renderPerformance(key: string, width: number): string[] {

@@ -37,11 +37,40 @@ function emit(value: unknown): Promise<void> {
 	});
 	return pendingOutput;
 }
+/**
+ * One `stat` per session file, batched 128 at a time. The panel asks for
+ * `rollupStatus` on EVERY load and the traces screen reloads on a timer, so
+ * scanning per fetch would turn the cheapest request into a full-directory
+ * walk. The count is cached; live status and the slower fetch path refresh it.
+ */
+const FRESHNESS_SCAN_INTERVAL_MS = 30_000;
+let pendingSessions = 0;
+let pendingSessionsScannedAt = 0;
+
+async function scanPendingSessions(): Promise<void> {
+	const files = await listAllSessionFiles();
+	let pending = 0;
+	for (let start = 0; start < files.length; start += 128) {
+		const batch = files.slice(start, start + 128);
+		const cursors = getFileOffsets(batch);
+		const stats = await Promise.all(batch.map(file => stat(file)));
+		for (let index = 0; index < batch.length; index++) {
+			const cursor = cursors.get(batch[index]);
+			if (!cursor || cursor.parserState?.size !== stats[index].size || cursor.lastModified !== stats[index].mtimeMs) pending++;
+		}
+	}
+	pendingSessions = pending;
+	pendingSessionsScannedAt = Date.now();
+}
+
 live.subscribe(status => {
 	void emit({ type: "live", status }).catch(error => {
 		console.error(error);
 		process.exit(1);
 	});
+	if (Date.now() - pendingSessionsScannedAt >= FRESHNESS_SCAN_INTERVAL_MS) {
+		void scanPendingSessions().catch(error => console.error(error));
+	}
 });
 let initialized = false;
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
@@ -58,16 +87,12 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
 		let data: unknown;
 		if (request.type === "fetch") {
 			const payload = await fetchFor(request.needs, request.range);
-			const files = await listAllSessionFiles();
-			let pendingSessions = 0;
-			for (let start = 0; start < files.length; start += 128) {
-				const batch = files.slice(start, start + 128);
-				const cursors = getFileOffsets(batch);
-				const stats = await Promise.all(batch.map(file => stat(file)));
-				for (let index = 0; index < batch.length; index++) {
-					const cursor = cursors.get(batch[index]);
-					if (!cursor || cursor.parserState?.size !== stats[index].size || cursor.lastModified !== stats[index].mtimeMs) pendingSessions++;
-				}
+			// `rollupStatus` is requested on every load; scanning for it would
+			// make the freshness check the most expensive part of the cheapest
+			// request. Anything else refreshes the cache at most once per interval.
+			const rollupOnly = request.needs.length === 1 && request.needs[0] === "rollupStatus";
+			if (!rollupOnly && Date.now() - pendingSessionsScannedAt >= FRESHNESS_SCAN_INTERVAL_MS) {
+				await scanPendingSessions();
 			}
 			payload.freshness = { records: getMessageCount(), pendingSessions, observedAt: Date.now() };
 			data = payload;

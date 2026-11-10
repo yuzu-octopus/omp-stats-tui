@@ -424,3 +424,15 @@ test("known zero rates and unavailable denominators remain distinct in compact v
 	expect(h.requests.some(request => request.options?.method === "POST")).toBe(false);
 	h.feature.dispose();
 });
+
+test("a payload missing every field renders a defined error state instead of throwing", async () => {
+	// The route can answer `{}` when the aggregator has not run. The feature must
+	// say so and keep rendering; a TypeError here would take the whole panel down.
+	const h = harness(() => ({}));
+	await h.feature.load("30d");
+	expect(() => h.feature.render(100, 40)).not.toThrow();
+	const body = h.text();
+	expect(body).toContain("Unable to read metrics");
+	expect(body).toContain("Frustration payload missing overall/byModel/job");
+	h.feature.dispose();
+});

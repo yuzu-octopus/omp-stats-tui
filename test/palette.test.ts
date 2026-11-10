@@ -33,10 +33,8 @@ import { KINDS } from "../src/tui/features/traces/model";
  * resolve to the SAME colour. `fakeTheme` maps every token it has not been
  * given an explicit hex for to `#cccccc`, so on that fake every pair of roles
  * already collides and the green tests would prove nothing — and worse, the
- * real defect was invisible there. `PALETTE.heat1` ("borderAccent") and
- * `PALETTE.heat2` ("mdLink") were different TOKENS that both resolve to
- * `#0088fa` in omp's default dark theme, so heatmap levels 1 and 2 painted
- * the identical colour. Only a real theme can catch that.
+ * real defect was invisible there. The four `heatRamp` stops are the same
+ * trap: two stops that blend to one hex are indistinguishable on a fake theme.
  */
 ensureThemeSync();
 const hexOf = (token: ThemeColor): string => theme.getColorHex(token);
@@ -99,24 +97,25 @@ test("the panel's roles are all present", () => {
 		"meta",
 		"muted",
 		"dim",
-		"heat0",
-		"heat1",
-		"heat2",
-		"heat3",
+		"faint",
 	] as PaletteRole[]) {
 		expect(PALETTE[role]).toBeDefined();
 	}
 });
 
-test("the caution role rides the host warning token", () => {
-	// usage-dashboard.ts #statusColor: warning for pressured quotas. Our meter
-	// at/over its column max is the same pressured state, styled by name.
-	expect(PALETTE.caution satisfies ThemeColor).toBe("warning");
-});
-
-test("the heat roles form a 4-level ladder, matching HEAT_LEVELS in our glyphs", () => {
-	expect(PALETTE.heat0).not.toBe(PALETTE.heat3);
-	expect(new Set([PALETTE.heat0, PALETTE.heat1, PALETTE.heat2, PALETTE.heat3]).size).toBe(4);
+test("the four heat rungs resolve to four DIFFERENT colours in luma order", () => {
+	// The four stops `heatRamp` blends between. Measured on the real theme,
+	// because a fake theme maps every unknown token to one hex and a collision
+	// between two stops would be invisible there.
+	const lumas = [0, 1, 2, 3].map(level => {
+		const ansi = heatRamp(theme, level);
+		const m = /\x1b\[38;2;(\d+);(\d+);(\d+)m/.exec(ansi);
+		expect(m, `heatRamp(${level}) is truecolor`).not.toBeNull();
+		return 0.299 * Number(m![1]) + 0.587 * Number(m![2]) + 0.114 * Number(m![3]);
+	});
+	for (let i = 1; i < lumas.length; i++) {
+		expect(lumas[i], `rung ${i - 1}→${i} is not brighter`).toBeGreaterThan(lumas[i - 1]);
+	}
 });
 
 test("the series palette offers at least 6 colours for multi-series charts", () => {
@@ -397,21 +396,6 @@ test("`faint` is the ink-4 level the web keeps for kbd hints and disabled text",
 	expect(hexOf(PALETTE.faint)).not.toBe(hexOf(PALETTE.dim));
 });
 
-test("the four heat levels resolve to four DIFFERENT colours in luma order", () => {
-	// DEFECT, and the one `fakeTheme` structurally could not see: `heat1` was
-	// `borderAccent` and `heat2` was `mdLink`, two different tokens that both
-	// resolve to `#0088fa`. Levels 1 and 2 painted the same colour, so the
-	// middle of the heat ramp was invisible.
-	const levels = [PALETTE.heat0, PALETTE.heat1, PALETTE.heat2, PALETTE.heat3];
-	const hexes = levels.map(hexOf);
-	expect(new Set(hexes).size, `heat levels collide: ${hexes.join(" ")}`).toBe(4);
-	// Monotonic luma, the same property `heatRamp` guarantees for the cells
-	// themselves: more work must read as more light.
-	const lumas = levels.map(lumaOf);
-	for (let i = 1; i < lumas.length; i++) {
-		expect(lumas[i], `heat${i - 1}→heat${i} is not brighter`).toBeGreaterThan(lumas[i - 1]);
-	}
-});
 
 // ─── DEFECT 2: THE SIDEBAR LADDER ─────────────────────────────────────────────
 

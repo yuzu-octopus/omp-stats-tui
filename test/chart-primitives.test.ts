@@ -28,7 +28,7 @@ import { expect, test } from "bun:test";
 
 import { renderDailyBars, renderModelCostBars } from "../src/tui/charts/bars";
 import { renderHeatmap } from "../src/tui/charts/heatmap";
-import { renderSparkline } from "../src/tui/charts/sparkline";
+import { renderShareBar, renderSparkline } from "../src/tui/charts/sparkline";
 import { bandHeights, bandMax, type SeriesChartSeries } from "../src/tui/charts/compose";
 import { PALETTE, heatRamp, resolveSeries, stripForTest, type PaletteTheme } from "../src/tui/palette";
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
@@ -170,7 +170,7 @@ test("renderHeatmap renders at every width and preset without overflowing", () =
 				labelWidth: 2,
 				weeks: 12,
 				glyphs: glyphsFor(preset),
-				ramp: [PALETTE.heat1, PALETTE.heat2, PALETTE.heat3].map(() => ""),
+				ramp: [0, 1, 2, 3].map(() => ""),
 				dim: (text: string) => text,
 				today: new Date("2026-07-15T12:00:00Z"),
 			});
@@ -414,7 +414,7 @@ test("renderSeriesChart is renderDailyBars called once per series, band by band"
 	const glyphs = glyphsFor("unicode");
 	const max = bandMax(series);
 	const perBand = series.map((entry) =>
-		entry.values.reduce((peak, value) => (value > peak ? value : peak), 0),
+		entry.values.reduce<number>((peak, value) => (value !== null && value > peak ? value : peak), 0),
 	);
 	const rowsEach = bandHeights(perBand, height);
 
@@ -449,7 +449,7 @@ test("composition holds at every preset and every width", () => {
 	];
 	const max = bandMax(series);
 	const perBand = series.map((entry) =>
-		entry.values.reduce((peak, value) => (value > peak ? value : peak), 0),
+		entry.values.reduce<number>((peak, value) => (value !== null && value > peak ? value : peak), 0),
 	);
 
 	for (const preset of PRESETS) {
@@ -551,4 +551,165 @@ test("planSeries returns undefined for sub-threshold data", () => {
 		{},
 	);
 	expect(spec).toBeUndefined();
+});
+
+// ─── Task 2.4: gaps, clipping, legend parity, mixed kinds ───────────────────
+
+test("a null gap renders no mark, not a zero column", () => {
+	// DEFECT: `renderHostChart` mapped `point?.value ?? 0`, so a host `null`
+	// (a missing cell) became a measured zero. The two are different claims:
+	// zero is a reading, a gap is the ABSENCE of one, and collapsing them
+	// invents a data point.
+	const axis = Array.from({ length: 6 }, (_, i) => 1700000000000 + i * 86_400_000);
+	const rows = [{ key: "a", label: "A", values: [10, null, 30, 40, 20, 50] }];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeDefined();
+	expect(spec!.series[0]!.points[1]).toBeNull();
+
+	const lines = renderHostChart(spec!, {
+		width: 20,
+		height: 6,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+	});
+	const fill = glyphsFor("unicode").barFill as string;
+	// The band is right-aligned in the panel, so measure the filled columns as
+	// a run and locate the gap inside it rather than assuming a column index.
+	const marks = lines.filter((row) => !stripForTest(row).trim().startsWith("A"));
+	const filled = Array.from({ length: 20 }, (_, col) =>
+		marks.filter((row) => [...stripForTest(row)][col] === fill).length,
+	);
+	const first = filled.findIndex((count) => count > 0);
+	const last = filled.findLastIndex((count) => count > 0);
+	const span = filled.slice(first, last + 1);
+	// Six buckets, five with a value: exactly one column in the span is empty.
+	expect(span.filter((count) => count === 0).length).toBe(1);
+	// And the gap is interior, not a trimmed edge.
+	expect(span[0]).toBeGreaterThan(0);
+	expect(span[span.length - 1]).toBeGreaterThan(0);
+});
+
+test("the shared-axis plot also renders a null gap as no mark", () => {
+	const axis = Array.from({ length: 6 }, (_, i) => 1700000000000 + i * 86_400_000);
+	// B is a DISTINCT, non-flat series so `worthCharting` keeps it: the plot is
+	// multi-series and takes the shared-axis path. A has a gap at bucket 1.
+	const rows = [
+		{ key: "a", label: "A", values: [10, null, 30, 40, 20, 50] },
+		{ key: "b", label: "B", values: [5, 25, 5, 5, 5, 5] },
+	];
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeDefined();
+	expect(spec!.series.length).toBe(2);
+	const lines = renderHostChart(spec!, {
+		width: 20,
+		height: 6,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+	});
+	const hollow = glyphsFor("unicode").pointHollow as string;
+	const text = stripForTest(lines.join("\n"));
+	// 11 marks for 11 real readings. A zero-substituted gap would add a twelfth
+	// for A at the baseline. Two marks share a cell here, so this is a floor,
+	// not an exact count: the assertion is that no EXTRA mark appears.
+	const marks = text.split("").filter((ch) => ch === hollow).length;
+	expect(marks).toBeGreaterThanOrEqual(10);
+	expect(marks).toBeLessThanOrEqual(11);
+});
+test("renderDailyBars clips to the LAST width samples, so the newest survives", () => {
+	// DEFECT: the old path re-bucketed with synthetic timestamps `0..width-1`
+	// and `densify` drops out-of-axis points, so a series longer than the panel
+	// kept the OLDEST `width` samples and silently discarded the newest — the
+	// opposite of the clip rule `sparkline.ts` already states.
+	const values = Array.from({ length: 64 }, (_, i) => i);
+	const rows = renderDailyBars(values, {
+		width: 10,
+		height: 6,
+		glyphs: glyphsFor("unicode"),
+		accent: paint,
+		dim: paint,
+	});
+	// The newest sample is 63, the loudest in the whole series, so it must be
+	// a FULL column. Under the old clipping it was dropped and the tallest
+	// visible column was 9.
+	const filled = Array.from({ length: 10 }, (_, col) =>
+		rows.filter(row => [...stripForTest(row)][col] === (glyphsFor("unicode").barFill as string)).length,
+	);
+	expect(Math.max(...filled)).toBe(5); // plotRows(6) — the newest value tops the scale
+	expect(filled[9]).toBe(5);
+});
+
+test("planTimeline plots every series it declares, so legend count equals plot count", () => {
+	// DEFECT: host `planChart` slices line measures to MAX_LINES = 6 while the
+	// caller's legend lists every row, so the 7th+ series was named but never
+	// drawn. A legend entry with nothing above it is a claim the chart denies.
+	const axis = Array.from({ length: 6 }, (_, i) => 1700000000000 + i * 86_400_000);
+	// Deliberately NOT proportional: the host's `restatedColumns` drops a series
+	// that is an exact multiple of another, and a dropped series cannot prove
+	// that the six-line cap was bypassed.
+	const rows = Array.from({ length: 9 }, (_, r) => ({
+		key: `s${r}`,
+		label: `Series ${r}`,
+		values: axis.map((_, i) => (r + 1) * (i + 1) + r * 7),
+	}));
+	const spec = planTimeline(axis, rows, {});
+	expect(spec).toBeDefined();
+	expect(spec!.series).toHaveLength(rows.length);
+	// And every plotted series carries the label the legend will print.
+	for (const row of rows) {
+		expect(spec!.series.some(entry => entry.name === row.label)).toBe(true);
+	}
+});
+
+test("planSeries declares every series, so a categorical legend never outruns the plot", () => {
+	const series: SeriesChartSeries[] = Array.from({ length: 8 }, (_, i) => ({
+		label: `Series ${i}`,
+		values: [12 + i * 3, 30 - i * 2, 8 + i, 20 - i],
+	}));
+	const spec = planSeries(series, {});
+	expect(spec).toBeDefined();
+	expect(spec!.series).toHaveLength(series.length);
+});
+
+test("a null gap in a series chart draws no band ink for that bucket", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "A", values: [10, null, 30] },
+		{ label: "B", values: [0, 0, 0] },
+	];
+	const rows = renderSeriesChart(series, {
+		width: 9,
+		height: 8,
+		preset: "unicode",
+		theme: THEME,
+		paint: (_color, text) => text,
+	});
+	const fill = glyphsFor("unicode").barFill as string;
+	for (const row of rows) expect(cells(row)).toBe(9);
+	// The gap column of A draws no mark: the middle third of A's band is blank
+	// above the floor while its neighbours are not.
+	const bandA = rows.slice(0, rows.findIndex((row) => stripForTest(row).includes("A")));
+	const filled = Array.from({ length: 9 }, (_, col) =>
+		bandA.filter((row) => [...stripForTest(row)][col] === fill).length,
+	);
+	const first = filled.findIndex((count) => count > 0);
+	const last = filled.findLastIndex((count) => count > 0);
+	const span = filled.slice(first, last + 1);
+	expect(span.length).toBe(3);
+	expect(span[0]).toBeGreaterThan(0);
+	expect(span[1], "a null gap must draw no mark").toBe(0);
+	expect(span[2]).toBeGreaterThan(0);
+});
+
+test("renderShareBar never exceeds its row width, even when the readout is wider", () => {
+	// DEFECT: a readout wider than the row was returned WHOLE, so the line
+	// overflowed the panel and corrupted the overlay around it. The bar yields
+	// first; the readout is truncated to whatever the row can hold.
+	const long = "a-very-long-readout-that-cannot-fit";
+	for (const width of [1, 4, 8, 12, 20, 40]) {
+		const bar = renderShareBar(0.5, { width, accent: paint }, long);
+		expect(cells(bar), `width ${width}`).toBeLessThanOrEqual(width);
+	}
+	// At a width the readout fits, the row is exactly that wide.
+	expect(cells(renderShareBar(0.5, { width: 40, accent: paint }, long))).toBe(40);
 });

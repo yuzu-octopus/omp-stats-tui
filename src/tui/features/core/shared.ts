@@ -1,5 +1,5 @@
 import { truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import type { FeatureContext } from "../types";
+import type { FeatureContext, FeatureHit } from "../types";
 import { renderTimeSeries, type TimeSeriesOptions } from "../../charts/time-series";
 import type { Column } from "../../band";
 import { dataTable, sectionHeading } from "../presentation";
@@ -29,6 +29,8 @@ export class ListState<T> {
 	descending = true;
 	reveal: number;
 	selected: string | null = null;
+	/** Hit spans for the rows rendered by the last {@link render}, in render-local rows. */
+	lastHits: readonly FeatureHit[] = [];
 	constructor(readonly key: (row: T) => string, initialSort: string, readonly initialLimit = 100) {
 		this.sort = initialSort;
 		this.reveal = initialLimit;
@@ -76,14 +78,27 @@ export class ListState<T> {
 	}
 	render(rows: readonly T[], width: number, height: number, columns: readonly ListColumn<T>[], ctx: FeatureContext, title: string): string[] {
 		const search = this.editing ? [`Search: ${this.search || "—"}  · Enter/Esc finish · Ctrl-U clear`] : this.search ? [`Search: ${this.search}`] : [];
-		if (!rows.length) return [sectionHeading(ctx, width, title), ...wrap(search, width),
-			...wrap([ctx.theme.fg("dim", this.search ? "No matches. Esc clears search." : "No visible records. Change range or filters.")], width)];
+		if (!rows.length) {
+			this.lastHits = [];
+			return [sectionHeading(ctx, width, title), ...wrap(search, width),
+				...wrap([ctx.theme.fg("dim", this.search ? "No matches. Esc clears search." : "No visible records. Change range or filters.")], width)];
+		}
 		const current = this.current(rows)!;
 		const index = rows.indexOf(current);
 		this.reveal = Math.max(this.reveal, index + 1);
-		const count = Math.max(1, Math.min(Math.max(1, height - 4 - search.length), this.reveal, rows.length));
+		const count = Math.max(1, Math.min(Math.max(1, height - 3 - search.length), this.reveal, rows.length));
 		const start = Math.max(0, Math.min(index - Math.floor(count / 2), Math.min(rows.length, this.reveal) - count));
-		const records = rows.slice(start, start + count).map(row => Object.fromEntries(columns.map(column => [column.key, column.value(row)])));
+		const visible = rows.slice(start, start + count);
+		const records = visible.map(row => Object.fromEntries(columns.map(column => [column.key, column.value(row)])));
+		// The table is `sectionHeading` + search lines + header + one line per
+		// record, so record `i` sits at `2 + search.length + i` in this output.
+		this.lastHits = visible.map((row, line) => ({
+			rowStart: 2 + search.length + line,
+			rowEnd: 3 + search.length + line,
+			colStart: 0,
+			colEnd: width,
+			action: { type: "selectRow", key: this.key(row) },
+		}));
 		return [sectionHeading(ctx, width, title, `${start + 1}–${start + count}/${rows.length} · ${this.sort} ${this.descending ? "↓" : "↑"}`),
 			...wrap(search, width), ...dataTable(ctx, width, "", columns, records, index - start),
 			...wrap([ctx.theme.fg("dim", "/ search · j/k select · Enter inspect · o/O sort · +/a reveal")], width)];

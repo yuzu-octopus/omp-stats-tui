@@ -304,24 +304,21 @@ test("a zero share is an all-empty track, never a division by zero", () => {
 	expect([...bar].filter((c) => c !== " " && c !== "0" && c !== "%").length).toBe(0);
 });
 
-test("the bar disappears at narrow widths but the readout still prints", () => {
-	// track === 0: the number wins and the bar yields. This is the desired
-	// behaviour, not a failure. The readout is 5 cells in a 4-cell row, so the
-	// line is the number alone — the number is the fact and the bar is the
-	// decoration, so the fact is never truncated to protect a bar that is gone.
+test("the bar disappears at narrow widths and the readout is truncated to the row", () => {
+	// track === 0: the number wins and the bar yields. The readout is 5 cells
+	// in a 4-cell row, so the fact is clipped to the row rather than printed
+	// whole — an over-wide line corrupts the panel around it, which is the one
+	// thing a chart line must never do.
 	const bar = renderShareBar(0.5, { width: 4, accent: identity }, "50.0%");
-	expect(bar).toBe("50.0%");
-	expect(Bun.stringWidth(bar)).toBe(5);
+	expect(Bun.stringWidth(bar)).toBe(4);
+	expect(bar).toBe("50.…");
 });
 
 test("a share bar never overflows, even when the readout is longer than the width", () => {
 	for (const width of [1, 2, 4, 6, 10, 20, 40]) {
 		for (const readout of ["", "5", "50.0%", "a-very-long-readout-indeed"]) {
 			const bar = renderShareBar(0.5, { width, accent: identity }, readout);
-			expect(Bun.stringWidth(bar), `width ${width} readout ${readout}`).toBeLessThanOrEqual(
-				Math.max(width, Bun.stringWidth(readout)),
-			);
-			expect(Bun.stringWidth(bar)).toBeLessThanOrEqual(Math.max(width, Bun.stringWidth(readout)));
+			expect(Bun.stringWidth(bar), `width ${width} readout ${readout}`).toBeLessThanOrEqual(width);
 		}
 	}
 });

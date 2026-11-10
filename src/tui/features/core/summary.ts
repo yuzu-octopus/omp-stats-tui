@@ -1,20 +1,25 @@
 import { buildAgentTokenShare, buildFolderRows, sumConversationTokens, requestStatus, type FolderRowView, type FolderTableView } from "@oh-my-pi/omp-stats/client/data/view-models";
 import { bucketAxis } from "@oh-my-pi/omp-stats/client/data/range";
 import { densify } from "@oh-my-pi/omp-stats/client/data/series";
-import { formatCompact, formatEstimatedCost, formatDurationMs, formatPercent, formatTokensPerSecond, formatMessageCost, formatTimestamp } from "@oh-my-pi/omp-stats/client/data/formatters";
-import type { DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
+import { formatCompact, formatCost, formatEstimatedCost, formatDurationMs, formatPercent, formatTokensPerSecond, formatMessageCost, formatTimestamp } from "@oh-my-pi/omp-stats/client/data/formatters";
+import type { DailyActivityPoint, TimeSeriesPoint } from "@oh-my-pi/omp-stats/shared-types";
+import { cacheSavingsNote } from "../../format";
 import type { PanelData, RecentRequest as MessageStats } from "../../../data/api";
 import type { Range } from "../../../data/ranges";
-import type { FeatureContext, FeatureController } from "../types";
+import type { FeatureContext, FeatureController, FeatureHit, FeatureHitAction } from "../types";
 import { renderHeatmap, weeksForWidth } from "../../charts/heatmap";
 import { calendarLayout } from "../../charts/calendar";
 import { glyphsFor } from "../../glyphs";
 import { heatRamp, SELECTION_BG } from "../../palette";
-import { ChartState, ListState, fields, wrap, type CoreSeries, type Sorters } from "./shared";
+import { ChartState, ListState, fields, wrap, type CoreSeries, type ListColumn, type Sorters } from "./shared";
 import { RequestDetails } from "./requests";
 import { dataTable, focusTabs, metricGrid, sectionHeading } from "../presentation";
 
 type SummaryId = "overview" | "projects" | "activity";
+/** The overview series can carry a per-bucket unpriced count; the live route does not. */
+type OverviewTimePoint = TimeSeriesPoint & { unpricedRequests?: number };
+/** Daily activity points carry an unpriced count only when the payload provides one. */
+type ActivityPoint = DailyActivityPoint & { unpricedRequests?: number };
 const PROJECT_SORT: Sorters<FolderRowView> = {
 	folder: row => row.folder, cost: row => row.totalCost, requests: row => row.totalRequests,
 	tokens: row => row.conversationTokens, cacheRate: row => row.cacheRate, cacheSavings: row => row.cacheSavings, errorRate: row => row.errorRate,
@@ -53,7 +58,7 @@ class SummaryFeature implements FeatureController {
 	private readonly projects = new ListState<FolderRowView>(row => row.folder, "cost", 100);
 	private readonly costRanking = new ListState<FolderRowView>(row => row.folder, "cost", 8);
 	private readonly requestRanking = new ListState<FolderRowView>(row => row.folder, "requests", 8);
-	private readonly days = new ListState<DailyActivityPoint>(row => row.day, "day", 30);
+	private readonly days = new ListState<ActivityPoint>(row => row.day, "day", 30);
 	private calendarDay: string | null = null;
 	private calendarEnd: string | null = null;
 	private readonly details: RequestDetails;
@@ -83,8 +88,9 @@ class SummaryFeature implements FeatureController {
 			if (!this.closed && generation === this.generation) { this.loading = false; this.ctx.changed(); }
 		}
 	}
-	private overviewChart(): { buckets: number[]; series: CoreSeries[]; mode: string } {
-		const points = this.data?.overview?.timeSeries ?? [];
+
+	private overviewChart(): { buckets: number[]; series: CoreSeries[]; mode: string; unpriced: number[]; requests: number[]; carriesUnpriced: boolean } {
+		const points = (this.data?.overview?.timeSeries ?? []) as OverviewTimePoint[];
 		const timestamps = points.map(point => point.timestamp);
 		const buckets = bucketAxis(this.range, timestamps, undefined, this.ctx.now());
 		this.chart.seedLatestPoint(buckets, timestamps);
@@ -93,7 +99,12 @@ class SummaryFeature implements FeatureController {
 			{ key: "ok", label: "Succeeded", values: densify(points, buckets, point => point.requests - point.errors) },
 			{ key: "err", label: "Failed", values: densify(points, buckets, point => point.errors) },
 		] : [{ key: mode, label: mode === "cost" ? "Known-priced API cost" : "Tokens", values: densify(points, buckets, point => mode === "cost" ? point.cost : point.tokens) }];
-		return { buckets, series, mode };
+		return {
+			buckets, series, mode,
+			unpriced: densify(points, buckets, point => point.unpricedRequests ?? 0),
+			requests: densify(points, buckets, point => point.requests),
+			carriesUnpriced: points.some(point => point.unpricedRequests !== undefined),
+		};
 	}
 	private projectRows(): { view: FolderTableView; scoped: FolderRowView[]; matching: FolderRowView[] } {
 		const view = buildFolderRows(this.data?.folders ?? []);
@@ -102,9 +113,9 @@ class SummaryFeature implements FeatureController {
 		const matching = this.projects.rows(scoped.filter(row => !needle || row.folder.toLowerCase().includes(needle)), PROJECT_SORT);
 		return { view, scoped, matching };
 	}
-	private selectedDay(): DailyActivityPoint {
+	private selectedDay(): ActivityPoint {
 		const day = this.calendarDay ?? localDay(new Date(this.ctx.now()));
-		return this.data?.dailyActivity?.find(point => point.day === day) ?? { day, requests: 0, cost: 0, totalTokens: 0 };
+		return (this.data?.dailyActivity?.find(point => point.day === day) as ActivityPoint | undefined) ?? { day, requests: 0, cost: 0, totalTokens: 0 };
 	}
 	private moveCalendar(delta: number): void {
 		const today = new Date(this.ctx.now());
@@ -128,7 +139,7 @@ class SummaryFeature implements FeatureController {
 			const chart = this.overviewChart();
 			const needle = this.requests.search.trim().toLowerCase();
 			const rows = this.requests.rows((this.data.recent ?? []).filter(row => !needle || `${row.model} ${row.provider} ${row.folder}`.toLowerCase().includes(needle)), REQUEST_SORT);
-			const list = this.requests.render(rows, width, Math.min(height, 10), [
+			const columns: ListColumn<MessageStats>[] = [
 				{ key: "model", header: "Model", align: "left", value: row => row.model },
 				{ key: "provider", header: "Provider", align: "left", priority: 5, value: row => row.provider },
 				{ key: "when", header: "When", align: "left", priority: 3, value: row => formatTimestamp(row.timestamp) },
@@ -136,36 +147,62 @@ class SummaryFeature implements FeatureController {
 				{ key: "cost", header: "API cost", align: "right", priority: 0, value: row => formatMessageCost(row, 4) },
 				{ key: "tokens", header: "Tokens", align: "right", priority: 1, value: row => formatCompact(row.usage.totalTokens) },
 				{ key: "duration", header: "Latency", align: "right", priority: 2, value: row => formatDurationMs(row.duration) },
-			], this.ctx, "Latest requests · A opens all");
-			const graph = [sectionHeading(this.ctx, width, "Activity", chart.mode, this.focus === 1),
-				...(chart.mode === "cost" && overall.unpricedRequests > 0 ? wrap([this.ctx.theme.fg("dim", `Known-priced cost only · ${overall.unpricedRequests} unpriced requests; per-bucket unknown counts unavailable.`)], width) : []),
-				...this.chart.render(this.ctx, width, chart.buckets, chart.series, {
-					height: 5, unit: chart.mode === "cost" ? "API-equivalent USD / bucket" : chart.mode === "tokens" ? "tokens / bucket" : "requests / bucket",
-					stacked: true, format: chart.mode === "cost" ? value => formatEstimatedCost(value, 0) : formatCompact,
-				})];
+			];
 			const total = sumConversationTokens(overall);
 			const mix = [["Uncached input", overall.totalInputTokens], ["Cache read", overall.totalCacheReadTokens], ["Cache write", overall.totalCacheWriteTokens], ["Output", overall.totalOutputTokens]] as const;
 			const agents = buildAgentTokenShare(payload.byAgentType);
-			return [...wrap(prefix, width), ...metricGrid(this.ctx, width, [
+			const prefixLines = wrap(prefix, width);
+			const metrics = metricGrid(this.ctx, width, [
 				{ label: "Requests", value: formatCompact(overall.totalRequests), hint: `${formatCompact(overall.successfulRequests)} succeeded`, emphasis: "primary" },
 				{ label: "API cost", value: formatEstimatedCost(overall.totalCost, overall.unpricedRequests), hint: `${overall.unpricedRequests} unpriced` },
 				{ label: "Tokens", value: formatCompact(total), hint: `${formatCompact(overall.totalPremiumRequests)} premium req` },
-				{ label: "Cache hit", value: formatPercent(overall.cacheRate), hint: `${formatPercent(overall.cacheSavings)} saved` },
+				{ label: "Cache hit", value: formatPercent(overall.cacheRate), hint: cacheSavingsNote(overall.cacheSavings) },
 				{ label: "Latency", value: formatDurationMs(overall.avgDuration), hint: `${formatDurationMs(overall.avgTtft)} TTFT` },
 				{ label: "Failures", value: formatCompact(overall.failedRequests), hint: `${formatPercent(overall.errorRate)} error rate` },
-			]), "", ...focusTabs(this.ctx, width, ["Requests", "Chart"], this.focus),
+			]);
+			const tabs = focusTabs(this.ctx, width, ["Requests", "Chart"], this.focus);
+			const tokenMix = dataTable(this.ctx, width, "Token mix", [
+				{ key: "label", header: "Category", align: "left" },
+				{ key: "tokens", header: "Tokens", align: "right", priority: 0 },
+				{ key: "share", header: "Share", align: "right", priority: 1 },
+			], mix.map(([label, value]) => ({ label, tokens: formatCompact(value), share: total > 0 ? formatPercent(value / total) : "—" })));
+			const agentShares = dataTable(this.ctx, width, "Agent token shares", [
+				{ key: "agent", header: "Agent", align: "left" },
+				{ key: "tokens", header: "Tokens", align: "right", priority: 0 },
+				{ key: "share", header: "Share", align: "right", priority: 1 },
+				{ key: "requests", header: "Req", align: "right", priority: 2 },
+			], agents.segments.map(agent => ({ agent: agent.agentType, tokens: formatCompact(agent.tokens), share: formatPercent(agent.share), requests: String(agent.requests) })));
+			// The log and the chart are the only flexible regions; everything else
+			// on the screen is fixed, so the frame's remainder is split between them.
+			const fixed = prefixLines.length + metrics.length + 1 + tabs.length
+				+ 1 + tokenMix.length + 1 + agentShares.length;
+			const available = Math.max(1, height - fixed);
+			const notice = chart.mode === "cost" && overall.unpricedRequests > 0
+				? wrap([this.ctx.theme.fg("dim", `Known-priced cost only · ${overall.unpricedRequests} unpriced requests; per-bucket unknown counts unavailable.`)], width) : [];
+			const chartOverhead = 4 + notice.length + chart.series.length;
+			const listHeight = Math.max(6, Math.round(available * 0.5));
+			const chartHeight = Math.max(5, available - listHeight - chartOverhead);
+			const list = this.requests.render(rows, width, listHeight, columns, this.ctx, "Latest requests · A opens all");
+			const graph = [sectionHeading(this.ctx, width, "Activity", chart.mode, this.focus === 1),
+				...notice,
+				...this.chart.render(this.ctx, width, chart.buckets, chart.series, {
+					height: chartHeight, unit: chart.mode === "cost" ? "API-equivalent USD / bucket" : chart.mode === "tokens" ? "tokens / bucket" : "requests / bucket",
+					stacked: true, format: chart.mode === "cost" ? formatCost : formatCompact,
+					formatValue: chart.mode === "cost" ? (key, value, point) => {
+						const unpriced = chart.unpriced[point] ?? 0;
+						// Without a per-bucket count, a busy zero-cost bucket is unknown spend, not free.
+						const unknown = unpriced > 0 ? unpriced : !chart.carriesUnpriced && (chart.requests[point] ?? 0) > 0 ? 1 : 0;
+						return formatEstimatedCost(value ?? 0, unknown);
+					} : undefined,
+				})];
+			const listOffset = prefixLines.length + metrics.length + 1 + tabs.length
+				+ (this.focus === 0 ? 0 : graph.length + 1);
+			this.ctx.reportHits?.(this.requests.lastHits.map(hit => ({
+				...hit, rowStart: hit.rowStart + listOffset, rowEnd: hit.rowEnd + listOffset,
+			})));
+			return [...prefixLines, ...metrics, "", ...tabs,
 				...(this.focus === 0 ? list : graph), "", ...(this.focus === 0 ? graph : list), "",
-				...dataTable(this.ctx, width, "Token mix", [
-					{ key: "label", header: "Category", align: "left" },
-					{ key: "tokens", header: "Tokens", align: "right", priority: 0 },
-					{ key: "share", header: "Share", align: "right", priority: 1 },
-				], mix.map(([label, value]) => ({ label, tokens: formatCompact(value), share: total > 0 ? formatPercent(value / total) : "—" }))), "",
-				...dataTable(this.ctx, width, "Agent token shares", [
-					{ key: "agent", header: "Agent", align: "left" },
-					{ key: "tokens", header: "Tokens", align: "right", priority: 0 },
-					{ key: "share", header: "Share", align: "right", priority: 1 },
-					{ key: "requests", header: "Req", align: "right", priority: 2 },
-				], agents.segments.map(agent => ({ agent: agent.agentType, tokens: formatCompact(agent.tokens), share: formatPercent(agent.share), requests: String(agent.requests) })))];
+				...tokenMix, "", ...agentShares];
 		}
 		if (this.id === "projects") {
 			const { view, scoped, matching } = this.projectRows();
@@ -182,16 +219,24 @@ class SummaryFeature implements FeatureController {
 			const lists = [this.projects, this.costRanking, this.requestRanking];
 			const rowSets = [matching, cost, requests];
 			const titles = ["Projects", "Cost ranking · Enter filters projects", "Request ranking · Enter filters projects"];
-			return [...wrap(prefix, width), ...metricGrid(this.ctx, width, [
-				{ label: "Projects", value: String(view.rows.length), hint: `${view.temporaryCount} temporary`, emphasis: "primary" },
-				{ label: "Requests", value: formatCompact(view.totalRequests), hint: `${view.failedRequests} failed` },
-				{ label: "API cost", value: formatEstimatedCost(view.totalCost, view.unpricedRequests), hint: `${view.unpricedRequests} unpriced` },
-				{ label: "Tokens", value: formatCompact(view.conversationTokens), hint: `${formatPercent(view.cacheRate)} cache hit` },
-			]), ...wrap([this.ctx.theme.fg("dim", `Totals include all projects · t ${this.hideTemporary ? "show" : "hide"} temporary projects${this.hideTemporary && view.temporaryCount ? ` (${view.temporaryCount} hidden)` : ""}`)], width),
-				"", ...focusTabs(this.ctx, width, ["Projects", "By cost", "By requests"], this.focus),
-				...lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - 10), columns, this.ctx, titles[this.focus])];
+		const prefixLines = wrap(prefix, width);
+		const metrics = metricGrid(this.ctx, width, [
+			{ label: "Projects", value: String(view.rows.length), hint: `${view.temporaryCount} temporary`, emphasis: "primary" },
+			{ label: "Requests", value: formatCompact(view.totalRequests), hint: `${view.failedRequests} failed` },
+			{ label: "API cost", value: formatEstimatedCost(view.totalCost, view.unpricedRequests), hint: `${view.unpricedRequests} unpriced` },
+			{ label: "Tokens", value: formatCompact(view.conversationTokens), hint: `${formatPercent(view.cacheRate)} cache hit` },
+		]);
+		const dimLine = wrap([this.ctx.theme.fg("dim", `Totals include all projects · t ${this.hideTemporary ? "show" : "hide"} temporary projects${this.hideTemporary && view.temporaryCount ? ` (${view.temporaryCount} hidden)` : ""}`)], width);
+		const tabs = focusTabs(this.ctx, width, ["Projects", "By cost", "By requests"], this.focus);
+		const used = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length;
+		const list = lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - used), columns, this.ctx, titles[this.focus]);
+		const listOffset = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length;
+		this.ctx.reportHits?.(lists[this.focus].lastHits.map(hit => ({
+			...hit, rowStart: hit.rowStart + listOffset, rowEnd: hit.rowEnd + listOffset,
+		})));
+		return [...prefixLines, ...metrics, ...dimLine, "", ...tabs, ...list];
 		}
-		const points = this.data.dailyActivity ?? [];
+		const points = (this.data.dailyActivity ?? []) as ActivityPoint[];
 		const weeks = weeksForWidth(2, width);
 		const actualToday = new Date(this.ctx.now());
 		const selected = this.selectedDay();
@@ -204,25 +249,57 @@ class SummaryFeature implements FeatureController {
 			this.calendarEnd = localDay(today);
 		}
 		const layout = calendarLayout(points, weeks, today);
+		const windowUnpriced = points.filter(point => point.day >= localDay(layout.start) && point.day <= localDay(today)).reduce((sum, point) => sum + (point.unpricedRequests ?? 0), 0);
 		const needle = this.days.search.trim().toLowerCase();
 		const rows = this.days.rows(points.filter(point => !needle || point.day.includes(needle)), DAY_SORT);
-		const list = this.days.render(rows, width, Math.min(height, 9), [
+		const calendar = [sectionHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
+			...renderHeatmap(points, { innerWidth: width, labelWidth: 2, weeks, glyphs: glyphsFor(this.ctx.theme.getSymbolPreset()), ramp: [0, 1, 2, 3].map(level => heatRamp(this.ctx.theme, level)), dim: text => this.ctx.theme.fg("dim", text), today, selectedDay: selected.day, selected: text => this.ctx.theme.bg(SELECTION_BG.band, this.ctx.theme.fg("accent", text)) }),
+			...wrap([this.ctx.theme.fg("dim", `${localDay(layout.start)}–${localDay(today)} · ${layout.totalRequests} requests · ${formatEstimatedCost(layout.totalCost, windowUnpriced)}`),
+				this.ctx.theme.fg("dim", "j/k day · h/l week · t today · Enter details")], width)];
+		const prefixLines = wrap(prefix, width);
+		const metrics = metricGrid(this.ctx, width, [
+			{ label: "Day requests", value: formatCompact(selected.requests), hint: selected.day, emphasis: "primary" },
+			{ label: "Day API cost", value: formatEstimatedCost(selected.cost, selected.unpricedRequests ?? 0), hint: "selected local day" },
+			{ label: "Day tokens", value: formatCompact(selected.totalTokens), hint: `${points.length} recorded days` },
+		]);
+		const tabs = focusTabs(this.ctx, width, ["Recorded days", "Calendar"], this.focus);
+		const tail = wrap([this.ctx.theme.fg("dim", "Latest 371 local days · independent of the range selector; quiet selected days are zero.")], width);
+		// The calendar is fixed; the day list absorbs every row the frame has left.
+		const used = prefixLines.length + metrics.length + 1 + tabs.length + calendar.length + 1 + tail.length;
+		const list = this.days.render(rows, width, Math.max(5, height - used), [
 			{ key: "day", header: "Day", align: "left", value: point => point.day },
 			{ key: "requests", header: "Req", align: "right", priority: 0, value: point => formatCompact(point.requests) },
-			{ key: "cost", header: "API cost", align: "right", priority: 1, value: point => formatEstimatedCost(point.cost, 0) },
+			{ key: "cost", header: "API cost", align: "right", priority: 1, value: point => formatEstimatedCost(point.cost, point.unpricedRequests ?? 0) },
 			{ key: "tokens", header: "Tokens", align: "right", priority: 2, value: point => formatCompact(point.totalTokens) },
 		], this.ctx, "Recorded days");
-		const calendar = [sectionHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
-			...renderHeatmap(points, { innerWidth: width, labelWidth: 2, weeks, glyphs: glyphsFor(this.ctx.theme.getSymbolPreset()), ramp: [1, 2, 3, 4].map(level => heatRamp(this.ctx.theme, level)), dim: text => this.ctx.theme.fg("dim", text), today, selectedDay: selected.day, selected: text => this.ctx.theme.bg(SELECTION_BG.band, this.ctx.theme.fg("accent", text)) }),
-			...wrap([this.ctx.theme.fg("dim", `${localDay(layout.start)}–${localDay(today)} · ${layout.totalRequests} requests · ${formatEstimatedCost(layout.totalCost, 0)}`),
-				this.ctx.theme.fg("dim", "j/k day · h/l week · t today · Enter details")], width)];
-		return [...wrap(prefix, width), ...metricGrid(this.ctx, width, [
-			{ label: "Day requests", value: formatCompact(selected.requests), hint: selected.day, emphasis: "primary" },
-			{ label: "Day API cost", value: formatEstimatedCost(selected.cost, 0), hint: "selected local day" },
-			{ label: "Day tokens", value: formatCompact(selected.totalTokens), hint: `${points.length} recorded days` },
-		]), "", ...focusTabs(this.ctx, width, ["Recorded days", "Calendar"], this.focus),
-			...(this.focus === 0 ? list : calendar), "", ...(this.focus === 0 ? calendar : list),
-			...wrap([this.ctx.theme.fg("dim", "Latest 371 local days · independent of the range selector; quiet selected days are zero.")], width)];
+		const leading = this.focus === 0 ? list : calendar;
+		const trailing = this.focus === 0 ? calendar : list;
+		const calendarOffset = prefixLines.length + metrics.length + 1 + tabs.length
+			+ (this.focus === 0 ? list.length + 1 : 0);
+		const listOffset = prefixLines.length + metrics.length + 1 + tabs.length
+			+ (this.focus === 0 ? 0 : calendar.length + 1);
+		this.ctx.reportHits?.(this.days.lastHits.map(hit => ({
+			...hit, rowStart: hit.rowStart + listOffset, rowEnd: hit.rowEnd + listOffset,
+		})));
+		// The heatmap is `sectionHeading` + month row + seven day rows, so cell
+		// `(dayIndex, week)` sits at `calendarOffset + 2 + dayIndex`; its two
+		// cells start after the 2-cell weekday gutter.
+		const hits: FeatureHit[] = [];
+		for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
+			for (let week = 0; week < weeks; week++) {
+				if (layout.cells[dayIndex][week] === null) continue;
+				const date = new Date(layout.start.getFullYear(), layout.start.getMonth(), layout.start.getDate() + week * 7 + dayIndex);
+				hits.push({
+					rowStart: calendarOffset + 2 + dayIndex,
+					rowEnd: calendarOffset + 3 + dayIndex,
+					colStart: 2 + week * 2,
+					colEnd: 2 + week * 2 + 2,
+					action: { type: "selectDay", day: localDay(date) },
+				});
+			}
+		}
+		this.ctx.reportHits?.(hits);
+		return [...prefixLines, ...metrics, "", ...tabs, ...leading, "", ...trailing, ...tail];
 	}
 	get inputMode(): "text" | "navigation" {
 		return (this.id === "overview" ? this.requests.editing : this.id === "projects" ? this.projects.editing : this.days.editing)
@@ -287,6 +364,19 @@ class SummaryFeature implements FeatureController {
 		}
 		if (handled) this.ctx.changed();
 		return handled;
+	}
+	handleHit(action: FeatureHitAction): void {
+		if (action.type === "selectRow") {
+			if (this.id === "overview") this.requests.selected = action.key;
+			else if (this.id === "projects") {
+				const list = [this.projects, this.costRanking, this.requestRanking][this.focus];
+				if (list) list.selected = action.key;
+			} else this.days.selected = action.key;
+		} else {
+			this.calendarDay = action.day;
+			this.calendarEnd = null;
+		}
+		this.ctx.changed();
 	}
 	dispose(): void { this.closed = true; this.generation++; this.details.dispose(); }
 }

@@ -350,8 +350,15 @@ export function renderShareBar(share: number, opts: ShareBarOptions, readout = "
 	// Render the number FIRST, then give the bar what is left. The gap is
 	// reserved and then EMITTED, so the line is exactly `width` cells whenever
 	// the readout fits; reserving a gap and not printing it loses a cell per row.
-	const textWidth = Bun.stringWidth(readout);
-	const gap = readout ? Math.min(SHARE_GAP, Math.max(0, width - textWidth)) : 0;
+	//
+	// A readout WIDER THAN THE ROW is truncated to the row, never returned whole.
+	// The old behaviour printed it in full, so a long figure pushed the line past
+	// the panel and corrupted the overlay around it — the one over-wide line a
+	// chart must never cause. The bar has already yielded completely at that
+	// width (track === 0), so nothing is traded away by clipping the fact.
+	const fitted = visibleWidth(readout) > width ? truncateToWidth(readout, width) : readout;
+	const textWidth = Bun.stringWidth(fitted);
+	const gap = fitted ? Math.min(SHARE_GAP, Math.max(0, width - textWidth)) : 0;
 	const track = Math.max(0, width - textWidth - gap);
 
 	// Rule 2: a share of zero is a measured zero — an all-empty track, never a
@@ -360,9 +367,5 @@ export function renderShareBar(share: number, opts: ShareBarOptions, readout = "
 	const clamped = Math.max(0, Math.min(1, share));
 	const filled = Math.max(0, Math.min(track, Math.round(track * clamped)));
 
-	// A readout wider than the whole row is printed WHOLE, not truncated. The
-	// bar has already yielded completely (track === 0) and the number is the
-	// fact — truncating the fact to fit a row that has no bar left to protect
-	// would trade the thing that matters for the thing that does not.
-	return `${opts.accent(fill.repeat(filled))}${" ".repeat(track - filled)}${" ".repeat(gap)}${readout}`;
+	return `${opts.accent(fill.repeat(filled))}${" ".repeat(track - filled)}${" ".repeat(gap)}${fitted}`;
 }

@@ -7,9 +7,13 @@
  * `worthCharting` decides whether the picture says more than the table. This
  * module only maps our `TimelineRow[]` and bar-series shapes onto the host's
  * table input, then redraws the resulting `ChartSpec` with the project's own
- * primitives. THE KIND DRIVES THE GEOMETRY: a temporal axis comes back `line`
- * and a multi-series line draws a shared-axis plot; every categorical kind
- * (bar/paired/grouped/heatmap) draws as bands through `renderSeriesChart`.
+ * primitives. THE KIND DRIVES THE GEOMETRY, WITH ONE STATED LIMIT: a temporal
+ * axis comes back `line` and draws the shared-axis plot; the categorical kinds
+ * WE IMPLEMENT — `bar`, `paired`, `grouped` — draw as bands through
+ * `renderSeriesChart`. The host can also return `heatmap`, `multiples`,
+ * `share`, `diverging` and `scatter`; those are drawn as bands too, so a mixed
+ * dimension or a share/diverging spec does not get its host geometry. The
+ * claim is narrowed to what is actually implemented rather than the reverse.
  * Series hues come from `resolveSeries`, marks from our glyphs.
  *
  * Money honesty: the host's `formatValue` compacts (`$1235` for 1234.56) and
@@ -17,9 +21,8 @@
  * marks only. Money labels stay with the callers' legends (`costWithUnpriced`).
  */
 
-import { analyzeTable } from "@oh-my-pi/pi-tui/charts/table-data";
-import { buildChart, planChart, worthCharting } from "@oh-my-pi/pi-tui/charts/chart-plan";
-import type { ChartSpec } from "@oh-my-pi/pi-tui/charts/chart-plan";
+import { analyzeTable, type TableAnalysis, type TableColumn } from "@oh-my-pi/pi-tui/charts/table-data";
+import { buildChart, planChart, worthCharting, type ChartPlan, type ChartSpec } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import type { TimelineRow, TimeSeriesOptions } from "./time-series";
 import type { SeriesChartSeries } from "./compose";
 export type { SeriesChartSeries };
@@ -36,12 +39,11 @@ import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
  * A host `ChartSpec` from a timeline, plus the two modes the host does not model.
  *
  * `stacked`/`cumulative` are APPLIED in the shared-axis plot
- * ({@link renderSharedAxisPlot}), which a multi-series `line` spec takes:
- * stacked scales to the bucket total with each cell carrying its dominant
- * series, cumulative fills the cell with a solid mark instead of a point.
- * Single-series specs keep the band renderer, which has no stacking
- * geometry — it shows the parts, and a caller that needs the stack total
- * sums the series before plotting.
+ * ({@link renderSharedAxisPlot}), which a `line` spec takes — a single series
+ * INCLUDED, so a one-series `cumulative` chart fills its column instead of
+ * dropping a hollow point (the gain screen's cumulative view passes exactly
+ * that shape). `stacked` with one series is the series itself: the flag is a
+ * no-op there, not an ignored request.
  */
 
 export type TimelineChartSpec = ChartSpec & {
@@ -108,6 +110,12 @@ function cell(value: number | null | undefined, currency: boolean): string {
  *
  * Gap policy: `undefined` whenever the host's `planChart` finds no chart or
  * `worthCharting` rejects the spec (too few categories, no spread).
+ *
+ * THE HOST CAPS A LINE CHART AT SIX SERIES (`MAX_LINES` in `chart-plan.ts`),
+ * but the caller's legend lists every row it passed. A legend entry with nothing
+ * above it is a claim the chart denies, so the plan is REBUILT over every
+ * measure column: the host still owns the kind and the label, we only extend the
+ * series list it would have truncated.
  */
 export function planTimeline(
   axis: readonly number[],
@@ -128,10 +136,29 @@ export function planTimeline(
 
   const plan = planChart(table);
   if (!plan) return undefined;
-  const spec = buildChart(table, plan);
-  if (!spec || !worthCharting(spec)) return undefined;
+  const built = buildChart(table, plan);
+  if (!built || !worthCharting(built)) return undefined;
+  const spec = bypassLineCap(table, plan, built);
 
   return { ...spec, stacked: options.stacked, cumulative: options.cumulative };
+}
+
+/**
+ * Rebuild a host spec over EVERY measure column, bypassing the host's six-line
+ * cap (`MAX_LINES` in `chart-plan.ts`).
+ *
+ * The host still owns the kind and the label; only the series list is extended.
+ * A plan whose series already cover every measure is returned untouched, so the
+ * common case never pays for a second build. If the rebuild fails the host's own
+ * `worthCharting` gate, the capped spec stands: a chart the host will not draw
+ * is not made drawable by adding lines to it.
+ */
+function bypassLineCap(table: TableAnalysis, plan: ChartPlan, spec: ChartSpec): ChartSpec {
+  const measures = table.measures.map((column: TableColumn) => column.index);
+  const covered = new Set(plan.series);
+  if (measures.every((index) => covered.has(index))) return spec;
+  const rebuilt = buildChart(table, { ...plan, series: measures });
+  return rebuilt && worthCharting(rebuilt) ? rebuilt : spec;
 }
 
 // ─── Series planning ─────────────────────────────────────────────────────────
@@ -140,7 +167,9 @@ export function planTimeline(
  * Full pipeline: series data → host `ChartSpec`.
  *
  * Same table construction as {@link planTimeline}: header = [labelCol, ...measureNames],
- * rows = categories × measures (column 0 = categories).
+ * rows = categories × measures (column 0 = categories). The host's line cap is
+ * bypassed for the same reason: a caller that hands over N series has a legend
+ * with N entries, and a plot that draws fewer than it names is a lie.
  */
 export function planSeries(
   series: readonly SeriesChartSeries[],
@@ -158,9 +187,9 @@ export function planSeries(
 
   const plan = planChart(table);
   if (!plan) return undefined;
-  const spec = buildChart(table, plan);
-  if (!spec || !worthCharting(spec)) return undefined;
-  return spec;
+  const built = buildChart(table, plan);
+  if (!built || !worthCharting(built)) return undefined;
+  return bypassLineCap(table, plan, built);
 }
 
 /**
@@ -196,7 +225,7 @@ export function renderSeriesChart(
   // says this in one dim line for a single all-zero series, and the composed
   // chart says the same, so "nothing happened" has exactly one rendering
   // however many series declared it.
-  if (series.every((entry) => entry.values.every((value) => !(value > 0)))) {
+  if (series.every((entry) => entry.values.every((value) => value === null || value <= 0))) {
     return [dim(truncateToWidth(NO_ACTIVITY, width))];
   }
 
@@ -206,9 +235,8 @@ export function renderSeriesChart(
   // guaranteed a row BEFORE anything else is paid for. That row is its floor:
   // the one row of an all-zero series is the floor, and for a live series it is
   // a row of ink. Names come out of what is left, and a chart too short to
-  // afford both draws marks rather than names with no marks under them.
   const perBand = series.map((entry) =>
-    entry.values.reduce((max, value) => (value > max ? value : max), 0),
+    entry.values.reduce<number>((max, value) => (value !== null && value > max ? value : max), 0),
   );
   const wanted = opts.labels !== false;
   // A LABEL IS ONLY WORTH ITS ROW IF THE BANDS STILL GET TO DIFFER. Names cost
@@ -287,7 +315,12 @@ export function renderSeriesChart(
       // Padded to the full width so the block stays rectangular: the primitive
       // returns full-width rows, and a short label beside them leaves a ragged
       // right edge for the panel border to cut through.
-      rows.push(apply(` ${entry.label}`.slice(0, width).padEnd(width)));
+      //
+      // Measured in CELLS, not UTF-16 code units: `.slice(0, width)` cut a wide
+      // character in half and left a row one cell wider than the panel, which
+      // is the overflow every chart line must never cause.
+      const label = ` ${entry.label}`;
+      rows.push(apply(truncateToWidth(label, width).padEnd(width)));
     }
   }
   return rows;
@@ -356,7 +389,8 @@ function renderSharedAxisPlot(
   for (let i = 0; i < count; i++) {
     let total = 0;
     for (const entry of series) {
-      const value = entry.values[i] ?? 0;
+      const value = entry.values[i];
+      if (value === null) continue;
       if (value > max) max = value;
       total += value;
     }
@@ -388,7 +422,8 @@ function renderSharedAxisPlot(
         let dominant = 0;
         let color = colors[0]!;
         for (let r = 0; r < series.length; r++) {
-          const value = series[r]!.values[i] ?? 0;
+          const value = series[r]!.values[i];
+          if (value === null) continue;
           const overlap = Math.max(0, Math.min(base + value, high) - Math.max(base, low));
           coverage += overlap;
           if (overlap > dominant) {
@@ -404,7 +439,8 @@ function renderSharedAxisPlot(
       }
     } else {
       for (let r = 0; r < series.length; r++) {
-        const value = series[r]!.values[i] ?? 0;
+        const value = series[r]!.values[i];
+        if (value === null) continue;
         const y = height - 1 - Math.max(0, Math.min(height - 1, Math.round((value / max) * (height - 1))));
         const mark = opts.paint(colors[r] ?? colors[0]!, glyph(opts.preset, cumulative ? "pointFilled" : "pointHollow"));
         if (cumulative) for (let x = slot * cellWidth; x < (slot + 1) * cellWidth; x++) grid[y]![x] = mark;
@@ -425,18 +461,28 @@ export function renderHostChart(spec: ChartSpec, opts: HostChartOptions): readon
 
   const series: SeriesChartSeries[] = spec.series.map((entry) => ({
     label: entry.name,
-    values: entry.points.map((point) => point?.value ?? 0),
+    // A host `null` is a GAP, not a zero: it must reach both geometry engines as
+    // `null` so the bucket renders no mark. `?? 0` here invented a measured zero
+    // for every missing cell.
+    values: entry.points.map((point) => (point === null || point === undefined ? null : point.value)),
   }));
 
   // THE HOST OWNS THE KIND, SO THE RENDERER MUST READ IT. A temporal axis comes
   // back `line`; everything else (bar/paired/grouped/heatmap) is categorical and
-  // stays on the band renderer. A multi-series `line` draws the shared-axis
-  // plot — see {@link renderSharedAxisPlot} for why bands cannot draw
-  // those shapes. A SINGLE series keeps the bands: its column chart is the
-  // same rendering it had before the swap, and this must not change it.
+  // stays on the band renderer. A `line` draws the shared-axis plot — see
+  // {@link renderSharedAxisPlot} for why bands cannot draw those shapes.
+  //
+  // A SINGLE series keeps the bands UNLESS the caller asked for cumulative or
+  // stacked: those two modes are properties of the shared-axis plot (a filled
+  // column instead of a point; a stack total instead of the series), and
+  // ignoring them for one series is how the gain screen's cumulative view
+  // rendered as hollow points. `stacked` on one series is the series itself, so
+  // it changes nothing but costs nothing to honour.
   const temporal = spec.kind === "line";
-  const lines = temporal && series.length > 1
-    ? renderSharedAxisPlot(series, opts, (spec as TimelineChartSpec).stacked === true, (spec as TimelineChartSpec).cumulative === true)
+  const stacked = (spec as TimelineChartSpec).stacked === true;
+  const cumulative = (spec as TimelineChartSpec).cumulative === true;
+  const lines = temporal && (series.length > 1 || stacked || cumulative)
+    ? renderSharedAxisPlot(series, opts, stacked, cumulative)
     : renderSeriesChart(series, {
       width,
       height: opts.height ?? 6,

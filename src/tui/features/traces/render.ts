@@ -33,6 +33,7 @@ export function renderTimeline(options: {
 	overviewCursor?: number | null; overviewAnchor?: number | null;
 }): string[] {
 	const { trace, scale, viewport, collapsed, selected, cursor, theme, search } = options;
+	const tracks = Array.isArray(trace.tracks) ? trace.tracks : [];
 	// The ONE `getSymbolPreset()` read for this view, so every mark below
 	// answers to the preset instead of being hardcoded into the module.
 	const preset = theme.getSymbolPreset();
@@ -53,7 +54,7 @@ export function renderTimeline(options: {
 	lines.push(`${"Minimap".padEnd(labelWidth)} ${brush.join("")}`);
 	// Separate categories retain concurrent activity instead of overwriting one another.
 	for (const kind of KINDS) {
-		const spans = trace.tracks.flatMap(track => track.spans.filter(span => span.kind === kind));
+		const spans = tracks.flatMap(track => track.spans.filter(span => span.kind === kind));
 		if (!spans.length) continue;
 		const density = Array<number>(plotWidth).fill(0), errors = Array<boolean>(plotWidth).fill(false);
 		for (const span of spans) {
@@ -62,7 +63,7 @@ export function renderTimeline(options: {
 		}
 		lines.push(`${`Overview ${kind}`.padEnd(labelWidth)} ${density.map((count, x) => count ? theme.fg(errors[x] ? "error" : SPAN_COLORS[kind], count > 1 ? glyph(preset, "barFill") : MARKS[kind]) : glyph(preset, "heatEmpty")).join("")}`);
 	}
-	lines.push(`Window +${formatDurationMs(scale.toT(viewport.u0) - trace.startedAt)} → +${formatDurationMs(scale.toT(viewport.u1) - trace.startedAt)} · ${(domainSize / (viewport.u1 - viewport.u0)).toFixed(1)}×`);
+	lines.push(`Window +${formatDurationMs(scale.toT(viewport.u0) - (trace.startedAt ?? 0))} → +${formatDurationMs(scale.toT(viewport.u1) - (trace.startedAt ?? 0))} · ${(domainSize / (viewport.u1 - viewport.u0)).toFixed(1)}×`);
 	const ruler = Array<string>(plotWidth).fill(glyph(preset, "axisRule"));
 	for (const gap of scale.gaps) {
 		const x = Math.floor((gap.uMid - viewport.u0) / (viewport.u1 - viewport.u0) * plotWidth);
@@ -70,8 +71,8 @@ export function renderTimeline(options: {
 	}
 	ruler[Math.min(plotWidth - 1, Math.floor(cursor * (plotWidth - 1)))] = theme.fg("accent", glyph(preset, "playhead"));
 	lines.push(`${"Cursor".padEnd(labelWidth)} ${ruler.join("")}`);
-	const lanes = buildLanes(trace.tracks, collapsed), timelineRows: TimelineRow[] = [];
-	for (const track of visibleTracks(trace.tracks, collapsed)) {
+	const lanes = buildLanes(tracks, collapsed), timelineRows: TimelineRow[] = [];
+	for (const track of visibleTracks(tracks, collapsed)) {
 		timelineRows.push({ track });
 		if (track.markers.length) timelineRows.push({ track, markers: true });
 		for (const lane of lanes.filter(lane => lane.track.id === track.id)) timelineRows.push({ track, lane });
@@ -81,8 +82,8 @@ export function renderTimeline(options: {
 	const needle = search.trim().toLowerCase();
 	for (const row of visible.rows) {
 		if (!row.lane && !row.markers) {
-			const depth = ancestors(trace.tracks, row.track.id).length;
-			const children = trace.tracks.filter(track => track.parentId === row.track.id).length;
+			const depth = ancestors(tracks, row.track.id).length;
+			const children = tracks.filter(track => track.parentId === row.track.id).length;
 			lines.push(theme.fg("muted", `${"  ".repeat(depth)}${collapsed.has(row.track.id) ? "+" : "−"} ${clean(row.track.label)} [${row.track.id}]${children ? ` · ${children} children` : ""}${!row.track.spans.length && !row.track.markers.length ? " · no recorded events" : ""}`));
 			continue;
 		}
@@ -124,7 +125,7 @@ export function renderTimeline(options: {
 		const padded = `${label}${" ".repeat(Math.max(0, labelWidth - visibleWidth(label)))}`;
 		lines.push(`${active ? theme.bg(SELECTION_BG.band, theme.bold(theme.fg("accent", padded))) : padded} ${cells.join("")}`);
 	}
-	if (!trace.tracks.some(track => track.spans.length || track.markers.length)) lines.push("No recorded spans or markers in this trace.");
+	if (!tracks.some(track => track.spans.length || track.markers.length)) lines.push("No recorded spans or markers in this trace.");
 	if (visible.rows.length < timelineRows.length) lines.push(theme.fg("dim", `Rows ${visible.offset + 1}–${visible.offset + visible.rows.length}/${timelineRows.length} · ↑/↓ reveal · Tab panes`));
 	lines.push(...wrapTextWithAnsi(`I input · M model · T tool · A agent · B background · ${glyph(preset, "trackMarker")} marker · ~ compressed idle`, width));
 	return bounded(lines, width);
@@ -136,7 +137,7 @@ export function renderEntry(row: TraceRow | null, entry: unknown, loading: boole
 	if (span) {
 		lines.push(`Start: ${new Date(span.start).toISOString()} · End: ${new Date(span.end).toISOString()}`);
 		if (span.detail) lines.push(`${span.kind === "subagent" ? "Task" : span.kind === "tool" ? "Arguments" : "Detail"}: ${clean(span.detail)}`);
-		if (span.kind === "model") lines.push(`Model: ${clean(span.model ?? "unknown")} · Tokens: ${formatInteger(span.tokens ?? 0)} · Cost: ${formatEstimatedCost(span.cost ?? 0, 0)} · TTFT: ${formatDurationMs(span.ttft ?? null)}`);
+		if (span.kind === "model") lines.push(`Model: ${clean(span.model ?? "unknown")} · Tokens: ${formatInteger(span.tokens ?? 0)} · Cost: ${span.cost === undefined ? "N/A" : formatEstimatedCost(span.cost, 0)} · TTFT: ${formatDurationMs(span.ttft ?? null)}`);
 		if (span.childTrackId) lines.push(`Child: ${clean(span.childTrackId)} · o reveal child · O open child's transcript`);
 	}
 	if (loading) lines.push("Loading full journal entry…");

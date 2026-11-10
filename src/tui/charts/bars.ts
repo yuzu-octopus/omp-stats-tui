@@ -132,12 +132,12 @@ function mark(glyphs: GlyphSet, role: keyof GlyphSet): string {
  * falsy). A terminal does not have to, because the floor gives zero somewhere
  * to be drawn.
  */
-function heights(values: readonly number[], rows: number, supplied?: number): readonly number[] {
+function heights(values: readonly (number | null)[], rows: number, supplied?: number): readonly number[] {
 	if (rows <= 0) return values.map(() => 0);
 	// The caller's maximum when there is one, else this series' own peak. Never
 	// the series MINIMUM: min-max stretches a quiet series to fill the ramp and
 	// renders a quiet week exactly like a busy one.
-	const max = supplied ?? Math.max(0, ...values);
+	const max = supplied ?? Math.max(0, ...values.filter((v): v is number => v !== null));
 	// Nothing to scale against, so every column stays empty rather than dividing
 	// by zero. (Crush's guard is `if (max === 0) max = 1`; transcribing that
 	// literally into a ramp paints a non-zero value FULL.)
@@ -155,7 +155,7 @@ function heights(values: readonly number[], rows: number, supplied?: number): re
 	// therefore sizes bands by PEAK SHARE as well as passing the shared maximum:
 	// the row count carries the cross-series magnitude and the maximum keeps each
 	// band from over-filling the rows it was given.
-	return values.map((v) => (v <= 0 ? 0 : Math.max(1, Math.min(rows, Math.round((v / max) * rows)))));
+	return values.map((v) => (v === null || v <= 0 ? 0 : Math.max(1, Math.min(rows, Math.round((v / max) * rows)))));
 }
 
 /**
@@ -264,8 +264,17 @@ function clamp(text: string, width: number): string {
  * because its plot matrix is a scatter with variable gaps; a dense calendar
  * chart wants contiguous columns, and a fractional width would need per-column
  * padding maths that `Bun.stringWidth` would then have to absorb.
+ *
+ * A series longer than the panel is CLIPPED TO THE LAST `width` SAMPLES, never
+ * re-bucketed. The old path assigned synthetic timestamps `0..width-1` and
+ * `densify` dropped every point outside that axis, so a longer series kept the
+ * OLDEST `width` buckets and silently discarded the newest — the opposite of
+ * the clip rule `sparkline.ts` states, and a live panel hides today.
+ *
+ * A `null` bucket is a GAP: it draws no mark, which is a different claim from
+ * a measured zero.
  */
-export function renderDailyBars(values: readonly number[], opts: BarsOptions): readonly string[] {
+export function renderDailyBars(values: readonly (number | null)[], opts: BarsOptions): readonly string[] {
 	// ABSENT — no buckets at all. A real state, not an error and not "zero
 	// everywhere": the web draws its centred `.chart-empty` for exactly this
 	// (`Chart.tsx:320`), and a chart of blank columns would read as "you did
@@ -278,13 +287,18 @@ export function renderDailyBars(values: readonly number[], opts: BarsOptions): r
 	}
 
 	const width = Math.max(0, Math.floor(opts.width));
-	// Exactly `width` columns: densify pads when there is less data than width,
-	// and we would rather show trailing blank columns than a row narrower than
-	// the panel it sits in.
-	const columns = values.length === width ? values : costsForBuckets(
-		values.map((cost, i) => ({ timestamp: i, cost })),
-		Array.from({ length: width }, (_, i) => i),
-	);
+	// Rule 3, the one `sparkline.ts` already states: clip, do not downsample,
+	// and keep the NEWEST. `densify` is for cost buckets whose SUM is the
+	// semantics; a per-bucket chart must not average adjacent samples into
+	// values nobody observed.
+	const kept = width > 0 && values.length > width ? values.slice(values.length - width) : values;
+	// A SHORTER series keeps its historical alignment: values left, blanks
+	// right. Only the CLIP DIRECTION changed here — a longer series now keeps its
+	// newest samples rather than its oldest.
+	const columns: readonly (number | null)[] = [
+		...kept,
+		...new Array<number | null>(Math.max(0, width - kept.length)).fill(null),
+	];
 
 	const rows = plotRows(opts.height);
 	return compose(heights(columns, rows, opts.max), rows, { ...opts, width });

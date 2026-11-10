@@ -66,6 +66,10 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 		try {
 			const result = await ctx.reader.api<FrustrationDashboardStats>("/api/stats/frustration", { range: requestedRange });
 			if (disposed || generation !== readGeneration) return;
+			if (!result || !result.overall || !Array.isArray(result.byModel) || !result.job) {
+				error = "Frustration payload missing overall/byModel/job";
+				return;
+			}
 			data = result;
 			dataRange = requestedRange;
 			job = result.job;

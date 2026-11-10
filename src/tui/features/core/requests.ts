@@ -140,9 +140,9 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 	const details = new RequestDetails(ctx);
 	const list = new ListState<MessageStats>(rowKey, "time");
 	list.descending = true;
-	const signatures = new ListState<ErrorGroupView>(g => g.signature, "count", 12);
+	const signatures = new ListState<ErrorGroupView>(g => g.signature, "count", 100);
 	signatures.descending = true;
-	const models = new ListState<AffectedModel>(m => m.key, "count", 12);
+	const models = new ListState<AffectedModel>(m => m.key, "count", 100);
 	models.descending = true;
 	const steps = id === "requests" ? [500, 2000, 10000] : [50, 200, 1000];
 	let rows: MessageStats[] = [], range: Range = "24h", step = 0, generation = 0, closed = false, loading = false, error: string | null = null;
@@ -202,7 +202,7 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 			lines.push(ctx.theme.fg("dim", `${scope} · ${formatInteger(summary.unpriced)} unpriced`));
 			lines.push(...focusTabs(ctx, width, id === "errors" ? ["Signatures", "Models", "Failures"] : ["Request log"], focus));
 			lines.push(ctx.theme.fg("dim", id === "requests" ? `f status: ${statuses[status]} · / search · o/O sort · Enter details · l load more` : "Tab pane · / search · o/O sort · Enter select/open · u latest · f/x/X clear"));
-			const panelHeight = Math.max(5, Math.min(14, height - lines.length - 3));
+			const panelHeight = Math.max(5, height - lines.length);
 			const failurePanel = id === "requests" || focus === 2 ? list.render(filtered, width, panelHeight, id === "errors" ? errorColumns : requestColumns, ctx, id === "errors" ? "Failures" : "Request log") : [];
 			if (id === "requests") {
 				lines.push(...failurePanel);

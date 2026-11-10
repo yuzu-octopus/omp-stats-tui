@@ -12,7 +12,7 @@
 
 import { expect, test } from "bun:test";
 
-import { emptyData, liveData } from "./fixtures/panel";
+import { emptyData, liveData, TIME_SERIES } from "./fixtures/panel";
 import {
 	NEED_BY_SOURCE,
 	SCREEN_SPECS,
@@ -54,7 +54,6 @@ function refsInBand(band: Band): readonly MetricRef[] {
 		case "table":
 			return band.columns.flatMap(c => metricRefsOf(c.source));
 		case "note":
-		case "custom":
 			return [];
 	}
 }
@@ -85,18 +84,14 @@ function measuredNull(ref: MetricRef, row: object | undefined): boolean {
 	return node === null;
 }
 
-/** Screens whose bands cannot be filled, and why. `providers` is the only one. */
-const DEFERRED = SCREEN_SPECS.filter(spec => spec.deferred);
-
 // ─── the valuable test ───────────────────────────────────────────────────────
 
-test("every MetricRef in every non-deferred spec resolves to a real value", () => {
+test("every MetricRef in every spec resolves to a real value", () => {
 	const data = liveData();
 	const failures: string[] = [];
 	let checked = 0;
 
 	for (const spec of SCREEN_SPECS) {
-		if (spec.deferred) continue;
 		for (const ref of refsInSpec(spec)) {
 			checked++;
 			const value = resolveCell(ref, data);
@@ -116,7 +111,6 @@ test("every table row resolves every one of its columns", () => {
 	const failures: string[] = [];
 
 	for (const spec of SCREEN_SPECS) {
-		if (spec.deferred) continue;
 		for (const band of spec.bands) {
 			if (band.kind !== "table") continue;
 			const rows = rowsFor(band.rows.source, data);
@@ -139,7 +133,6 @@ test("every chart series yields at least one finite number to plot", () => {
 	const failures: string[] = [];
 
 	for (const spec of SCREEN_SPECS) {
-		if (spec.deferred) continue;
 		for (const band of spec.bands) {
 			if (band.kind !== "chart") continue;
 			for (const series of band.chart.series) {
@@ -158,18 +151,6 @@ test("every chart series yields at least one finite number to plot", () => {
 	expect(failures, `unplottable series:\n${failures.join("\n")}`).toEqual([]);
 });
 
-test("a deferred screen is the ONLY screen with an unresolvable ref, and it says so", () => {
-	// When a screen is marked `deferred`, every ref it names must be
-	// unfetchable — that correspondence is what keeps the two from disagreeing.
-	// (`providers` is no longer deferred: its aggregates are DB-backed, and
-	// only the network windows payload stays out of the panel.)
-	for (const spec of DEFERRED) {
-		expect(spec.deferredReason, spec.id).toBeTruthy();
-		for (const ref of refsInSpec(spec)) {
-			expect(metricNeed(ref), `${spec.id} is deferred but ${labelOf(ref)} IS fetchable`).toBeNull();
-		}
-	}
-});
 
 test("a ref on a source its screen never fetched is reported as unfetched, not as missing", () => {
 	// The distinction the panel depends on: `fetchFor` never issued the query,
@@ -202,9 +183,8 @@ test("AggregateRef reads a dotted path off the row, and a missing leaf is null n
 
 test("SeriesRef yields one number per row, in payload order", () => {
 	const data = liveData();
-	expect(resolveSeriesValues({ kind: "series", source: "timeSeries", field: "cost" }, data)).toEqual([
-		3.2, 1.1, 4.75, 0.4,
-	]);
+	expect(resolveSeriesValues({ kind: "series", source: "timeSeries", field: "cost" }, data))
+		.toEqual(TIME_SERIES.map(point => point.cost));
 	expect(
 		resolveSeriesValues({ kind: "series", source: "modelSeries", field: "requests", groupBy: "model" }, data)
 			.length,

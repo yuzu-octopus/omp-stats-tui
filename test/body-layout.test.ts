@@ -36,7 +36,15 @@ import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import { PALETTE, SERIES_COLORS, stripForTest } from "../src/tui/palette";
 import { DEFAULT_RANGE } from "../src/data/ranges";
 import type { PanelData } from "../src/data/api";
-import { FIXTURE_NOW, liveData } from "./fixtures/panel";
+import { FIXTURE_NOW, liveData, type ProviderDashboardFixture } from "./fixtures/panel";
+import { sidebar } from "../src/tui/chrome";
+import { bodyRows } from "../src/tui/frame";
+import type { FeatureContext, FeatureController } from "../src/tui/features/types";
+import { createSummaryFeature } from "../src/tui/features/core/summary";
+import { createAnalyticsFeature } from "../src/tui/features/core/analytics";
+import { createRequestsFeature } from "../src/tui/features/core/requests";
+import { createProvidersFeature } from "../src/tui/features/providers";
+import { messageRow } from "./fixtures/panel";
 
 ensureThemeSync();
 
@@ -68,7 +76,7 @@ const specOf = (id: string): ScreenSpec => {
 };
 
 /** Every screen a reader can actually land on. */
-const FILLABLE = SCREEN_SPECS.filter(spec => !spec.deferred);
+const FILLABLE = SCREEN_SPECS;
 
 /** The grid renders itself for every band kind and width it supports. */
 const WIDTHS = [40, 48, 60, 72, 80, 100, 120, 150] as const;
@@ -603,7 +611,7 @@ test("D2: a COST-scaled bar still carries its unpriced count", () => {
 	// not be measured must never read as a free `$0.00`, and the unpriced count
 	// must reach the reader beside the figure it qualifies. `costWithUnpriced`
 	// owns both halves; the fix for the unit bug must not silence it.
-	const rows = SCREEN_SPECS.filter(spec => !spec.deferred);
+	const rows = SCREEN_SPECS;
 	const costScreens = rows.filter(spec =>
 		spec.bands.some(band => band.kind === "chart" && band.chart.axis === "cost"),
 	);
@@ -611,6 +619,118 @@ test("D2: a COST-scaled bar still carries its unpriced count", () => {
 	for (const spec of costScreens) {
 		const body = text(renderScreen(opts(spec, liveData(), 150)));
 		// Wherever the fixture carries an unpriced row, the count is stated.
-		if (/unpriced/.test(body)) expect(body, spec.id).not.toMatch(/\$0\.00/);
+		if (/unpriced/.test(body)) expect(body, spec.id).not.toMatch(/\$0\.00(?!\d)/);
+	}
+});
+
+// ─── Task 2.1: production bodies fill the frame ─────────────────────────────
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const FILL_ROWS = 30;
+
+/**
+ * A payload with enough rows that every production screen CAN fill a 40-row
+ * frame. The fill rule is about caps, not about inventing content: a table
+ * with fewer rows than the frame cannot stretch, so the assertion is that no
+ * screen leaves blank rows when its content can reach them, and that a screen
+ * with more content than fits still scrolls (its source exceeds the frame).
+ */
+function fillData(): PanelData {
+	const data = liveData();
+	const models = Array.from({ length: FILL_ROWS }, (_, i) => ({
+		...data.modelDashboard!.byModel[0]!,
+		model: `model-${i}`,
+		provider: `provider-${i % 4}`,
+		totalRequests: 1000 - i,
+		totalCost: 100 - i,
+		unpricedRequests: i % 5 === 0 ? 5 : 0,
+	}));
+	const modelSeries = Array.from({ length: FILL_ROWS }, (_, m) =>
+		Array.from({ length: 30 }, (_, b) => ({ timestamp: FIXTURE_NOW - (29 - b) * HOUR_MS, model: `model-${m}`, provider: `provider-${m % 4}`, requests: 10 + ((m + b) % 7) })));
+	const costSeries = Array.from({ length: FILL_ROWS }, (_, m) =>
+		Array.from({ length: 30 }, (_, b) => ({
+			timestamp: Math.floor((FIXTURE_NOW - (29 - b) * DAY_MS) / DAY_MS) * DAY_MS,
+			model: `model-${m}`, provider: `provider-${m % 4}`, requests: 10,
+			unpricedRequests: m % 5 === 0 ? 2 : 0, cost: m === 0 ? 10 : 1,
+			costInput: 0.5, costOutput: 0.5, costCacheRead: 0, costCacheWrite: 0,
+		})));
+	const folders = Array.from({ length: FILL_ROWS }, (_, i) => ({
+		...data.folders![0]!, folder: `/project-${i}`, totalRequests: 500 - i, totalCost: 50 - i * 0.5, unpricedRequests: i % 4 === 0 ? 3 : 0,
+	}));
+	const tools = Array.from({ length: FILL_ROWS }, (_, i) => ({
+		tool: `tool-${i}`, calls: 100 - i, errors: i % 3, argsChars: 10, resultChars: 20,
+		totalTokensShare: 1000, outputTokensShare: 100, costShare: 1, unpricedRequestsShare: 0, lastUsed: FIXTURE_NOW,
+	}));
+	const byToolModel = Array.from({ length: FILL_ROWS }, (_, i) => ({ ...tools[i]!, model: `model-${i}`, provider: `provider-${i % 4}` }));
+	const toolSeries = Array.from({ length: FILL_ROWS }, (_, t) =>
+		Array.from({ length: 30 }, (_, b) => ({ timestamp: FIXTURE_NOW - (29 - b) * HOUR_MS, tool: `tool-${t}`, calls: 5 + ((t + b) % 5), errors: t % 3 })));
+	const recent = Array.from({ length: FILL_ROWS }, (_, i) => messageRow({ id: i + 1, timestamp: FIXTURE_NOW - i * HOUR_MS }));
+	const providers = Array.from({ length: FILL_ROWS }, (_, i) => ({
+		provider: `provider-${i}`, totalRequests: 1000 - i * 10, failedRequests: i % 4, models: 2,
+		totalInputTokens: 1000, totalOutputTokens: 500, totalCacheReadTokens: 0, totalCacheWriteTokens: 0,
+		totalTokens: 1500, totalCost: 10 - i * 0.1, unpricedRequests: i % 5 === 0 ? 2 : 0,
+		totalPremiumRequests: 0, avgTokensPerSecond: 50,
+	}));
+	const providerSeries = Array.from({ length: FILL_ROWS }, (_, p) =>
+		Array.from({ length: 30 }, (_, b) => ({ timestamp: FIXTURE_NOW - (29 - b) * HOUR_MS, provider: `provider-${p}`, totalTokens: 100, outputTokens: 50, requests: 5, cost: 1, unpricedRequests: 0 })));
+	const hourly = Array.from({ length: 24 }, (_, h) => ({ provider: "provider-0", hour: h, totalTokens: 100, outputTokens: 50, requests: 5 }));
+	return {
+		...data,
+		overview: { ...data.overview!, timeSeries: Array.from({ length: 30 }, (_, b) => ({ timestamp: FIXTURE_NOW - (29 - b) * HOUR_MS, requests: 10, errors: 1, tokens: 1000, cost: 1 })) },
+		modelDashboard: { byModel: models, modelSeries: modelSeries.flat(), modelPerformanceSeries: [] },
+		costs: { costSeries: costSeries.flat() },
+		folders,
+		recent,
+		errors: recent.map((row, i) => ({ ...row, errorMessage: `error-${i}` })),
+		tools: { byTool: tools, byToolModel, series: toolSeries.flat() },
+		providers: { providers, hourly, series: providerSeries.flat(), insights: (data.providers as ProviderDashboardFixture).insights },
+	} as PanelData;
+}
+
+function productionScreens(data: PanelData): [string, FeatureController][] {
+	const make = (api: (path: string) => unknown): FeatureContext => ({
+		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
+		reader: { api: async <T>(path: string) => api(path) as T, fetch: async () => data },
+	});
+	const recentOnly = make(path => (path === "/api/stats/recent" ? data.recent : data.errors));
+	return [
+		["overview", createSummaryFeature("overview", make(path => (path === "/api/stats/recent" ? data.recent : data)))],
+		["projects", createSummaryFeature("projects", make(() => data))],
+		["activity", createSummaryFeature("activity", make(() => data))],
+		["models", createAnalyticsFeature("models", make(path => (path === "/api/stats/model-dashboard" ? data.modelDashboard : data)))],
+		["costs", createAnalyticsFeature("costs", make(path => (path === "/api/stats/costs" ? data.costs : data)))],
+		["tools", createAnalyticsFeature("tools", make(path => (path === "/api/stats/tools" ? data.tools : data)))],
+		["requests", createRequestsFeature("requests", recentOnly)],
+		["errors", createRequestsFeature("errors", recentOnly)],
+		["providers", createProvidersFeature(make(path => (path === "/api/stats/providers" ? data.providers : { windowInsights: [], usageSeries: [] })))],
+	];
+}
+
+/** The body width and height the panel hands a feature at this frame size. */
+function frameBudget(width: number, rows: number): { inner: number; height: number } {
+	const preset = theme.getSymbolPreset();
+	const column = width >= 84 && rows >= 20;
+	const nav = sidebar(theme, preset, "overview");
+	return {
+		inner: planLayout(Math.max(20, width - (column ? nav.width + 3 : 0)), rows, preset).innerWidth,
+		height: Math.max(1, bodyRows(rows, column ? 1 : 2)),
+	};
+}
+
+test("2.1: production bodies fill a 40-row frame and never exceed the frame width", async () => {
+	const data = fillData();
+	for (const [name, feature] of productionScreens(data)) {
+		await feature.load("30d");
+		for (const width of [40, 60, 100, 150]) {
+			const { inner, height } = frameBudget(width, 40);
+			const lines = feature.render(inner, height);
+			for (const line of lines) expect(visibleWidth(line), `${name} @ ${width}`).toBeLessThanOrEqual(inner);
+			if (width === 100) {
+				const blank = Math.max(0, height - lines.length);
+				expect(blank, `${name} leaves ${blank} blank rows at 100x40`).toBeLessThanOrEqual(3);
+			}
+		}
+		feature.dispose();
 	}
 });

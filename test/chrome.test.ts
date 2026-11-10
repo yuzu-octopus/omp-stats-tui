@@ -24,12 +24,12 @@
  *   the web's timestamp check does (no timer, no visual indicator, same as web).
  * - Hotkeys are the web's verbatim (nav.ts) except `activity`, which has no web
  *   section (OURS: `a`). `NAV_GROUPS` keeps a row only when `specForScreen` and
- *   `isDrawableScreen` agree there is a body to draw, so a deferred or
- *   spec-less screen gets neither a sidebar row nor a letter — a jump that
- *   paints a page the panel cannot honestly fill wastes the keystroke. Today
- *   every entry of `SELECTABLE_SCREENS` clears that filter, so all twelve have
- *   a row and a letter; `traces` and `frustration` (`g t`, `g f`) are the two
- *   screens PAST THE NUMBER ROW, not jump exceptions.
+ *   `isDrawableScreen` agree there is a body to draw, so a spec-less screen gets
+ *   neither a sidebar row nor a letter — a jump that paints a page the panel
+ *   cannot honestly fill wastes the keystroke. Today every entry of
+ *   `SELECTABLE_SCREENS` clears that filter, so all twelve have a row and a
+ *   letter; `traces` and `frustration` (`g t`, `g f`) are the two screens PAST
+ *   THE NUMBER ROW, not jump exceptions.
  */
 import { expect, test } from "bun:test";
 import { ensureThemeSync, setSymbolPreset, theme } from "@oh-my-pi/pi-tui/theme";
@@ -39,12 +39,15 @@ import { SCREEN_SPECS } from "../src/layout/spec";
 import {
 	JUMP_TIMEOUT_MS,
 	NAV_GROUPS,
+	SIDEBAR_ZIP_PREFIX,
 	ago,
 	chipFor,
 	progressLineFor,
 	screenForHotkey,
 	sidebar,
 	topbar,
+	zipSidebar,
+	type NavGroup,
 } from "../src/tui/chrome";
 import { SELECTION_BG, SIDEBAR_INK, TAB_INK } from "../src/tui/palette";
 import { __testing, SELECTABLE_SCREENS, panelAction } from "../src/tui/panel";
@@ -551,6 +554,45 @@ test("sidebar rows are one rectangle on every preset, even though the block widt
 	}
 });
 
+test("sidebar paints an INJECTED nav list through the same geometry, not a fork", () => {
+	// The showcase's sections are not screen ids, so the nav must be a PARAMETER.
+	// This is the seam `showcase/nav.ts` asked for: same measurements, same ink
+	// ladder, same hover/active rules, different rows.
+	const injected: readonly NavGroup[] = [
+		{ heading: "Grammar", items: [
+			{ id: "tiles", label: "Tiles", hotkey: "t", icon: "tokens" },
+			{ id: "charts", label: "Charts", hotkey: "c", icon: "cost" },
+		] },
+		{ heading: "Edges", items: [{ id: "awkward", label: "Awkward", hotkey: "a", icon: "warning" }] },
+	];
+	const { width, lines } = sidebar(theme, "unicode", "charts", null, injected);
+	const plain = lines.map(strip);
+	expect(plain).toHaveLength(5);
+	expect(plain[0]!.trim()).toBe("Grammar");
+	expect(plain[1]).toContain("Tiles");
+	expect(plain[1]).toContain("G T");
+	expect(plain[2]).toContain("Charts");
+	expect(plain[2]).toContain("G C");
+	expect(lines[2]).toContain(ACTIVE_BG);
+	expect(plain[3]!.trim()).toBe("Edges");
+	expect(plain[4]).toContain("Awkward");
+	for (const line of plain) expect(visibleWidth(line)).toBe(width);
+	// The injected list is cached separately from the real nav.
+	expect(sidebar(theme, "unicode", "overview").lines).not.toEqual(lines);
+});
+
+test("zipSidebar keeps the whole nav when the body is shorter, and its prefix is the declared constant", () => {
+	// The nav sets a FLOOR on the frame: a short body pads the body, never clips
+	// the nav. The prefix is `sidebarWidth + SIDEBAR_ZIP_PREFIX`, the number the
+	// body plan subtracts, so the two cannot drift.
+	const zipped = zipSidebar(theme, ["one"], ["A", "B", "C"], 1, "unicode");
+	expect(zipped).toHaveLength(3);
+	expect(strip(zipped[0]!)).toBe("A │ one");
+	expect(strip(zipped[1]!).startsWith("B ")).toBe(true);
+	expect(strip(zipped[2]!).startsWith("C ")).toBe(true);
+	expect(strip(zipped[0]!).indexOf("one")).toBe(1 + SIDEBAR_ZIP_PREFIX);
+});
+
 test("the sidebar gutter is the dim column bar, settings split-layout parity", () => {
 	// settings-list.ts:989: the split column separator is theme.hint("│ ").
 	// panel.ts zips sidebar and body with the same dim bar between them.
@@ -942,13 +984,11 @@ test("a screen past the number row is still reachable: arrows, tab, and its jump
 	}
 });
 
-test("digits index the SELECTABLE screens, so a number never lands on an excluded one", () => {
-	// The selectable set is spec-driven: every non-deferred screen the IR can
-	// describe, minus the ones the registry marks excluded. A digit that could
-	// reach an excluded screen would spend a keystroke on a page the panel
-	// cannot honestly fill, which is exactly what `excluded` exists to prevent.
+test("digits index the SELECTABLE screens, so a number never lands on one the IR cannot draw", () => {
+	// The selectable set is spec-driven: every screen the IR can describe. A digit
+	// that could reach a screen with no body would spend a keystroke on a page the
+	// panel cannot honestly fill.
 	expect(__testing.debugScreenIds()).toEqual(SELECTABLE_SCREENS.map(screen => screen.id));
-	expect(SELECTABLE_SCREENS.every(screen => screen.status !== "excluded")).toBe(true);
 	for (let index = 0; index < DIGIT_KEYS.length; index++) {
 		const screen = SELECTABLE_SCREENS[index];
 		expect(screen, `digit ${DIGIT_KEYS[index]} has nothing to select`).toBeDefined();

@@ -33,8 +33,8 @@
  *
  * WHAT IS NOT HERE, and why:
  *
- *   - No database. The showcase never imports `bun:sqlite`, `initDb`,
- *     or `fetchFor`; `test/showcase-panel.test.ts` asserts that at
+ *   - No database. The showcase never imports `bun:sqlite` or calls
+ *     `initDb`/`fetchFor`; `test/showcase-needs.test.ts` asserts that at
  *     the source level, because a future edit reaching for the DB would pass
  *     every other test and only fail in someone's real session.
  *   - No `theme`. Colour arrives injected, through the panel's own theme object.
@@ -676,7 +676,7 @@ export const SHOWCASE_RECORD: ShowcaseRecord = {
 	tools: TOOLS,
 	gain: GAIN,
 	dailyActivity: DAILY_ACTIVITY,
-	rollupStatus: { dirtyHours: 0, dirtySessions: 0 },
+	rollupStatus: { dirtyHours: 12, dirtySessions: 3 },
 };
 
 /**

@@ -7,7 +7,7 @@
  * panel already recomputes that table on EVERY render from the current width
  * and clamps scroll inside `render`, so shrink-on-resize is automatic. What no
  * module stated is the FRAME contract the chrome builds against: at this total
- * width, is the sidebar full/icons/hidden, is the topbar full/condensed/
+ * width, is the sidebar full/hidden, is the topbar full/condensed/
  * minimal. That mapping lives here, DERIVED from the table rather than
  * restated beside it — a retuned threshold flows through with no edit here,
  * which a second table would not.
@@ -18,7 +18,7 @@
  * | band   | total     | inner  | chrome                        | intent                              |
  * |--------|-----------|--------|-------------------------------|-------------------------------------|
  * | wide   | ≥ 84      | ≥ 80   | sidebar full, topbar full     | two columns, 4 table cols           |
- * | medium | 48–83     | 44–79  | sidebar icons, topbar condensed | one column, 3 table cols (web 1100px: grids → 1fr) |
+ * | medium | 48–83     | 44–79  | sidebar hidden, topbar condensed | one column, 3 table cols (web 1100px: grids → 1fr) |
  * | narrow | 34–47     | 30–43  | sidebar hidden, topbar condensed | 2 table cols, footer drops from right (web LiveChip hides) |
  * | tiny   | < 34      | < 30   | sidebar hidden, topbar minimal | footer hints off, body-first (web 900px: drawer + hamburger) |
  *
@@ -30,8 +30,8 @@
  * columns; 30 holds two plus a hint row beside content.
  *
  * WHAT THIS MODULE DOES NOT DO. No geometry (that is `planLayout`), no tab
- * measuring (that is `TAB_ROWS` in `frame.ts` — the strip wraps below ~58
- * columns and the cost is a measured body row, never a breakpoint), no scroll
+ * measuring (the panel measures the strip's rendered rows and subtracts them
+ * from the body budget), no scroll
  * state (the panel clamps inside `render`, following `usage-dashboard.ts:903-905`,
  * never in the key handler), no line cache (the panel holds none; if one is
  * ever added its key MUST include width AND data generation, per
@@ -41,7 +41,7 @@
 import { BREAKPOINTS, HORIZONTAL_INSET, MIN_USABLE_WIDTH } from "./layout";
 
 /** What the sidebar costs the body at this width. */
-export type SidebarMode = "full" | "icons" | "hidden";
+export type SidebarMode = "full" | "hidden";
 
 /** What the topbar keeps at this width. */
 export type TopbarMode = "full" | "condensed" | "minimal";
@@ -55,7 +55,7 @@ export type TopbarMode = "full" | "condensed" | "minimal";
 export interface FramePolicy {
 	/** The breakpoint row that applied (`wide` | `medium` | `narrow` | `tiny`). */
 	band: string;
-	/** Sidebar cost: full row, icon rail, or gone. */
+	/** Sidebar cost: full row or gone. */
 	sidebar: SidebarMode;
 	/** Topbar density: everything, condensed, or brand-only. */
 	topbar: TopbarMode;
@@ -72,9 +72,8 @@ export interface FramePolicy {
  *
  * Derived, never restated: the band is the same first-match scan `planLayout`
  * performs, and the chrome modes follow from the row's CAPABILITIES (two
- * columns ⇒ room for a full sidebar; three table columns ⇒ room for icons;
- * hints ⇒ room for a condensed topbar), so a new breakpoint row gets sensible
- * chrome with no edit here.
+ * columns ⇒ room for a full sidebar; hints ⇒ room for a condensed topbar),
+ * so a new breakpoint row gets sensible chrome with no edit here.
  */
 export function framePolicy(width: number): FramePolicy {
 	// Same normalisation as `planLayout`: terminal numbers are external input.
@@ -83,7 +82,7 @@ export function framePolicy(width: number): FramePolicy {
 	const row = BREAKPOINTS.find(candidate => innerWidth >= candidate.minInnerWidth) ?? BREAKPOINTS[0];
 
 	// Capability-derived, so the table stays the single source of truth.
-	const sidebar: SidebarMode = row.columns === 2 ? "full" : row.tableColumns >= 3 ? "icons" : "hidden";
+	const sidebar: SidebarMode = row.columns === 2 ? "full" : "hidden";
 	const topbar: TopbarMode = !row.showFooterHints ? "minimal" : row.columns === 2 ? "full" : "condensed";
 
 	return {

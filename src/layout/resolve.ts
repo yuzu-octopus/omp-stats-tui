@@ -1,6 +1,11 @@
 /**
  * `src/layout/resolve.ts` — an IR value, made real.
  *
+ * PROBE/TEST FIXTURE, NOT A PRODUCTION RENDER PATH. The ScreenSpec → renderScreen →
+ * renderBands stack is live ONLY for /stats-test (its own showcase specs),
+ * scripts/probe-render.ts, the panel's fixture branch, and tests — never a
+ * production /stats-tui body.
+ *
  * WHY THIS MODULE EXISTS. `MetricRef` is a DECLARATION: it names a value and
  * says nothing about how the value reads. That separation is what lets one
  * screen show a cost as a headline and another show the same cost as a table
@@ -23,8 +28,8 @@
  * than a second one here. `explainUnresolved` uses it to say WHICH of three
  * very different failures it is looking at:
  *
- *   1. `providerStats` — no need fills it (its route does network I/O). The
- *      screen is `deferred`, and a blank cell there is the honest answer.
+ *   1. `providerStats` — no need fills it (its route does network I/O). A
+ *      blank cell there is the honest answer: the panel never asks for it.
  *   2. the need was never fetched — a WIRING bug. `fetchFor` never asked, so
  *      "no data" here means "not asked", which is not the same as "nothing
  *      happened" and must not be painted as an empty range.

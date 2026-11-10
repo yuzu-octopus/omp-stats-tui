@@ -2,10 +2,10 @@ import { test, expect } from "bun:test";
 import {
 	planLayout,
 	BREAKPOINTS,
-	CHROME_ROWS,
 	WIDTH_FIELDS,
 	COLUMN_PARTITION_FIELDS,
 } from "../src/tui/layout";
+import { PANEL_CHROME_ROWS } from "../src/tui/panel-constants";
 import type { SymbolPreset } from "../src/tui/glyphs";
 
 const PRESETS: SymbolPreset[] = ["unicode", "nerd", "ascii"];
@@ -178,10 +178,10 @@ test("body rows clamp to the terminal and the overflow is reported, not hidden",
 	for (const rows of [1, 3, 5, 6]) {
 		const p = planLayout(120, rows, "unicode");
 		expect(p.bodyRows, `rows=${rows}`).toBe(1);
-		expect(p.overflowRows, `rows=${rows}`).toBe(CHROME_ROWS + 1 - rows);
+		expect(p.overflowRows, `rows=${rows}`).toBe(PANEL_CHROME_ROWS + 1 - rows);
 	}
-	// CHROME_ROWS + 1 is exactly the shortest renderable panel.
-	expect(planLayout(120, CHROME_ROWS + 1, "unicode").overflowRows).toBe(0);
+	// PANEL_CHROME_ROWS + 1 is exactly the shortest renderable panel.
+	expect(planLayout(120, PANEL_CHROME_ROWS + 1, "unicode").overflowRows).toBe(0);
 });
 
 test("a bar chart taller than the body is clamped to the body and flagged", () => {

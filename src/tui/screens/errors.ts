@@ -1,32 +1,19 @@
 /**
- * `src/tui/screens/errors.ts` — registry entry, and nothing else.
+ * `src/tui/screens/errors.ts` — registry identity for the Errors screen.
  *
- * Once a screen has a `ScreenSpec`, its grammar is already defined — in the IR,
- * shared with every other screen — and its rows are already produced, by
- * `renderScreen`. A `render` body here would be a SECOND grammar for the same
- * screen: a second place to arrange tiles, a second column policy, a second
- * answer to "what does this screen look like". The migration rule that falls
- * out of the IR's own contract is therefore: a spec'd screen's registry entry
- * carries identity and contract, and defers `render` to the pipeline.
+ * Production bodies are `FeatureController.render()` strings (ADR 0007); this
+ * entry carries the id, labels and fetch contract the nav and panel read.
  *
- * The F24-host-verified behaviour lives in the pipeline, not here: error
- * signatures come from the host's `groupErrorsBySignature` (NOT distinct raw
- * strings — a second regex pipeline here would drift from the dashboard the
- * moment either side changed), and affected models are `modelKey(model,
- * provider)` identities (NOT bare names), both resolved in `src/layout/resolve.ts`.
+ * Error signatures come from the host's `groupErrorsBySignature` and affected
+ * models are `modelKey(model, provider)` identities, both resolved by the
+ * production feature — never by a second regex pipeline here.
  */
 
 import type { Screen } from "./types";
-import { SCREEN_SPECS } from "../../layout/spec";
-import { renderSpecScreen } from "./render";
-
-const spec = SCREEN_SPECS.find(s => s.id === "errors")!;
 
 export const errorsScreen: Screen = {
 	id: "errors",
 	label: "Errors",
 	short: "Errors",
-	status: "implemented",
 	needs: ["errors", "rollupStatus"],
-	render: ctx => renderSpecScreen(spec, ctx),
 };

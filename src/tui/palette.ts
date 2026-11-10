@@ -37,11 +37,7 @@ export type PaletteRole =
 	| "meta"
 	| "muted"
 	| "dim"
-	| "faint"
-	| "heat0"
-	| "heat1"
-	| "heat2"
-	| "heat3";
+	| "faint";
 /**
  * Role → theme token.
  *
@@ -151,28 +147,16 @@ export const PALETTE = {
 	 * same relative step the web takes from `#6c6c74` to `#46464c`.
 	 */
 	faint: "borderMuted",
-
-	/**
-	 * Heatmap ladder, `heat0` (least) → `heat3` (most). These tokens are the
-	 * *semantic* level; the actual cell colour comes from {@link heatRamp}, which
-	 * interpolates from the theme's background toward the accent exactly as
-	 * `/usage` does. They exist so a level always resolves to a valid token even
-	 * on a theme where the ramp collapses, and so screens can name a level
-	 * without hardcoding an index.
-	 *
-	 * FIXED: `heat1` was `borderAccent` and `heat2` was `mdLink`, two different
-	 * tokens that BOTH resolve to `#0088fa` in omp's default theme — so levels 1
-	 * and 2 painted the identical colour and the middle of the ramp was
-	 * invisible. The ladder is now monotonic in luma and roughly geometric
-	 * (`#3d424a` → `#5f6673` → `#178fb9` → `#febc38`, luma .06/.13/.30/.62),
-	 * mirroring the geometric alpha ladder the web uses for its hairlines
-	 * (css-tokens.md:65: 0.06 / 0.09 / 0.14 / 0.22).
-	 */
-	heat0: "borderMuted",
-	heat1: "dim",
-	heat2: "border",
-	heat3: "accent",
 } as const satisfies Record<PaletteRole, ThemeColor>;
+
+/**
+ * THE HEAT LADDER IS A RAMP, NOT ROLES. `heat0`..`heat3` used to be four
+ * `PaletteRole`s; they are deleted. Nothing in `src/` rendered them — a cell's
+ * colour comes from {@link heatRamp} and its glyph from the `heatCell`/
+ * `heatEmpty` glyph roles — and the collapse-fallback claim their comment made
+ * was never implemented. A role nobody renders is a colour a future reader will
+ * wire to a different rule than its name implies.
+ */
 
 /**
  * What each {@link PaletteRole} matches in the web dashboard, as `--token` plus
@@ -199,13 +183,8 @@ export const PALETTE_TOKENS = {
 	dim: "--ink-3 · `styles.css:29`",
 	faint: "--ink-4 · `styles.css:30`",
 	// The web has NO heatmap — the ramp is `/usage`'s (usage-dashboard.ts:812).
-	// So these four name the web INK each rung is nearest to, not a rule it was
-	// lifted from: a hairline, the axis ink (dimmer than ink-3, and our `dim`
-	// resolves within three points of it), the chart primary, and the accent.
-	heat0: "--line-1 · `styles.css:22`",
-	heat1: "--chart-axis · `styles.css:53`",
-	heat2: "--accent-a · `styles.css:34`",
-	heat3: "--accent · `styles.css:36`",
+	// The four `heatN` roles were deleted with their dead ladder; only the ramp
+	// remains, and its stops are cited above.
 } as const satisfies Record<PaletteRole, string>;
 
 // ---------------------------------------------------------------------------
@@ -570,6 +549,12 @@ const HEAT_STOPS = [0.3, 0.5, 0.72, 1] as const;
 
 /**
  * The foreground colour for heatmap level `level` (0–3), as an ANSI escape.
+ *
+ * `level` is CLAMPED to 0..3 and rounded. A caller that passes 1..4 (the
+ * natural "level 1 is the first rung" indexing) gets rungs 1..3, so the top
+ * level aliases rung 3 — the off-by-one that made levels 3 and 4 the same
+ * colour. Callers index the ramp as `[0,1,2,3]`; the clamp keeps an out-of-range
+ * level from throwing or reading `undefined`.
  *
  * Blend a near-background anchor, derived from the active text ink's complement,
  * toward the accent. Bright text yields a dark anchor and dark text a light one;

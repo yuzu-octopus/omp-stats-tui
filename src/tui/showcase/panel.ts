@@ -23,20 +23,20 @@
  *     and the live chip are the panel's own, over a fabricated sync state.
  *   - `framePolicy` for the width decision, `bodyRows` for the frame budget, and
  *     `footerHints`/`hintsFor` for the hint row — none of them re-derived here.
- *   - `rangeHit` for the topbar's segment hit areas, and `MouseFrame` for the frame
- *     arithmetic — both from `mouse.ts`.
+ *   - `hitTest`/`MouseFrame` for the frame arithmetic and every hit area (topbar
+ *     segments, strip zones, sidebar rows) — the panel's own router, with the
+ *     showcase's nav passed in.
  *
- * WHAT IS FORKED, and reported as a grammar gap rather than worked around:
- * `sidebar()` and `buildTabs()` are closed over the real screen registry
- * (chrome-critique's answer), so the nav lives in `showcase/nav.ts` — painted with
- * `SIDEBAR_INK` and `tabs.ts`'s own `TabBarTheme`, so the ink ladder is still the
- * single tested one. The missing seams are
- * `sidebar(theme, preset, groups, activeId, hoveredId?)` and
- * `hitTest(frame, row, col, sidebarHit)`.
+ * WHAT USED TO BE FORKED, and is no longer: `sidebar()` and `buildTabs()` were
+ * closed over the real screen registry, so the nav lived in `showcase/nav.ts` as
+ * a second painter. The seams the fork asked for now exist: `sidebar(...)` takes
+ * the nav list, `hitTest(...)` takes the sidebar row resolver, and `zipSidebar`
+ * composes the column. `SHOWCASE_NAV` is data; `chrome.ts` owns the geometry, the
+ * ink ladder and the hover/active rules for BOTH panels.
  *
  * NO DATABASE, EVER. The data is `showcaseData(sectionId)`, a fixture, resolved
- * synchronously. `test/showcase-panel.test.ts` asserts at the source level that no
- * module under `showcase/` names `bun:sqlite`, `initDb` or `fetchFor`,
+ * synchronously. `test/showcase-needs.test.ts` asserts at the source level that no
+ * module under `showcase/` imports `bun:sqlite` or calls `initDb`/`fetchFor`,
  * because a future edit reaching for the DB would pass every other
  * test here and only fail in someone's real session, ~850 ms later, on the
  * keystroke they just typed.
@@ -47,23 +47,26 @@ import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome";
 import { ensureThemeSync, theme as activeTheme, type Theme } from "@oh-my-pi/pi-tui/theme";
 
 import { DEFAULT_RANGE, nextRange, type Range } from "../../data/ranges";
-import { JUMP_TIMEOUT_MS, chipFor, progressLineFor, topbar, type ChromeSync } from "../chrome";
+import {
+	JUMP_TIMEOUT_MS,
+	SIDEBAR_ZIP_PREFIX,
+	chipFor,
+	progressLineFor,
+	sidebar,
+	topbar,
+	zipSidebar,
+	type ChromeSync,
+} from "../chrome";
 import { footerHints, hintsFor, type HintMode } from "../footer";
 import { MIN_PANEL_ROWS, bodyRows } from "../frame";
-import { glyph, glyphsFor, type SymbolPreset } from "../glyphs";
+import { glyphsFor, type SymbolPreset } from "../glyphs";
 import { MIN_USABLE_WIDTH, planLayout, type LayoutPlan } from "../layout";
-import { rangeHit, type MouseFrame } from "../mouse";
-import { panelAction, type PanelAction } from "../panel";
+import { hitTest, sidebarHit, type MouseFrame } from "../mouse";
+import { EXACT_DIRTY_LIMIT, panelAction, type PanelAction } from "../panel";
 import { SERIES_COLORS } from "../palette";
 import { framePolicy } from "../responsive";
 import { renderScreen } from "../render/screen";
-import {
-	SHOWCASE_NAV,
-	buildShowcaseTabs,
-	showcaseSidebar,
-	showcaseSidebarHit,
-	showcaseTabBarTheme,
-} from "./nav";
+import { SHOWCASE_NAV, buildShowcaseTabs, showcaseTabBarTheme } from "./nav";
 import { SHOWCASE_NOW, SHOWCASE_SECTIONS, showcaseData, type ShowcaseSection } from "./spec";
 
 export { SHOWCASE_NAV, SHOWCASE_SECTIONS } from "./nav";
@@ -81,14 +84,6 @@ const MIN_SIDEBAR_ROWS = SHOWCASE_NAV.reduce((rows, group) => rows + 1 + group.i
 /** The one-cell inset every `row()` puts inside the overlay's chrome. */
 const TAB_BAR_INDENT = 1;
 
-/**
- * Past this many dirty hours the host stops unioning dirty hours with the facts
- * and returns stale rows with holes in them, so the chrome escalates from "pending"
- * to a warning — the numbers have holes in them rather than being merely late.
- * Named rather than a bare 96 in a comparison, which reads as a typo the moment
- * someone edits one side of it. `panel.ts` owns the same constant.
- */
-const EXACT_DIRTY_LIMIT = 96;
 
 const NO_ROWS: readonly string[] = [];
 const ANSI = /\x1b\[[0-9;]*m/g;
@@ -131,14 +126,19 @@ export function sectionForHotkey(key: string): string | null {
 	return null;
 }
 
+/**
+ * The showcase's sidebar rows through the SHARED walk: `sidebarHit` over
+ * `SHOWCASE_NAV`, the same list `sidebar(...)` paints. The frame geometry lives
+ * in `mouse.ts`; this is only the nav binding, so a regrouped showcase nav moves
+ * its own hit rows.
+ */
+function hitShowcaseSidebar(navRow: number): string | null {
+	return sidebarHit(navRow, SHOWCASE_NAV);
+}
+
 /** What one keystroke means to the showcase: the panel's verbs, plus our own two. */
 export type ShowcaseAction = PanelAction | { type: "sectionId"; id: string } | { type: "noop" };
 
-/** What one click can land on. */
-export type ShowcaseHit =
-	| { type: "none" }
-	| { type: "screen"; id: string; via: "strip" | "sidebar" }
-	| { type: "range"; id: Range };
 
 /**
  * Translate one input into one action, or null for a key the showcase does not own.
@@ -375,7 +375,7 @@ export class ShowcasePanel implements Component {
 			this.#tabBar.setTabs(buildShowcaseTabs(this.#theme), state.sectionId);
 			strip = this.#tabBar.render(Math.max(1, width - TAB_BAR_INDENT));
 		}
-		const nav = column ? showcaseSidebar(this.#theme, preset, state.sectionId, state.hoveredSidebarId) : null;
+		const nav = column ? sidebar(this.#theme, preset, state.sectionId, state.hoveredSidebarId, SHOWCASE_NAV) : null;
 		const sidebarWidth = nav?.width ?? 0;
 
 		// The routers hit-test against THIS frame: strip zones come from the `TabBar`'s
@@ -394,10 +394,10 @@ export class ShowcasePanel implements Component {
 		const headerLines = [...topLines, ...strip];
 		const body = bodyRows(rows, headerLines.length);
 		// THE BODY IS PLANNED AT THE WIDTH IT WILL BE DRAWN IN. The nav column is
-		// zipped BESIDE it by `#zipSidebar`, whose prefix is `sidebarWidth + 3`; if the
+		// zipped BESIDE it by `zipSidebar`, whose prefix is `sidebarWidth + 3`; if the
 		// plan used the overlay's full inner width anyway, every body row would be
 		// drawn wider than the room it has and the border would cut the excess.
-		const sidebarCols = column ? sidebarWidth + 3 : 0;
+		const sidebarCols = column ? sidebarWidth + SIDEBAR_ZIP_PREFIX : 0;
 		const plan: LayoutPlan = {
 			...planLayout(Math.max(MIN_USABLE_WIDTH, width - sidebarCols), rows, preset),
 			bodyRows: body,
@@ -418,8 +418,8 @@ export class ShowcasePanel implements Component {
 		this.#header.setLines(headerLines);
 		this.#header.setHeight(headerLines.length);
 		const visible = state.source.slice(state.scroll, state.scroll + plan.bodyRows);
-		this.#body.setLines(nav === null ? visible : this.#zipSidebar(visible, nav.lines, sidebarWidth, preset));
-		this.#body.setHeight(plan.bodyRows);
+		this.#body.setLines(nav === null ? visible : zipSidebar(this.#theme, visible, nav.lines, sidebarWidth, preset));
+		this.#body.setHeight(Math.max(plan.bodyRows, nav === null ? 0 : nav.lines.length));
 		this.#footer.setLines([this.#footerLine(plan)]);
 		return this.#panel.render(width);
 	}
@@ -451,26 +451,6 @@ export class ShowcasePanel implements Component {
 		});
 	}
 
-	/**
-	 * Put the nav column beside a window of body rows: sidebar row first, a DIM
-	 * column bar, body row after. The bar is `glyph(preset, "columnGap")` rather than
-	 * `theme.symbol("sep.pipe")`, which measures three cells under two of the three
-	 * presets.
-	 *
-	 * CALLED ON THE SLICED WINDOW, never on the source — see `render` above.
-	 */
-	#zipSidebar(
-		bodyRows: readonly string[],
-		sidebarLines: readonly string[],
-		sidebarWidth: number,
-		preset: SymbolPreset,
-	): readonly string[] {
-		const gutter = this.#theme.fg("dim", glyph(preset, "columnGap"));
-		return bodyRows.map((line, index) => {
-			const side = index < sidebarLines.length ? sidebarLines[index]! : " ".repeat(sidebarWidth);
-			return `${side} ${gutter} ${line}`;
-		});
-	}
 
 	/** DERIVED, never stored: what the panel is doing decides which hints are worth a row. */
 	#footerLine(plan: LayoutPlan): string {
@@ -547,7 +527,7 @@ export class ShowcasePanel implements Component {
 		const frame = state.mouse;
 		if (frame === null) return true;
 		if (event.motion) {
-			const hit = this.#hitTest(frame, event.row, event.col);
+			const hit = hitTest(frame, event.row, event.col, hitShowcaseSidebar);
 			if (hit.type === "screen" && hit.via === "strip") {
 				this.#tabBar.setHoverTab(hit.id);
 				state.hoveredStripId = hit.id;
@@ -561,7 +541,7 @@ export class ShowcasePanel implements Component {
 			return true;
 		}
 		if (!event.leftClick) return true;
-		const hit = this.#hitTest(frame, event.row, event.col);
+		const hit = hitTest(frame, event.row, event.col, hitShowcaseSidebar);
 		if (hit.type === "screen") {
 			this.#selectSection(this.#indexOf(hit.id));
 		} else if (hit.type === "range" && hit.id !== state.range) {
@@ -571,42 +551,6 @@ export class ShowcasePanel implements Component {
 		return true;
 	}
 
-	/**
-	 * Route an overlay-relative (row, col) to a target, in the same frame order as
-	 * `mouse.ts`'s `hitTest`: the top border and the two inset columns are inert, the
-	 * topbar's first content row carries the range segments, the strip routes through
-	 * the `TabBar`'s own zones, and the sidebar routes only inside its width — a
-	 * hidden sidebar (`sidebarWidth 0`) leaves no dead click zone at all.
-	 *
-	 * WHY THIS IS NOT A CALL TO `hitTest`: `hitTest`'s sidebar branch calls
-	 * `sidebarHit`, which walks the REAL `NAV_GROUPS`, and this panel's nav is the
-	 * showcase's. The arithmetic below is therefore the one duplication of frame
-	 * geometry in the showcase, and it is exactly the shape `hitTest` should be
-	 * given — `sidebarHit` as a parameter — which is the second half of the gap
-	 * `showcase/nav.ts` reports.
-	 */
-	#hitTest(frame: MouseFrame, row: number, col: number): ShowcaseHit {
-		const contentRow = row - 1;
-		const contentCol = col - 2;
-		if (contentRow < 0 || contentCol < 0) return { type: "none" };
-		if (contentRow < frame.topbarRows) {
-			if (contentRow !== 0) return { type: "none" };
-			const id = rangeHit(frame.topbar, contentCol);
-			return id === null ? { type: "none" } : { type: "range", id };
-		}
-		const stripLine = contentRow - frame.topbarRows;
-		if (stripLine < frame.stripRows) {
-			const id = frame.tabAt(stripLine, contentCol);
-			return id === undefined ? { type: "none" } : { type: "screen", id, via: "strip" };
-		}
-		const bodyRow = contentRow - frame.topbarRows - frame.stripRows;
-		if (bodyRow < 0 || bodyRow >= frame.sidebarRows) return { type: "none" };
-		if (frame.sidebarWidth > 0 && contentCol < frame.sidebarWidth) {
-			const id = showcaseSidebarHit(bodyRow);
-			return id === null ? { type: "none" } : { type: "screen", id, via: "sidebar" };
-		}
-		return { type: "none" };
-	}
 
 	#indexOf(id: string): number {
 		return SHOWCASE_SECTIONS.findIndex(section => section.id === id);

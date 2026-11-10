@@ -41,7 +41,7 @@
  *
  * WHY `needs` IS STILL DECLARED, on a showcase that fetches nothing. Because
  * `NEED_BY_SOURCE` is what makes a spec's declared needs and its refs agree, and
- * `test/showcase-fixtures.test.ts` asserts the two are consistent — a spec reading a
+ * `test/showcase-needs.test.ts` asserts the two are consistent — a spec reading a
  * payload it never declared would render an empty band, and the showcase would be
  * exhibiting the panel's silent-empty trap as if it were design.
  */
@@ -60,7 +60,13 @@ import {
 
 export { AWKWARD_COST, AWKWARD_LABEL, SHOWCASE_NOW };
 
-/** Every need the showcase's sections can read, and every fixture supplies. */
+/**
+ * Every need the showcase's sections can read, and every fixture supplies.
+ *
+ * `rollupStatus` is deliberately absent: the showcase's freshness chrome is
+ * fabricated (`SYNC` in `panel.ts`), so no band reads it and the needs↔refs guard
+ * would flag it as a declared need with no reader.
+ */
 const NEEDS: ScreenSpec["needs"] = [
 	"overview",
 	"modelDashboard",
@@ -71,7 +77,6 @@ const NEEDS: ScreenSpec["needs"] = [
 	"tools",
 	"dailyActivity",
 	"gain",
-	"rollupStatus",
 ];
 
 // ─── Metric shorthands, mirroring spec.ts's own vocabulary ───────────────────

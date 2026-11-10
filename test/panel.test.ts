@@ -8,7 +8,7 @@ import {
 	panelAction,
 	__testing,
 } from "../src/tui/panel";
-import type { PanelAction, PanelTestState, StatsPanel } from "../src/tui/panel";
+import type { PanelAction, PanelReads, PanelTestState, StatsPanel } from "../src/tui/panel";
 import { DATA_NEEDS, type DataNeed, type PanelData } from "../src/data/api";
 import { DEFAULT_RANGE, RANGES, nextRange, rangeLabel } from "../src/data/ranges";
 import { SCREENS } from "../src/tui/screens/types";
@@ -85,6 +85,8 @@ test("selector actions honor the host's configured keybindings, not factory defa
 		for (const oldKey of ["\x1b", "\x03", UP, DOWN, PGUP, PGDN]) {
 			expect(panelAction(oldKey)).toBeNull();
 		}
+		// `q` is the panel's OWN quit key, not a host binding: it closes whatever
+		// the host cancel is remapped to.
 		expect(panelAction("q")).toEqual({ type: "close" });
 		expect(panelAction(LEFT)).toEqual({ type: "screen", by: -1 });
 	} finally {
@@ -178,6 +180,26 @@ function spyFetch(asked: Range[], needsLog: DataNeed[][] = []) {
 }
 
 /**
+ * Controller-path reads: the overview payload and recent list the
+ * `SummaryFeature` asks for, plus the `rollupStatus` the panel always asks for.
+ */
+function stubReader(over: Partial<PanelData> = {}): PanelReads {
+	return {
+		fetch: async () => ({
+			overview: { overall: overall(), byAgentType: [], timeSeries: [] },
+			rollupStatus: { dirtyHours: 0, dirtySessions: 0 },
+			...over,
+		}),
+		api: async <T>() => [] as unknown as T,
+		subscribe: () => () => {},
+		requestSync: async () => {
+			throw new Error("sync is not exercised by this test");
+		},
+		close: () => {},
+	};
+}
+
+/**
  * Anchor every fixture panel to FIXTURE_NOW. The chart's time axis is derived
  * from a clock, so a panel reading the real one would place the fixture's
  * buckets outside its axis and the chart would legitimately draw nothing.
@@ -247,6 +269,8 @@ test("every key the panel advertises maps to an action, and nothing else does", 
 		["r", { type: "range", by: 1 }],
 		["R", { type: "range", by: -1 }],
 		["s", { type: "sync" }],
+		["g", { type: "armJump" }],
+		["\x1bOQ", { type: "refresh" }],
 		// A key the panel does not own is left alone: swallowing it here would
 		// silently eat typing the user expected to reach the editor behind.
 		["x", null],
@@ -257,6 +281,56 @@ test("every key the panel advertises maps to an action, and nothing else does", 
 	];
 	for (const [key, expected] of cases) {
 		expect(panelAction(key), JSON.stringify(key)).toEqual(expected);
+	}
+});
+
+test("g then a digit jumps straight to that named range; the screen does not move", async () => {
+	const panel = makePanel({ data: dataFor(), range: "24h" });
+	await __testing.settled(panel);
+	const cases: [string, Range][] = [["1", "1h"], ["2", "24h"], ["3", "7d"], ["4", "30d"], ["5", "90d"], ["6", "all"]];
+	for (const [digit, expected] of cases) {
+		panel.handleInput("g");
+		panel.handleInput(digit);
+		await __testing.settled(panel);
+		expect(__testing.debugRange(panel), `g ${digit}`).toBe(expected);
+		expect(__testing.debugScreenId(panel)).toBe("overview");
+	}
+	// A digit past the six presets is consumed as a no-op, never a screen index.
+	panel.handleInput("g");
+	panel.handleInput("7");
+	await __testing.settled(panel);
+	expect(__testing.debugRange(panel)).toBe("all");
+	expect(__testing.debugScreenId(panel)).toBe("overview");
+});
+
+test("f2 refreshes the current screen:range without changing either", async () => {
+	const asked: Range[] = [];
+	const panel = makePanel({ data: dataFor(), fetch: spyFetch(asked), screenId: "costs", range: "30d" });
+	await __testing.settled(panel);
+	expect(asked).toEqual(["30d"]);
+	panel.handleInput("\x1bOQ");
+	await __testing.settled(panel);
+	expect(__testing.debugScreenId(panel)).toBe("costs");
+	expect(__testing.debugRange(panel)).toBe("30d");
+	expect(asked).toEqual(["30d", "30d"]);
+});
+
+test("a remapped cancel reaches handleInput; q stays the panel's own alias", async () => {
+	const previous = getKeybindings();
+	setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "ctrl+x" }));
+	try {
+		const remapped = makePanel({ data: dataFor() });
+		await __testing.settled(remapped);
+		remapped.handleInput("\x18");
+		expect(__testing.debugClosed(remapped)).toBe(true);
+		// `q` is the panel's OWN quit key, not a host binding: it closes whatever
+		// the host cancel is remapped to, and the footer advertises it.
+		const plain = makePanel({ data: dataFor() });
+		await __testing.settled(plain);
+		plain.handleInput("q");
+		expect(__testing.debugClosed(plain)).toBe(true);
+	} finally {
+		setKeybindings(previous);
 	}
 });
 
@@ -337,8 +411,9 @@ test("the composed frame at width 100: topbar + sidebar, body, divider, footer, 
 	// separately below, against a panel that genuinely overflows.
 	const footer = plain[plain.length - 2];
 	expect(footer).toContain("screen");
+	expect(footer).toContain("jump");
+	expect(footer).toContain("screens");
 	expect(footer).toContain("range");
-	expect(footer).toContain("sync");
 	expect(footer).toContain("close");
 	// The TITLE names the page (`Stats · <screen>`), and the RANGE lives only in
 	// the topbar's segmented control. The old contract had the title carrying
@@ -627,6 +702,18 @@ test("DATA_NEEDS still contains every need the panel asks for", () => {
 	}
 });
 
+test("a panel built without fetch resolves the production overview feature", async () => {
+	const panel = makePanel({ reads: stubReader() });
+	try {
+		await __testing.settled(panel);
+		expect(__testing.debugPhase(panel)).toBe("ready");
+		const body = __testing.debugBody(panel).join("\n");
+		// The IR's table caption is "Latest requests"; the "· A opens all"
+		// suffix is SummaryFeature's own, so this body came from a controller.
+		expect(body).toContain("Latest requests · A opens all");
+	} finally { panel.dispose(); }
+});
+
 // ---------------------------------------------------------------------------
 // Phase selection
 // ---------------------------------------------------------------------------
@@ -783,6 +870,83 @@ test("home and end reach the two ends and stop there", async () => {
 	panel.handleInput(HOME);
 	panel.render(120);
 	expect(__testing.debugScroll(panel)).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// The line cache
+// ---------------------------------------------------------------------------
+
+test("the line cache composes the body once per key, not once per render", async () => {
+	const panel = makePanel({ data: dataFor(), rows: 40 });
+	await __testing.settled(panel);
+	const before = __testing.debugComposeCount(panel);
+	panel.render(100);
+	expect(__testing.debugComposeCount(panel) - before).toBe(1);
+	// Two more renders at the SAME key: no further composition, same rows.
+	panel.render(100);
+	panel.render(100);
+	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
+	expect(panel.render(100)).toEqual(panel.render(100));
+	// Counter-free guard: a same-key render must hand back the SAME composed
+	// document, not a fresh array. This is what fails if the cache is removed.
+	const composed = __testing.debugState(panel).source;
+	panel.render(100);
+	expect(__testing.debugState(panel).source).toBe(composed);
+});
+
+test("scrolling does not recompose: it shifts the slice, not the document", async () => {
+	// The audit's whole complaint is per-frame work that a scroll does not need.
+	// `scroll` is deliberately absent from the cache key, so a render at a new
+	// offset must reuse the composed body.
+	const panel = makePanel({ data: liveData(), rows: 12 });
+	await __testing.settled(panel);
+	panel.render(100);
+	expect(__testing.debugMaxScroll(panel)).toBeGreaterThan(0);
+	const atRest = __testing.debugComposeCount(panel);
+	for (let i = 0; i < 5; i++) panel.handleInput(DOWN);
+	expect(__testing.debugScroll(panel), "the sweep must actually scroll").toBeGreaterThan(0);
+	panel.render(100);
+	expect(__testing.debugComposeCount(panel)).toBe(atRest);
+});
+
+test("a width change recomposes, and the frame is byte-identical when it returns", async () => {
+	const panel = makePanel({ data: liveData(), rows: 40 });
+	await __testing.settled(panel);
+	const wide = panel.render(120);
+	const atWide = __testing.debugComposeCount(panel);
+	panel.render(40);
+	expect(__testing.debugComposeCount(panel)).toBeGreaterThan(atWide);
+	expect(panel.render(120)).toEqual(wide);
+});
+
+test("a payload that lands inside a generation still invalidates the cache", async () => {
+	// `#load` bumps `generation` when the load STARTS; the payload lands later and
+	// the panel repaints. A key of generation alone would serve the pre-load body
+	// for the rest of the session, so the key carries the payload's IDENTITY too.
+	const panel = makePanel({ data: dataFor(), rows: 40 });
+	await __testing.settled(panel);
+	panel.render(100);
+	const state = __testing.debugState(panel);
+	const generation = state.generation;
+	const before = __testing.debugComposeCount(panel);
+	state.data = dataFor({ rollupStatus: { dirtyHours: 6, dirtySessions: 1 } });
+	panel.render(100);
+	expect(state.generation).toBe(generation);
+	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
+	expect(__testing.debugHeader(panel)).toContain("6 dirty hours");
+});
+
+test("a feature's own state change invalidates the body cache", async () => {
+	// The controller path. The body is a function of the FEATURE's focus, search
+	// and selection, which no panel field mirrors — the context's `changed` is the
+	// only signal that state moved, and it bumps the key's feature revision.
+	const panel = makePanel({ reads: stubReader(), rows: 40 });
+	await __testing.settled(panel);
+	panel.render(100);
+	const before = __testing.debugComposeCount(panel);
+	panel.handleInput("\t"); // the overview feature's own requests/chart focus toggle
+	panel.render(100);
+	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
 });
 
 // ---------------------------------------------------------------------------

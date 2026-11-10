@@ -161,8 +161,8 @@ export function tabBarTheme(theme: Theme): TabBarTheme {
 }
 
 /**
- * The strip, built from the IR's `SCREEN_SPECS` filtered by `!deferred` — one
- * source of truth shared with the screen registry and the fetch needs.
+ * The strip, built from the IR's `SCREEN_SPECS` — one source of truth shared
+ * with the screen registry and the fetch needs.
  *
  * `label` is `icon + space + label`, matching `/settings`
  * (`settings-selector.ts:546-553`); `short` is {@link TAB_SHORT}.
@@ -171,7 +171,7 @@ export function buildTabs(preset: SymbolPreset, theme: Theme, activeId: ScreenId
 	if (!SCREEN_SPECS.some(spec => spec.id === activeId)) {
 		throw new Error(`unknown screen id: ${activeId}`);
 	}
-	return SCREEN_SPECS.filter(spec => !spec.deferred).map(spec => ({
+	return SCREEN_SPECS.map(spec => ({
 		id: spec.id,
 		label: `${statsIcon(preset, TAB_ICON[spec.id], theme)} ${spec.label}`,
 		short: TAB_SHORT[preset][spec.id],

@@ -80,6 +80,5 @@ test("gain: an unfetched gain payload renders a defined state", () => {
 
 test("gain: the registry entry defers to the spec's pipeline, not a scaffold body", () => {
 	expect(gainScreen.id).toBe("gain");
-	expect(gainScreen.status).toBe("implemented");
 	expect([...gainScreen.needs]).toEqual([...spec.needs]);
 });

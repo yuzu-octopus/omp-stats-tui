@@ -55,7 +55,6 @@ const ALL_KINDS: Band[] = [
 	{ kind: "table", title: "Models", columns, rows },
 	{ kind: "legend", items: legendItems },
 	{ kind: "note", text: "This is not a zero." },
-	{ kind: "custom", id: "overview-extra", render: () => ["custom body"] },
 ];
 
 /**
@@ -138,7 +137,6 @@ test("G1: a headed band is EXACTLY ONE heading line followed by body lines", () 
 		const ctxFor = (o: Partial<BandRenderOptions> = {}) => ctx({ preset, glyphs: glyphsFor(preset), ...o });
 
 		for (const band of ALL_KINDS) {
-			if (band.kind === "custom") continue; // its body is the screen's own
 			const rows = renderBands([band], ctxFor());
 			const hasHeading = band.kind === "chart" || band.kind === "table";
 
@@ -532,11 +530,6 @@ test("a table shows no count note when nothing was dropped", () => {
 	expect(rendered.some((r) => r.includes("of "))).toBe(false);
 });
 
-test("a custom band is the screen's own render, treated as one body", () => {
-	const rendered = renderBands([{ kind: "custom", id: "x", render: () => ["line one", "line two"] }], ctx());
-	expect(rendered.map(plain)).toEqual(["line one", "line two"]);
-});
-
 // ─── Robustness ─────────────────────────────────────────────────────────────
 
 test("every band kind renders on an EMPTY payload without throwing", () => {
@@ -547,7 +540,6 @@ test("every band kind renders on an EMPTY payload without throwing", () => {
 			{ kind: "table", title: "", columns: [], rows: { kind: "inline", rows: [] } },
 			{ kind: "legend", items: [] },
 			{ kind: "note", text: "" },
-			{ kind: "custom", id: "empty", render: () => [] },
 		];
 		expect(() => renderBands(empty, ctx({ preset, glyphs: glyphsFor(preset) }))).not.toThrow();
 	}

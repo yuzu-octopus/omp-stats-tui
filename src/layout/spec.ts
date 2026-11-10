@@ -1,6 +1,11 @@
 /**
  * THE LAYOUT IR — an intermediate representation of the web dashboard.
  *
+ * PROBE/TEST FIXTURE, NOT A PRODUCTION RENDER PATH. The ScreenSpec → renderScreen →
+ * renderBands stack is live ONLY for /stats-test (its own showcase specs),
+ * scripts/probe-render.ts, the panel's fixture branch, and tests — never a
+ * production /stats-tui body.
+ *
  * WHY THIS FILE EXISTS
  *
  * The three hand-written screens each invented their own visual structure.
@@ -161,8 +166,8 @@ export const NEED_BY_SOURCE: Readonly<Record<MetricSource, DataNeed | null>> = {
 	rollupStatus: "rollupStatus",
 	// `providerStats` reads the DB-backed `/api/stats/providers` aggregates —
 	// per-provider totals, hourly burn, per-provider series. The NETWORK route
-	// (`provider-windows`) stays out of the load path; see the providers spec's
-	// deferred note for the windows sections.
+	// (`provider-windows`) stays out of the load path; the providers spec's note
+	// names that boundary.
 	providerStats: "providers",
 	gainOverall: "gain",
 	gainBySource: "gain",
@@ -312,9 +317,8 @@ export type Band =
 	| { kind: "table"; title: string; columns: readonly Column[]; rows: RowSource; source?: string }
 	| { kind: "legend"; items: readonly LegendItem[]; source?: string }
 	| { kind: "note"; text: string }
-	| { kind: "custom"; id: string };
 
-/** Metrics reachable from a band. `note` and `custom` carry none, which is why they have no fields. */
+/** Metrics reachable from a band. `note` carries none, which is why it has no fields. */
 function refsInBand(band: Band): readonly MetricRef[] {
 	switch (band.kind) {
 		case "statRow":
@@ -326,7 +330,6 @@ function refsInBand(band: Band): readonly MetricRef[] {
 		case "table":
 			return band.columns.flatMap(c => metricRefsOf(c.source));
 		case "note":
-		case "custom":
 			return [];
 	}
 }
@@ -350,9 +353,6 @@ export interface ScreenSpec {
 	/** Exactly the data this screen draws, in the data seam's vocabulary. */
 	needs: readonly DataNeed[];
 	bands: readonly Band[];
-	/** True when the screen is described faithfully but cannot be filled from the data seam. */
-	deferred?: boolean;
-	deferredReason?: string;
 	source: SourceCitation;
 }
 
@@ -1212,7 +1212,7 @@ const providers: ScreenSpec = {
 	source: {
 		file: "@oh-my-pi/omp-stats/src/client/routes/ProvidersRoute.tsx",
 		lines: "146-188 (StatGrid), 189-205 (Provider totals), 206-249 (Burn by provider), 250-310 (Subscription windows), 311-422 (columns)",
-		note: "S1-S4 (stats, totals, burn, peak hours) read the DB-backed /api/stats/providers aggregates. The subscription-window sections (insights + utilization) do broker network I/O per load and stay out of the panel; the custom band below names that boundary.",
+		note: "S1-S4 (stats, totals, burn, peak hours) read the DB-backed /api/stats/providers aggregates. The subscription-window sections (insights + utilization) do broker network I/O per load and stay out of the panel; the note below names that boundary.",
 	},
 	bands: [
 		{
@@ -1399,7 +1399,7 @@ export const SCREEN_SPECS: readonly ScreenSpec[] = Object.freeze([
  * is, from the same registry and the same spec table:
  *
  *   - `panel.ts`'s `SELECTABLE_SCREENS` filtered the `SCREENS` registry down to
- *     ids with a spec that is not `deferred`;
+ *     ids with a spec;
  *   - `chrome.ts`'s `NAV_GROUPS` filtered a hand-written `GROUPS` map down to
  *     ids that have a spec AND a jump hotkey.
  *
@@ -1409,24 +1409,11 @@ export const SCREEN_SPECS: readonly ScreenSpec[] = Object.freeze([
  * would still be internally consistent — which is precisely the shape of bug
  * that hides.
  *
- * Both now call THIS, so "drawable" is stated once. The remaining differences
- * between them are not this predicate's business and are not folded into it:
- *
- *   - ORDER. The digit row indexes `SELECTABLE_SCREENS` and the sidebar reads
- *     `NAV_GROUPS`, and those orders are deliberately different (the nav is
- *     grouped for reading, the number row is not). Deriving one from the other
- *     would have changed which screen `4` selects.
- *   - THE REGISTRY'S OWN `status: "excluded"`, which lives with the registry and
- *     is the registry's knowledge, not the IR's.
- *
- * `deferred` is the distinction that matters: a deferred screen is DESCRIBED
- * faithfully but cannot be filled from the data seam, so arrowing onto it spends
- * a keystroke painting a page the panel cannot honestly fill. An id with no spec
- * at all has no body to draw either.
+ * Both now call THIS, so "drawable" is stated once: an id is drawable when the
+ * IR describes it. An id with no spec has no body to draw.
  */
 export function isDrawableScreen(id: string): boolean {
-	const spec = SCREEN_SPECS.find(candidate => candidate.id === id);
-	return spec !== undefined && !spec.deferred;
+	return SCREEN_SPECS.some(candidate => candidate.id === id);
 }
 
 /** The spec for `id`, or `undefined` when the IR does not describe it. */

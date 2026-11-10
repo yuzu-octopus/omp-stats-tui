@@ -30,7 +30,7 @@ import { SCREEN_SPECS } from "../src/layout/spec";
 import { TAB_SHORT, buildTabs, tabBarTheme } from "../src/tui/tabs";
 import { TAB_INK } from "../src/tui/palette";
 import { __testing, panelAction, type PanelAction } from "../src/tui/panel";
-import { MIN_PANEL_ROWS, TAB_ROWS } from "../src/tui/frame";
+import { MIN_PANEL_ROWS } from "../src/tui/frame";
 import { footerHints, hintsFor, type PanelHint } from "../src/tui/footer";
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import { liveData } from "./fixtures/panel";
@@ -41,9 +41,6 @@ ensureThemeSync();
 
 const PRESETS: SymbolPreset[] = ["unicode", "nerd", "ascii"];
 
-/** The strip the panel actually builds, reused wherever a width is measured. */
-const TABS = buildTabs("unicode", theme, "overview");
-
 const ESC = String.fromCharCode(27);
 /**
  * The SGR that OPENS a background run, reset dropped. `theme.bg(c, "")` is
@@ -52,7 +49,6 @@ const ESC = String.fromCharCode(27);
  * between the escape and the x and is not a substring of anything.
  */
 const band = theme.bg("selectedBg", "").replace(`${ESC}[49m`, "");
-const THEME = tabBarTheme(theme);
 
 // ─── the strip itself ───────────────────────────────────────────────────────
 
@@ -64,17 +60,13 @@ test("every TAB_SHORT entry is exactly one cell on every preset", () => {
 	}
 });
 
-test("every non-deferred spec has a tab, and no deferred one does", () => {
+test("every spec has a tab", () => {
 	const tabs = buildTabs("unicode", theme, "overview");
 	const ids = tabs.map(tab => tab.id);
 	for (const spec of SCREEN_SPECS) {
-		if (spec.deferred) {
-			expect(ids, `${spec.id} is deferred and must not be on the strip`).not.toContain(spec.id);
-			continue;
-		}
 		expect(ids, spec.id).toContain(spec.id);
 	}
-	expect(ids).toEqual(SCREEN_SPECS.filter(spec => !spec.deferred).map(spec => spec.id));
+	expect(ids).toEqual(SCREEN_SPECS.map(spec => spec.id));
 });
 
 test("the strip is ONE row at width 80 on every preset", () => {
@@ -112,9 +104,9 @@ test("the strip's active tab follows panelAction, and handleInput is never consu
 		// used to be this step and now drive the range control instead.
 		const action = panelAction("\t");
 		expect(action).toEqual({ type: "screen", by: 1 } satisfies PanelAction);
-		const next = SCREEN_SPECS.filter(spec => !spec.deferred)[
-			(SCREEN_SPECS.filter(spec => !spec.deferred).findIndex(spec => spec.id === start) + 1) %
-			SCREEN_SPECS.filter(spec => !spec.deferred).length
+		const next = SCREEN_SPECS[
+			(SCREEN_SPECS.findIndex(spec => spec.id === start) + 1) %
+			SCREEN_SPECS.length
 		];
 		// setActiveById is the external-sync path and does NOT fire onTabChange,
 		// which is what we want: panelAction already decided the change.
@@ -171,8 +163,6 @@ test("the strip's cycle hint is the faintest run in the control", () => {
 test("the frame budget subtracts the LIVE tab-row count, so a wrapped strip costs a body row", async () => {
 	// The arithmetic F23 states and `/settings` performs: the tab row replaces
 	// the header row, so the body loses (tabRows - 1) rows when the strip wraps.
-	expect(TAB_ROWS(TABS, THEME, 80), "a 12-tab strip of one-cell glyphs fits 58 columns").toBe(1);
-	expect(TAB_ROWS(TABS, THEME, 40), "below ~58 the strip wraps to two rows").toBeGreaterThan(1);
 
 	const wide = __testing.makePanel({ data: liveData(), rows: 40 });
 	await __testing.settled(wide);

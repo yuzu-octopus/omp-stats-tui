@@ -1,6 +1,11 @@
 /**
  * `src/tui/render/screen.ts` — one `ScreenSpec` to rendered terminal lines.
  *
+ * PROBE/TEST FIXTURE, NOT A PRODUCTION RENDER PATH. The ScreenSpec → renderScreen →
+ * renderBands stack is live ONLY for /stats-test (its own showcase specs),
+ * scripts/probe-render.ts, the panel's fixture branch, and tests — never a
+ * production /stats-tui body.
+ *
  * THIS IS THE SEAM THE WHOLE IR EXISTS TO REACH. Three hand-written screens each
  * invented their own visual structure, so consistency was something a reviewer
  * had to notice and a fourth screen would have had to reinvent. Here a screen is
@@ -647,18 +652,6 @@ function toBand(band: IRBand, opts: ScreenRenderOptions): Band | null {
 			// is the point: `note` is where "This is not a zero", the per-call
 			// attribution caveat and the rollup staleness live.
 			return { kind: "note", text: band.text };
-		case "custom":
-			// The IR's single `custom` band is `providers`' subscription windows,
-			// and that screen is deferred because its payload does not exist.
-			// Saying so is the honest body for an unrenderable band; inventing a
-			// rendering would be exactly the per-screen grammar this module exists
-			// to remove.
-			return {
-				kind: "note",
-				text:
-					opts.spec.deferredReason ??
-					`${band.id} has no terminal renderer: the layout IR describes it, nothing draws it.`,
-			};
 	}
 }
 
@@ -709,15 +702,6 @@ export function renderScreenWith(opts: ScreenRenderOptions): {
 	// caveats are prose about figures ("the panel has no mode switch, so this
 	// screen draws requests") and printing them under no figures reads as a
 	// complete page. Say what is actually true instead.
-	// A DEFERRED screen answers with WHY, whatever its bands resolved to: its
-	// whole point is that the data cannot be fetched, and "no usage recorded"
-	// would blame the reader's quiet month for a missing route.
-	if (opts.spec.deferred) {
-		return {
-			lines: [opts.fg(PALETTE.dim, opts.spec.deferredReason ?? "This screen is deferred.")],
-			chart: [],
-		};
-	}
 	if (!bands.some(band => band.kind !== "note")) {
 		return { lines: [opts.fg(PALETTE.dim, "No usage recorded in this range.")], chart: [] };
 	}
@@ -778,9 +762,16 @@ function chartBand(title: string, chart: ChartSpec, opts: ScreenRenderOptions): 
 	const unknown = cost
 		? rowsFor(sourceOf(cost.metric), opts.data).reduce((sum, row) => sum + (unpricedOf(row) ?? 0), 0)
 		: 0;
-	if (unknown > 0 && chart.series.every(series =>
-		resolveSeriesValues(series.metric, opts.data, undefined, axisFor(opts, series.metric))
-			.every(value => value === 0))) {
+	// The all-zero check is about a TIME-AXIS chart: a flat line whose every
+	// bucket is zero while requests went unpriced. A calendar heatmap is not on
+	// the range axis at all — its rows carry a `day` string, so no bucket has
+	// data behind it and the series resolves to all zeroes. Running the check
+	// there is vacuously true and drops a chart that has nothing to compare,
+	// so heatmaps are exempt.
+	if (chart.type !== "heatmap" && unknown > 0 && chart.series.every(series => {
+		const values = resolveSeriesValues(series.metric, opts.data, undefined, axisFor(opts, series.metric));
+		return values.length > 0 && values.every(value => value === 0);
+	})) {
 		return { kind: "note", text: `${title}: no priced cost recorded; ${unknown} requests have unknown spend.` };
 	}
 	const body = chartRows(chart, opts);

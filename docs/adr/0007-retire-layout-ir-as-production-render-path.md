@@ -11,18 +11,21 @@ nobody had established that by reachability, only by assertion.
 Established by a source scan at the PR #1 baseline, before the UI refinement. A
 production screen is a `FeatureController` (`src/tui/features/types.ts`) whose
 `render(width, height)` returns `readonly string[]`; it does not render a static `ScreenSpec`.
-`src/tui/panel.ts` reaches `renderScreenWith` only at `:772`, *after* the
-`if (feature)` branch at `:765` returns, and `#feature()` returns `undefined` only when
+`src/tui/panel.ts` reaches `renderScreenWith` only at `:780`, *after* the
+`if (feature)` branch at `:772` returns, and `#feature()` returns `undefined` only when
 `options.fetch` is injected — the fixture path, not the worker path.
 
 What survives, and who still reaches it:
 
 | Consumer | Reaches | Job |
 |---|---|---|
-| `src/tui/showcase/panel.ts:59` | `renderScreen` | `/stats-test`, a **shipped** command registered in `src/index.ts:50` |
+| `src/tui/showcase/panel.ts:436` | `renderScreen` | `/stats-test`, a **shipped** command registered in `src/index.ts:50` |
 | `src/tui/tabs.ts`, `src/tui/chrome.ts` | `SCREEN_SPECS`, `isDrawableScreen` | the real nav: sidebar rows, tab strip, `g` jump letters |
 | `src/tui/panel.ts:24` | `isDrawableScreen`, `specForScreen` | `SELECTABLE_SCREENS` and therefore the digit row and arrow cycling |
 | `scripts/probe-render.ts`, `scripts/probe-showcase.ts` | the whole IR | headless review at any width |
+| `src/tui/panel.ts:780` | `renderScreenWith` | the fixture/test branch only — reached when `options.fetch` is injected, which `__testing.makePanel` does by default |
+
+The fixture branch is why the IR is live in tests: `makePanel` injects `fetch` unless `reads` is set, so `#feature()` returns `undefined` by default and every `makePanel` body assertion renders through `renderScreenWith`, never a `FeatureController`.
 
 `src/tui/screens/*.ts` is metadata only in production. Its `render` bodies are unreachable;
 after `7c55cf3` the only surviving direct callers are `test/activity.test.ts` and

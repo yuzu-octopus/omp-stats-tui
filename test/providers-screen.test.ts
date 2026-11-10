@@ -6,7 +6,7 @@
  * `ProviderWindowStats` (`provider-windows`) does broker network I/O per load
  * and stays out of the panel. So S1–S4 (statRow, totals table, burn chart,
  * peak-hours chart) resolve against the local payload; the subscription-window
- * sections keep their deferred note until ingest records windows locally.
+ * sections keep their note until ingest records windows locally.
  */
 
 import { expect, test } from "bun:test";
@@ -49,7 +49,6 @@ test("providers: the screen is fillable — needs name the local payload, not th
 	// The local aggregates route is `/api/stats/providers` (DB-backed);
 	// `/api/stats/provider-windows` does broker network I/O per load and the
 	// panel never calls it. A needs entry naming the network route is the bug.
-	expect(spec.deferred).toBeUndefined();
 	expect([...spec.needs]).toContain("providers");
 	expect(spec.bands.length).toBeGreaterThan(0);
 });

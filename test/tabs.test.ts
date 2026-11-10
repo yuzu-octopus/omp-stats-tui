@@ -25,7 +25,7 @@ import { TAB_INK } from "../src/tui/palette";
 const PRESETS: readonly SymbolPreset[] = ["unicode", "nerd", "ascii"];
 
 /** The screens the strip actually shows. */
-const SHOWN = SCREEN_SPECS.filter(spec => !spec.deferred);
+const SHOWN = SCREEN_SPECS;
 
 /** A background SGR — the luminance step the active tab must carry. */
 const BG = /\x1b\[4[89];/;
@@ -75,7 +75,7 @@ describe("TAB_SHORT", () => {
 		expect(offenders).toEqual([]);
 	});
 
-	test("covers every non-deferred screen, so no tab renders as an empty cell", () => {
+	test("covers every screen, so no tab renders as an empty cell", () => {
 		for (const preset of PRESETS) {
 			for (const spec of SHOWN) {
 				expect(TAB_SHORT[preset][spec.id] ?? "").not.toBe("");
@@ -127,13 +127,10 @@ describe("TAB_SHORT", () => {
 });
 
 describe("buildTabs", () => {
-	test("one tab per shown screen, deferred screens excluded", () => {
+	test("one tab per shown screen", () => {
 		const { theme } = stubTheme();
 		const tabs = buildTabs("unicode", theme, "overview");
 		expect(tabs.map(t => t.id)).toEqual(SHOWN.map(s => s.id));
-		for (const spec of SCREEN_SPECS.filter(spec => spec.deferred)) {
-			expect(tabs.some(t => t.id === spec.id), spec.id).toBe(false);
-		}
 	});
 
 	test("label is icon + space + label, and short is the one-cell glyph", () => {

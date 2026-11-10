@@ -17,8 +17,7 @@
  * Rows `OverlayPanel` draws AROUND the body: top border, the tab/header row,
  * `PanelDivider`, footer, bottom border.
  *
- * Counted by reading `OverlayPanel.render` rather than taken from `layout.ts`'s
- * advisory `CHROME_ROWS` (which says 6), so the number in the budget is the
- * number of rows actually painted.
+ * The single chrome-row measurement. `frame.ts` and `layout.ts` import it, so
+ * the claim about the frame and the frame itself cannot drift apart.
  */
 export const PANEL_CHROME_ROWS = 5;

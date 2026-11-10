@@ -54,15 +54,15 @@ test("chrome modes per band, pinned for the chrome to build against", () => {
 	});
 	expect(framePolicy(100)).toMatchObject({ band: "wide", sidebar: "full", topbar: "full" });
 	expect(framePolicy(84)).toMatchObject({ band: "wide", sidebar: "full" });
-	expect(framePolicy(83)).toMatchObject({ band: "medium", sidebar: "icons", topbar: "condensed" });
+	expect(framePolicy(83)).toMatchObject({ band: "medium", sidebar: "hidden", topbar: "condensed" });
 	expect(framePolicy(60)).toMatchObject({
 		band: "medium",
-		sidebar: "icons",
+		sidebar: "hidden",
 		topbar: "condensed",
 		columns: 1,
 		footerHints: true,
 	});
-	expect(framePolicy(48)).toMatchObject({ band: "medium", sidebar: "icons" });
+	expect(framePolicy(48)).toMatchObject({ band: "medium", sidebar: "hidden" });
 	expect(framePolicy(47)).toMatchObject({ band: "narrow", sidebar: "hidden", topbar: "condensed" });
 	expect(framePolicy(40)).toMatchObject({
 		band: "narrow",
@@ -95,7 +95,7 @@ test("the policy never disagrees with planLayout about the fields they share", (
 });
 
 test("widening the terminal only ever restores chrome, never takes it away", () => {
-	const sidebarRank = { hidden: 0, icons: 1, full: 2 } as const;
+	const sidebarRank = { hidden: 0, full: 1 } as const;
 	const topbarRank = { minimal: 0, condensed: 1, full: 2 } as const;
 	let sidebar = -1;
 	let topbar = -1;

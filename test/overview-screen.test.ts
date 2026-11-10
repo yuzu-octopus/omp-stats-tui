@@ -51,8 +51,6 @@ const text = (rows: readonly string[]): string => stripForTest(rows.join("\n"));
 
 test("overview: the registry entry defers to the spec's pipeline, not a hand-written body", () => {
 	expect(overviewScreen.id).toBe("overview");
-	expect(overviewScreen.status).toBe("implemented");
-	expect(overviewScreen.reason).toBeUndefined();
 	// The spec's needs, or the panel fetches what the body never reads.
 	expect([...overviewScreen.needs]).toEqual([...spec.needs]);
 });

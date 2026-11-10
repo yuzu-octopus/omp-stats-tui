@@ -61,8 +61,6 @@ function allModelsBand(data: PanelData) {
 
 test("models: the registry entry defers to the spec's pipeline, not a hand-written body", () => {
 	expect(modelsScreen.id).toBe("models");
-	expect(modelsScreen.status).toBe("implemented");
-	expect(modelsScreen.reason).toBeUndefined();
 	// The spec's needs, or the panel fetches what the body never reads.
 	expect([...modelsScreen.needs]).toEqual([...spec.needs]);
 });

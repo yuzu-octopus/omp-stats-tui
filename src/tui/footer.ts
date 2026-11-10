@@ -35,7 +35,7 @@
 import { formatKeyHints } from "@oh-my-pi/pi-coding-agent";
 import type { KeyName } from "@oh-my-pi/pi-coding-agent";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
-import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { visibleWidth } from "@oh-my-pi/pi-tui";
 
 /** One hint: the keys that do it, and what they do. */
 export interface PanelHint {
@@ -64,28 +64,32 @@ export type HintMode = "idle" | "scrollable" | "syncing" | "error";
  * reader to skip the footer.
  *
  * EVERY KEY HERE IS BOUND BY `panelAction`. That is not a convention, it is an
- * assertion — `test/footer.test.ts` maps every hint of every mode back through
- * `panelAction` and fails if it returns null. A hint for an unbound key is a lie
- * the user acts on.
+ * assertion — `test/hint-contract.test.ts` maps every hint of every mode back
+ * through `panelAction` and fails if it returns null. A hint for an unbound key
+ * is a lie the user acts on. Feature-local keys are not duplicated here: the
+ * focused feature prints its own inline hint (tables, charts, traces).
  */
 export function hintsFor(mode: HintMode): readonly PanelHint[] {
-	const scroll: PanelHint = { keys: ["up", "down"], label: "scroll" };
+	const scroll: PanelHint = { keys: ["up", "down", "home", "end"], label: "scroll" };
 	// Contextual arrows and Tab belong to route controls; brackets stay global
 	// outside text entry. Search mode uses a separate Ctrl+P/Ctrl+N hint.
-	const screen: PanelHint = { keys: ["[", "]"], label: "screen" };
+	const screen: PanelHint = { keys: ["[", "]", "ctrl+p", "ctrl+n"], label: "screen" };
+	const jump: PanelHint = { keys: ["g"], label: "jump" };
+	const digits: PanelHint = { keys: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"], label: "screens" };
 	const range: PanelHint = { keys: ["r", "shift+r"], label: "range" };
+	const refresh: PanelHint = { keys: ["f2"], label: "refresh" };
 	const sync: PanelHint = { keys: ["s"], label: "sync" };
 	const close: PanelHint = { keys: ["escape", "q"], label: "close" };
 
 	switch (mode) {
 		case "idle":
-			return [screen, range, sync, close];
+			return [screen, jump, digits, range, refresh, sync, close];
 		case "scrollable":
-			return [scroll, screen, range, sync, close];
+			return [scroll, screen, jump, digits, range, refresh, sync, close];
 		case "syncing":
 			// No `s`: a sync is already running, so offering to start another is
 			// offering a key that does nothing.
-			return [screen, range, close];
+			return [screen, jump, digits, range, refresh, close];
 		case "error":
 			// Retry, not "range": the message on screen is the thing to act on.
 			return [{ keys: ["s"], label: "retry sync" }, close];
@@ -147,12 +151,4 @@ export function footerHints(
 	}
 	// Nothing fits: drop the row entirely rather than emit a truncated word.
 	return [];
-}
-
-/**
- * Truncate a footer row that has already been composed — used when a caller has
- * exactly one row and needs it to fit rather than to vanish.
- */
-export function clampFooter(row: string, width: number): string {
-	return visibleWidth(row) > width ? truncateToWidth(row, width) : row;
 }

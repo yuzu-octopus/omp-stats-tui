@@ -3,10 +3,10 @@
  *
  * This is how a screen gets reviewed. The panel only exists inside an overlay on
  * someone else's terminal, which makes "does this look right" an expensive
- * question to answer; this script makes it a command. It builds a real
- * `ScreenContext` — real `planLayout`, real `glyphsFor`, real `theme` — fetches
- * the screen's declared needs through the same `fetchFor` the panel uses, and
- * prints the rows.
+ * question to answer; this script makes it a command. It renders the screen's
+ * spec through the same `renderScreen` the fixture path uses, with a real
+ * `planLayout` and real `glyphsFor`, fetches the screen's declared needs through
+ * the same worker boundary the panel uses, and prints the rows.
  *
  * Usage:
  *   bun scripts/probe-render.ts [screenId] [--width N] [--width N] [--range 24h]
@@ -65,7 +65,7 @@ for (let i = 0; i < args.length; i++) {
 
 if (widths.length === 0) widths.push(100, 60);
 
-const specs = SCREEN_SPECS.filter(spec => !spec.deferred);
+const specs = SCREEN_SPECS;
 const known = specs.map(s => s.id);
 /**
  * EVERY screen by default, and one screen when named. A reviewer judging whether

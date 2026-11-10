@@ -14,15 +14,15 @@
  * digit row are not reimplemented here — a second keymap would be the exact
  * "second grammar" failure this codebase exists to prevent.
  *
- * WHAT IS FORKED, AND WHY IT IS REPORTED RATHER THAN FIXED QUIETLY:
- * `sidebar()` and `buildTabs()` are closed over the real screen registry
- * (`NAV_GROUPS` → `SCREEN_SPECS`, and `TAB_ICON: Record<ScreenId, IconRole>`), so
- * a panel with its own sections cannot call them. The showcase therefore paints
- * its own nav — with `SIDEBAR_INK`/`TAB_INK` from palette.ts, so the ink ladder
- * stays in one tested place and this is not a second palette. The missing seam
- * (`sidebar(theme, preset, groups, active, hovered)`) is the finding.
+ * WHAT USED TO BE FORKED, AND WHY IT IS NO LONGER: `sidebar()` and `buildTabs()`
+ * were closed over the real screen registry, so the showcase painted its own nav.
+ * Both are now PARAMETERS — `sidebar(theme, preset, activeId, hovered?, groups)`
+ * and `hitTest(frame, row, col, hitSidebar)` — so `SHOWCASE_NAV` is data and
+ * `chrome.ts`/`mouse.ts` own the only geometry. A source scan below pins that the
+ * fork does not come back.
  */
 
+import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
@@ -109,6 +109,20 @@ function navColumn(panel: Panel, width: number): string {
 		.map(row => row.replace(ANSI, "").slice(0, frame.sidebarWidth + 3))
 		.join("\n");
 }
+
+test("the showcase paints through the shared nav, not a fork", () => {
+	// The fork's names must not reappear, and the shared geometry must be the one
+	// the panel imports. A second painter would silently drift from chrome.ts.
+	const panel = readFileSync(`${import.meta.dir}/../src/tui/showcase/panel.ts`, "utf8");
+	expect(panel).not.toContain("showcaseSidebar");
+	expect(panel).not.toContain("#zipSidebar");
+	expect(panel).toContain("sidebar(this.#theme, preset, state.sectionId");
+	expect(panel).toContain("zipSidebar(this.#theme, visible, nav.lines");
+	expect(panel).toContain("hitTest(frame, event.row, event.col, hitShowcaseSidebar)");
+	const nav = readFileSync(`${import.meta.dir}/../src/tui/showcase/nav.ts`, "utf8");
+	expect(nav).not.toContain("showcaseSidebar");
+	expect(nav).not.toContain("statsIcon");
+});
 
 // ---------------------------------------------------------------------------
 // Sections

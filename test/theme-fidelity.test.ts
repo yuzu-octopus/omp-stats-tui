@@ -397,7 +397,13 @@ test("the lexer reads a colour token from a live module, by line", () => {
 	// stable rather than being the one literal a colour-role refactor removes.
 	const chrome = colourArgumentLiterals("src/tui/chrome.ts").filter(site => site.token === "accent");
 	expect(chrome.length, "chrome.ts lost the accent foreground sites").toBe(4);
-	expect(chrome.map(site => lineOf("src/tui/chrome.ts", site.offset))).toEqual([230, 238, 459, 459]);
+	// Line numbers are deliberately NOT pinned: chrome.ts gains lines on every
+	// refactor and a pinned list fails on each one. What must hold is that every
+	// reported offset really lands on a line carrying an `accent` literal.
+	const chromeSource = readSource("src/tui/chrome.ts").split("\n");
+	for (const site of chrome) {
+		expect(chromeSource[lineOf("src/tui/chrome.ts", site.offset) - 1]).toContain("accent");
+	}
 });
 
 /** Tokens a NAMED role stands behind. The whole point of `palette.ts`. */

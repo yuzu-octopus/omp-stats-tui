@@ -6,7 +6,7 @@
  * two different rules:
  *
  *   - `panel.ts`'s `SELECTABLE_SCREENS` filtered the registry to ids with a
- *     non-`deferred` spec;
+ *     spec;
  *   - `chrome.ts`'s `NAV_GROUPS` filtered a hand-written group map to ids with a
  *     spec AND a jump hotkey.
  *
@@ -63,19 +63,6 @@ test("neither list can contain a screen the IR cannot draw", () => {
 	for (const id of SELECTABLE_SCREENS.map(screen => screen.id)) expect(isDrawableScreen(id), id).toBe(true);
 	for (const id of NAV_GROUPS.flatMap(group => group.items.map(item => item.id))) {
 		expect(isDrawableScreen(id), id).toBe(true);
-	}
-});
-
-test("a deferred screen is in NEITHER list, however it was reached", () => {
-	// `deferred` is the distinction that matters: described faithfully, but not
-	// fillable from the data seam, so arrowing onto it spends a keystroke painting
-	// a page the panel cannot honestly fill. The registry and the nav must agree
-	// about which screens that is.
-	const deferred = SCREEN_SPECS.filter(spec => spec.deferred).map(spec => spec.id);
-	for (const id of deferred) {
-		expect(isDrawableScreen(id), id).toBe(false);
-		expect(SELECTABLE_SCREENS.some(screen => screen.id === id), id).toBe(false);
-		expect(NAV_GROUPS.some(group => group.items.some(item => item.id === id)), id).toBe(false);
 	}
 });
 
@@ -146,7 +133,7 @@ test("a letter belonging to no nav row resolves to nothing", () => {
 
 test("isDrawableScreen is the one rule, and it agrees with having a usable spec", () => {
 	for (const spec of SCREEN_SPECS) {
-		expect(isDrawableScreen(spec.id), spec.id).toBe(!spec.deferred);
+		expect(isDrawableScreen(spec.id), spec.id).toBe(true);
 	}
 });
 
@@ -159,12 +146,11 @@ test("specById and specForScreen are the same lookup", () => {
 });
 
 test("every selectable screen's registry entry agrees with its spec", () => {
-	// The registry carries identity and status; the IR carries the body. A screen
+	// The registry carries identity; the IR carries the body. A screen
 	// in one and not the other is the drift this whole refactor is about.
 	for (const screen of SELECTABLE_SCREENS) {
 		expect(screenById(screen.id).id).toBe(screen.id);
 		expect(specById(screen.id)?.id).toBe(screen.id);
-		expect(screen.status).not.toBe("excluded");
 	}
 });
 
@@ -177,7 +163,7 @@ test("every selectable screen's registry entry agrees with its spec", () => {
  *
  * Every behavioural assertion here was checked against a mutation that
  * re-introduces the duplication — replacing `NAV_GROUPS`' call to
- * `isDrawableScreen` with its own private `spec && !spec.deferred` rule — and ALL
+ * `isDrawableScreen` with its own private `spec !== undefined` rule — and ALL
  * FOURTEEN STILL PASSED. That is not a gap in those tests; it is the reason this
  * one exists.
  *

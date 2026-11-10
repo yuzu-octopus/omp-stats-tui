@@ -253,7 +253,11 @@ test("C: a zero hint that a sibling tile states is dropped", () => {
 	// The screenshot: `API-equivalent estimate` printed the hint `0` while the
 	// `Unpriced requests` tile in the same statRow printed the same `0` — the
 	// same figure twice, and the extra row pushed the next tile row down.
-	const bands = screenBands(opts(specOf("costs"), liveData()));
+	// The shipped fixture carries 4,197 unpriced, which is the NON-zero case
+	// the sibling test below covers. This test is about the ZERO case, so the
+	// cost series' unpriced population is zeroed for this one render.
+	const zeroUnpriced = liveData({ costs: { costSeries: COST_SERIES.map(point => ({ ...point, unpricedRequests: 0 })) } });
+	const bands = screenBands(opts(specOf("costs"), zeroUnpriced));
 	expect(tileOf(bands, "API-equivalent estimate").hint, "the restated zero must go").toBeUndefined();
 	expect(tileOf(bands, "Unpriced requests").value, "while the figure itself stays stated").toBe("0");
 });

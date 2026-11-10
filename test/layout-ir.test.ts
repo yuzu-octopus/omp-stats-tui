@@ -38,7 +38,6 @@ function refsInBand(band: Band): readonly MetricRef[] {
 		case "table":
 			return band.columns.flatMap((c: Column) => metricRefsOf(c.source));
 		case "note":
-		case "custom":
 			return [];
 	}
 }
@@ -66,10 +65,6 @@ test("every IR screen corresponds to a screen the registry already knows", () =>
 
 test("every band references a metric its screen's needs actually fetch", () => {
 	for (const spec of SCREEN_SPECS) {
-		// A deferred screen is allowed to name a source nothing fetches — that is
-		// precisely what deferred means, and the separate resolution test below
-		// is where it has to be declared.
-		if (spec.deferred) continue;
 		for (const ref of refsInSpec(spec)) {
 			const need = NEED_BY_SOURCE[sourceOf(ref)];
 			// Asserting this BEFORE the `toContain` is the point: a null need is a
@@ -89,14 +84,6 @@ test("every fetchable source maps to a real DataNeed", () => {
 		expect(need, `${source} has no declared need`).toBeTruthy();
 		if (need === null) continue;
 		expect(DATA_NEEDS as readonly string[], `${source} -> ${need}`).toContain(need);
-	}
-});
-
-test("a deferred screen says why it cannot be filled yet", () => {
-	for (const spec of SCREEN_SPECS) {
-		if (!spec.deferred) continue;
-		expect(spec.deferredReason, spec.id).toBeTruthy();
-		expect(spec.deferredReason!.length, spec.id).toBeGreaterThan(20);
 	}
 });
 
@@ -204,24 +191,15 @@ test("the activity screen derives from the usage dashboard, not a route", () => 
 	expect(activity.bands.some(b => b.kind === "chart" && b.chart.type === "heatmap")).toBe(true);
 });
 
-test("every screen that fetches nothing is deferred, and vice versa", () => {
-	for (const spec of SCREEN_SPECS) {
-		if (spec.needs.length === 0) expect(spec.deferred, spec.id).toBe(true);
-		if (spec.deferred) expect(spec.needs.length, spec.id).toBe(0);
-	}
-});
 
 test("providers is fillable from the local aggregates; only the windows sections stay out", () => {
 	// `/api/stats/providers` is DB-backed rollup; `/api/stats/provider-windows`
 	// does broker network I/O per load and the panel never calls it. So the
-	// spec carries needs and the windows boundary lives in a note band, not a
-	// deferred flag.
+		// spec carries needs and the windows boundary lives in a note band.
 	const providers = SCREEN_SPECS.find(s => s.id === "providers")!;
-	expect(providers.deferred).toBeUndefined();
 	expect([...providers.needs]).toEqual(["providers", "rollupStatus"]);
 	const kinds = providers.bands.map(b => b.kind);
 	expect(kinds).toContain("note");
-	expect(providers.bands.some(b => b.kind === "custom")).toBe(false);
 });
 
 test("every screen declares its needs as real DataNeeds", () => {

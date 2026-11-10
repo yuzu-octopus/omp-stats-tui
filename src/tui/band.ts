@@ -39,11 +39,11 @@
  * the chart card, directly beneath it (`OverviewRoute.tsx:181-244`). So it is a
  * continuation — no heading, no blank line before, one after.
  *
- * ── Why `bands` is a parameter and not part of `ScreenContext` ──────────────
+ * ── Why `bands` is a parameter and not part of the data contract ────────────
  * F23's seam is deliberate. Putting presentation on the data contract would let
  * any screen bypass the grammar by returning pre-rendered lines — which is the
- * exact failure being fixed. `ScreenContext` is deliberately NOT extended; bands
- * are passed in beside it.
+ * exact failure being fixed. The data contract is deliberately NOT extended;
+ * bands are passed in beside it.
  *
  * ── Why the types below are declared here and not imported ─────────────────
  * `src/layout/spec.ts` is owned by another agent and is in flux, so importing
@@ -114,12 +114,6 @@ export type Band =
 	| { kind: "table"; title: string; columns: readonly Column[]; rows: RowSource; source?: string; selectedRow?: number }
 	| { kind: "legend"; items: readonly LegendItem[]; source?: string }
 	| { kind: "note"; text: string }
-	| {
-			kind: "custom";
-			id: string;
-			/** The screen's own render, treated as one band's body. Temporary. */
-			render: (ctx: BandRenderOptions) => readonly string[];
-	  };
 
 // ─── Colour ──────────────────────────────────────────────────────────────────
 
@@ -577,15 +571,6 @@ function renderNote(band: Extract<Band, { kind: "note" }>, ctx: BandRenderOption
 	return [clamp(ctx.fg(PALETTE.dim, band.text), ctx.width)];
 }
 
-/**
- * `custom` — the escape hatch that makes migration incremental: the screen's
- * own `render(ctx)` becomes one band's body. Temporary; its removal is a
- * milestone (F23 §2.3).
- */
-function renderCustom(band: Extract<Band, { kind: "custom" }>, ctx: BandRenderOptions): readonly string[] {
-	return band.render(ctx).map((row) => clamp(row, ctx.width));
-}
-
 /** G2: `${icon} ${boldAccent(title)}` plus `  ${dim(meta)}` on the same line. */
 function heading(
 	icon: IconRole,
@@ -623,9 +608,7 @@ export function renderBands(bands: readonly Band[], ctx: BandRenderOptions): rea
 						? renderTable(band, ctx)
 						: band.kind === "legend"
 							? renderLegend(band, ctx)
-							: band.kind === "note"
-								? renderNote(band, ctx)
-								: renderCustom(band, ctx);
+							: renderNote(band, ctx);
 
 		if (body.length === 0) continue;
 

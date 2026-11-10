@@ -126,7 +126,7 @@ test("the nav and the tab strip draw the same screens in different orders", () =
 	// controls, two orders. This pins the fact so the ordering change that follows
 	// is measurable.
 	const navOrder = NAV_GROUPS.flatMap(g => g.items.map(i => i.label));
-	const stripOrder = SCREEN_SPECS.filter(s => !s.deferred).map(s => s.label);
+	const stripOrder = SCREEN_SPECS.map(s => s.label);
 	expect(navOrder.indexOf("Activity")).toBeGreaterThan(navOrder.indexOf("Costs"));
 	expect(stripOrder.indexOf("Activity")).toBeLessThan(stripOrder.indexOf("Costs"));
 });
@@ -183,7 +183,7 @@ test("every screen the strip can show that has a nav row is reachable by its own
 	// about IDENTITY: for any screen shown in both, the jump and the nav name the
 	// same thing, or the two controls are not showing the same ten screens.
 	const navIds = NAV_GROUPS.flatMap(g => g.items.map(i => i.id));
-	for (const spec of SCREEN_SPECS.filter(s => !s.deferred)) {
+	for (const spec of SCREEN_SPECS) {
 		if (!navIds.includes(spec.id)) continue;
 		const item = NAV_GROUPS.flatMap(g => g.items).find(i => i.id === spec.id)!;
 		expect(screenForHotkey(item.hotkey), `${spec.id}`).toBe(spec.id);

@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme";
 import { rangeMeta } from "@oh-my-pi/omp-stats/client/data/range";
-import { NAV_GROUPS } from "../src/tui/chrome";
+import { NAV_GROUPS, type NavGroup } from "../src/tui/chrome";
 
 /** Overlay nav-row index of a screen, derived from NAV_GROUPS. The literals 2/0/9
  * below are now derived: `tools` was nav row 9 when the nav had eleven rows and
@@ -129,6 +129,21 @@ test("sidebarHit is null past the nav and for negative rows", () => {
 	expect(sidebarHit(40)).toBeNull();
 });
 
+test("sidebarHit walks an injected nav list, so a non-registry nav moves its own rows", () => {
+	// The showcase's sections are not screen ids, so the walk must be a PARAMETER.
+	const injected: readonly NavGroup[] = [
+		{ heading: "Grammar", items: [{ id: "tiles", label: "Tiles", hotkey: "t", icon: "tokens" }] },
+		{ heading: "Edges", items: [{ id: "awkward", label: "Awkward", hotkey: "a", icon: "warning" }] },
+	];
+	expect(sidebarHit(0, injected)).toBeNull();
+	expect(sidebarHit(1, injected)).toBe("tiles");
+	expect(sidebarHit(2, injected)).toBeNull();
+	expect(sidebarHit(3, injected)).toBe("awkward");
+	expect(sidebarHit(4, injected)).toBeNull();
+	// The default is unchanged: the real nav still walks itself.
+	expect(sidebarHit(1)).toBe("overview");
+});
+
 // ---------------------------------------------------------------------------
 // rangeSpans / rangeHit: segments found by label, gaps inert
 // ---------------------------------------------------------------------------
@@ -214,10 +229,40 @@ test("sidebar rows route only inside the sidebar width; body cols are inert", ()
 	expect(hitTest(frame, 1 + 1 + 11, 5)).toEqual({ type: "none" });
 });
 
+test("hitTest routes sidebar rows through an injected resolver", () => {
+	// The frame geometry is one function; only the nav binding changes. This is
+	// the seam that lets the showcase reuse `hitTest` instead of forking it.
+	const frame = syntheticFrame({ stripRows: 0, sidebarWidth: 24, sidebarRows: 3 });
+	const resolver = (navRow: number): string | null => (navRow === 2 ? "charts" : null);
+	expect(hitTest(frame, 4, 5, resolver)).toEqual({ type: "screen", id: "charts", via: "sidebar" });
+	// The default resolver still reads NAV_GROUPS.
+	expect(hitTest(frame, 3, 5)).toEqual({ type: "screen", id: "overview", via: "sidebar" });
+	// A resolver that names nothing leaves the column inert.
+	expect(hitTest(frame, 4, 5, () => null)).toEqual({ type: "none" });
+});
+
 test("a hidden sidebar leaves no dead click zone", () => {
 	const frame = syntheticFrame({ stripRows: 0, sidebarWidth: 0, sidebarRows: 0 });
 	expect(hitTest(frame, 3, 2)).toEqual({ type: "none" });
 	expect(hitTest(frame, 3, 30)).toEqual({ type: "none" });
+});
+
+test("body clicks route through feature-reported hit spans, in document rows", () => {
+	const action = { type: "selectDay", day: "2026-01-10" } as const;
+	const frame = syntheticFrame({
+		stripRows: 0,
+		bodyScroll: 3,
+		bodyHits: [{ rowStart: 5, rowEnd: 7, colStart: 4, colEnd: 20, action }],
+	});
+	// Overlay row 5 = 1 border + 1 topbar + bodyRow 3, and docRow 3 + scroll 3
+	// = 6, inside [5, 7). Column 6 is contentCol 4, inside [4, 20).
+	expect(hitTest(frame, 5, 6)).toEqual({ type: "feature", action });
+	// docRow 4 is above the span.
+	expect(hitTest(frame, 3, 6)).toEqual({ type: "none" });
+	// docRow 7 is past the span's half-open end.
+	expect(hitTest(frame, 6, 6)).toEqual({ type: "none" });
+	// Past the span's columns is inert body text.
+	expect(hitTest(frame, 5, 30)).toEqual({ type: "none" });
 });
 
 // ---------------------------------------------------------------------------

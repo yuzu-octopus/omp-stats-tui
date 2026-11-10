@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import { formatKeyHints } from "@oh-my-pi/pi-coding-agent";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
-import { clampFooter, footerHints, hintsFor, type HintMode, type PanelHint } from "../src/tui/footer";
+import { footerHints, hintsFor, type HintMode, type PanelHint } from "../src/tui/footer";
 
 /**
  * `test/footer.test.ts` — the hint row's SET, its STYLE, and its fit.
@@ -73,9 +73,9 @@ test("close is present in every mode and always LAST", () => {
 });
 
 test("the hint set grows and shrinks with the state it describes", () => {
-	expect(hintsFor("idle").map(h => h.label)).toEqual(["screen", "range", "sync", "close"]);
-	expect(hintsFor("scrollable").map(h => h.label)).toEqual(["scroll", "screen", "range", "sync", "close"]);
-	expect(hintsFor("syncing").map(h => h.label)).toEqual(["screen", "range", "close"]);
+	expect(hintsFor("idle").map(h => h.label)).toEqual(["screen", "jump", "screens", "range", "refresh", "sync", "close"]);
+	expect(hintsFor("scrollable").map(h => h.label)).toEqual(["scroll", "screen", "jump", "screens", "range", "refresh", "sync", "close"]);
+	expect(hintsFor("syncing").map(h => h.label)).toEqual(["screen", "jump", "screens", "range", "refresh", "close"]);
 	expect(hintsFor("error").map(h => h.label)).toEqual(["retry sync", "close"]);
 });
 
@@ -160,15 +160,15 @@ test("close is pinned: it survives every width at which ANY hint fits", () => {
 			expect(strip(row!), `${mode}@${width} dropped close`).toContain(hintText(ALL_HINTS[mode].at(-1)!));
 		}
 	}
-	// The exact case from the bug report: scrollable at innerWidth 56. `range`
-	// still fits there; the regression was that `close` did NOT.
+	// The exact case from the bug report: scrollable at innerWidth 56. `scroll`
+	// and `close` still fit there; the regression was that `close` did NOT.
 	const row = footerHints(hintsFor("scrollable"), theme, 56)[0]!;
 	expect(visibleWidth(row)).toBeLessThanOrEqual(56);
-	for (const hint of [ALL_HINTS.scrollable[0]!, ALL_HINTS.scrollable[1]!, ALL_HINTS.scrollable.at(-1)!]) {
+	for (const hint of [ALL_HINTS.scrollable[0]!, ALL_HINTS.scrollable.at(-1)!]) {
 		expect(strip(row), `scrollable@56 lost ${hint.label}`).toContain(hintText(hint));
 	}
-	// And at the width where the middle must go, it is `range` that goes — not
-	// the exit.
+	// And at the width where the middle must go, it is a middle hint that goes —
+	// never the exit.
 	const keep = [ALL_HINTS.scrollable[0]!, ALL_HINTS.scrollable[1]!, ALL_HINTS.scrollable.at(-1)!];
 	const threeWide = visibleWidth(keep.map(hintText).join(SEPARATOR));
 	expect(strip(footerHints(hintsFor("scrollable"), theme, threeWide)[0]!)).toBe(keep.map(hintText).join(SEPARATOR));
@@ -238,11 +238,4 @@ test("no width argument means no fit constraint", () => {
 	expect(footerHints(hintsFor("scrollable"), theme)[0]).toBe(
 		footerHints(hintsFor("scrollable"), theme, Number.POSITIVE_INFINITY)[0],
 	);
-});
-
-test("clampFooter shortens an already-composed row and leaves a fitting one alone", () => {
-	const [row] = footerHints(hintsFor("idle"), theme);
-	expect(clampFooter(row!, 200)).toBe(row!);
-	expect(visibleWidth(clampFooter(row!, 12))).toBeLessThanOrEqual(12);
-	expect(clampFooter("plain", 80)).toBe("plain");
 });

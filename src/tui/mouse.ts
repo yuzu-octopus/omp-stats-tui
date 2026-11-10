@@ -21,9 +21,10 @@
  */
 
 import type { SgrMouseEvent } from "@oh-my-pi/pi-tui";
+import type { FeatureHit, FeatureHitAction } from "./features/types";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { rangeMeta } from "@oh-my-pi/omp-stats/client/data/range";
-import { NAV_GROUPS } from "./chrome";
+import { NAV_GROUPS, type NavGroup } from "./chrome";
 import { RANGES, type Range } from "../data/ranges";
 
 export type { SgrMouseEvent };
@@ -40,24 +41,31 @@ export interface MouseFrame {
 	sidebarRows: number;
 	topbar: string;
 	tabAt: (line: number, col: number) => string | undefined;
+	/** Body scroll offset: document rows hidden above the viewport. */
+	bodyScroll?: number;
+	/** Feature-reported hit spans in body-document rows. */
+	bodyHits?: readonly FeatureHit[];
 }
 
 export type MouseHit =
 	| { type: "none" }
 	| { type: "screen"; id: string; via: "strip" | "sidebar" }
-	| { type: "range"; id: Range };
+	| { type: "range"; id: Range }
+	| { type: "feature"; action: FeatureHitAction };
 
 const NO_HIT: MouseHit = { type: "none" };
 
 /**
  * Which screen a sidebar body-row means, or null for headings and padding.
- * Derived by walking `NAV_GROUPS` the way `sidebar()` paints it: one heading
- * row per group, then one row per item. A regrouped nav moves its own rows.
+ * Derived by walking `groups` the way `sidebar()` paints it: one heading row per
+ * group, then one row per item. A regrouped nav moves its own rows. `groups`
+ * defaults to `NAV_GROUPS`; the showcase passes its own sections so the walk
+ * agrees with the nav it actually paints.
  */
-export function sidebarHit(navRow: number): string | null {
+export function sidebarHit(navRow: number, groups: readonly NavGroup[] = NAV_GROUPS): string | null {
 	if (!Number.isInteger(navRow) || navRow < 0) return null;
 	let row = 0;
-	for (const group of NAV_GROUPS) {
+	for (const group of groups) {
 		if (navRow === row) return null;
 		row++;
 		for (const item of group.items) {
@@ -108,9 +116,22 @@ export function rangeHit(line: string, col: number): Range | null {
  * order: top border (row 0) is inert; the topbar is content row 0 and a
  * progress row under it is inert chrome; the strip routes through the TabBar's
  * own zones; the sidebar routes only inside its width — a hidden sidebar
- * (`sidebarWidth 0`) leaves no dead click zone; everything else is body text.
+ * (`sidebarWidth 0`) leaves no dead click zone. The body routes through the
+ * feature-reported spans, whose rows are document rows: the scroll offset is
+ * added back so a click lands on the row the user sees. A hit outside every
+ * span is inert body text.
+ *
+ * `hitSidebar` is injected so the geometry serves a nav that is not the screen
+ * registry: it defaults to {@link sidebarHit} over `NAV_GROUPS`, and the
+ * showcase passes the same walk over its own sections. The arithmetic above is
+ * the only frame geometry; a second copy of it is the fork this parameter closes.
  */
-export function hitTest(frame: MouseFrame, row: number, col: number): MouseHit {
+export function hitTest(
+	frame: MouseFrame,
+	row: number,
+	col: number,
+	hitSidebar: (navRow: number) => string | null = sidebarHit,
+): MouseHit {
 	// The one top-border row and the two inset columns `OverlayPanel`
 	// draws around every content row.
 	const contentRow = row - 1;
@@ -127,10 +148,18 @@ export function hitTest(frame: MouseFrame, row: number, col: number): MouseHit {
 		return id === undefined ? NO_HIT : { type: "screen", id, via: "strip" };
 	}
 	const bodyRow = contentRow - frame.topbarRows - frame.stripRows;
-	if (bodyRow < 0 || bodyRow >= frame.sidebarRows) return NO_HIT;
+	if (bodyRow < 0) return NO_HIT;
 	if (frame.sidebarWidth > 0 && contentCol < frame.sidebarWidth) {
-		const id = sidebarHit(bodyRow);
+		if (bodyRow >= frame.sidebarRows) return NO_HIT;
+		const id = hitSidebar(bodyRow);
 		return id === null ? NO_HIT : { type: "screen", id, via: "sidebar" };
+	}
+	const docRow = bodyRow + (frame.bodyScroll ?? 0);
+	const bodyCol = contentCol - (frame.sidebarWidth > 0 ? frame.sidebarWidth + 3 : 0);
+	for (const hit of frame.bodyHits ?? []) {
+		if (docRow >= hit.rowStart && docRow < hit.rowEnd && bodyCol >= hit.colStart && bodyCol < hit.colEnd) {
+			return { type: "feature", action: hit.action };
+		}
 	}
 	return NO_HIT;
 }

@@ -77,7 +77,6 @@ function firstStatTiles(id: string): readonly StatTile[] {
 
 test("D1: no stat row jams a label against its value", () => {
 	for (const spec of SCREEN_SPECS) {
-		if (spec.deferred) continue;
 		for (const row of render(spec).slice(0, 12).map(stripForTest)) {
 			// A lower-case/digit/dollar character immediately after a letter is
 			// the exact shape of "API-equivalent cost$112.36": the label ran out
@@ -231,7 +230,6 @@ test("D4: a legend swatch is exactly ONE glyph", () => {
 	// union over all three — every glyph that can be a swatch.
 	const twoSwatches = new RegExp(`^[${glyphClass("barFill", "barEmpty")}]{2} \\S`);
 	for (const spec of SCREEN_SPECS) {
-		if (spec.deferred) continue;
 		for (const row of render(spec, 120).map(stripForTest)) {
 			// band.ts drew `barFill.repeat(2)`. One glyph is what the web's
 			// `.swatch` renders, and two read as a bar rather than a key.

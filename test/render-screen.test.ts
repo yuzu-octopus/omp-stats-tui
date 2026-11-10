@@ -70,7 +70,7 @@ function opts(spec: ScreenSpec, data: PanelData, view: View = {}): ScreenRenderO
 	};
 }
 
-const FILLABLE = SCREEN_SPECS.filter(spec => !spec.deferred);
+const FILLABLE = SCREEN_SPECS;
 
 // ─── no leaked non-values, anywhere ──────────────────────────────────────────
 
@@ -185,15 +185,6 @@ test("a payload that WAS fetched and came back empty invents no spend", () => {
 	}
 });
 
-test("a deferred screen states WHY it cannot be filled instead of rendering nothing", () => {
-	const deferred = SCREEN_SPECS.filter(spec => spec.deferred);
-	for (const spec of deferred) {
-		const text = stripForText(renderScreen(opts(spec, liveData())));
-		expect(text.length, spec.id).toBeGreaterThan(0);
-		expect(text, spec.id).not.toMatch(/\$[\d,]/);
-	}
-});
-
 // ─── the honesty rules, end to end ──────────────────────────────────────────
 
 test("a model with no price card reads N/A and one with a real zero reads $0", () => {
@@ -256,6 +247,18 @@ test("activity's summary reads like the host: cost, requests, and the window", (
 	expect(text).toMatch(/Activity/);
 	expect(text).toMatch(/last \d+ weeks/);
 	expect(text).toMatch(/\$\d[\d,]* · [\d.]+[KMB]? requests/);
+});
+
+test("a chart whose series has no time-axis values is not dropped as all-zero", () => {
+	// The activity heatmap's rows carry a calendar `day`, not a numeric
+	// timestamp, so no bucket on the range axis has data behind it and the
+	// series resolves to all zeroes. That is not an all-zero series: the
+	// guard's `.every(...)` was true with no data to compare, and with the
+	// fixture's unpriced population the note replaced the chart at every range.
+	const spec = FILLABLE.find(s => s.id === "activity")!;
+	const text = stripForText(renderScreen(opts(spec, liveData(), { width: 120 })));
+	expect(text).not.toContain("no priced cost recorded");
+	expect(text).toMatch(/[█▓▒░■·]/);
 });
 
 // ─── structure: one grammar for every screen ────────────────────────────────

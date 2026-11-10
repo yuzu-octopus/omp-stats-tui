@@ -1,4 +1,5 @@
 import type { SymbolPreset } from "./glyphs";
+import { PANEL_CHROME_ROWS } from "./panel-constants";
 
 /**
  * WHY THIS MODULE EXISTS
@@ -30,12 +31,6 @@ import type { SymbolPreset } from "./glyphs";
 export const SIDE_INSET = 2;
 export const HORIZONTAL_INSET = SIDE_INSET * 2;
 
-/**
- * Chrome the panel spends around a body: top border, header, divider, footer,
- * bottom border. Advisory only — `PanelRows.setHeight` is what actually enforces
- * the budget — but it is what the charts size themselves against.
- */
-export const CHROME_ROWS = 6;
 
 /** A region the plan gave up, and the condition that made it go. */
 export interface DroppedRegion {
@@ -195,7 +190,31 @@ export const LABEL_WIDTH = 12;
 /** Value column, sized for the widest formatted figure the formatters produce. */
 export const VALUE_WIDTH = 12;
 
-export function planLayout(width: number, rows: number, _preset: SymbolPreset): LayoutPlan {
+/**
+ * `planLayout` is PURE in `(width, rows, preset)` and the panel calls it on every
+ * render, so it memoizes. The returned plan is SHARED and must be treated as
+ * read-only: the panel and the showcase panel spread it before overriding
+ * `bodyRows`, and nothing writes into it.
+ *
+ * Bounded because a resize drag walks every width: past the limit the map is
+ * cleared rather than growing for the life of the process. Clearing is safe —
+ * this is a cache, not state.
+ */
+const PLAN_CACHE = new Map<string, LayoutPlan>();
+const PLAN_CACHE_LIMIT = 512;
+
+export function planLayout(width: number, rows: number, preset: SymbolPreset): LayoutPlan {
+	const key = `${width}\u0000${rows}\u0000${preset}`;
+	const hit = PLAN_CACHE.get(key);
+	if (hit !== undefined) return hit;
+	const plan = computePlanLayout(width, rows);
+	if (PLAN_CACHE.size >= PLAN_CACHE_LIMIT) PLAN_CACHE.clear();
+	PLAN_CACHE.set(key, plan);
+	return plan;
+}
+
+/** The memoized body of {@link planLayout}; see the note there on sharing. */
+function computePlanLayout(width: number, rows: number): LayoutPlan {
 	// Terminal numbers are external input and the panel calls this once per
 	// frame, so non-finite and negative values are normalised rather than trusted.
 	const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
@@ -206,12 +225,12 @@ export function planLayout(width: number, rows: number, _preset: SymbolPreset): 
 
 	// A deliberately sub-terminal terminal still gets a body of one row, because
 	// zero would leave every screen with nothing to render and no way to say so.
-	const bodyRows = Math.max(1, safeRows - CHROME_ROWS);
+	const bodyRows = Math.max(1, safeRows - PANEL_CHROME_ROWS);
 	// How far short of a renderable panel we are: a terminal too short for its own
 	// chrome plus a one-row body. Zero means everything asked for is available.
 	// Reported rather than hidden, because a silently squashed body looks like a
 	// screen with less to say when it is really a screen with no room.
-	const overflowRows = Math.max(0, CHROME_ROWS + 1 - safeRows);
+	const overflowRows = Math.max(0, PANEL_CHROME_ROWS + 1 - safeRows);
 
 	const breakpoint = BREAKPOINTS.find(row => innerWidth >= row.minInnerWidth) ?? BREAKPOINTS[0];
 

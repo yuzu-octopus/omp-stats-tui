@@ -42,10 +42,10 @@ import { RANGES, type Range } from "../data/ranges";
 import { isDrawableScreen, specForScreen, type ScreenSpec } from "../layout/spec";
 import { describeSyncProgress, type SyncEvent } from "../sync/client";
 import { formatInteger } from "./format";
-import type { SymbolPreset } from "./glyphs";
-import { statsIcon } from "./icons";
-import { SELECTION_BG, SIDEBAR_INK } from "./palette";
+import { glyph, type SymbolPreset } from "./glyphs";
+import { statsIcon, type IconRole } from "./icons";
 import { HORIZONTAL_INSET } from "./layout";
+import { SELECTION_BG, SIDEBAR_INK } from "./palette";
 import { framePolicy } from "./responsive";
 import { TAB_ICON, TAB_SHORT, tabBarTheme } from "./tabs";
 
@@ -100,10 +100,16 @@ export const JUMP_KEY_PREFIX = "G ";
 const INDEXING_VISIBLE_HOURS = 24;
 
 export interface NavItem {
-	id: ScreenSpec["id"];
+	id: string;
 	label: string;
 	/** Second key of the `g <key>` jump (nav.ts: `hotkey`). */
 	hotkey: string;
+	/**
+	 * The icon this row paints, carried by the ITEM rather than derived from the
+	 * id: a nav that is not the screen registry (the showcase's sections) has no
+	 * `TAB_ICON` entry, so the row must bring its own glyph.
+	 */
+	icon: IconRole;
 }
 
 export interface NavGroup {
@@ -114,9 +120,8 @@ export interface NavGroup {
 /**
  * Second keys of the `g <key>` jumps. The web's verbatim (nav.ts) except
  * `activity`, which has no web section (OURS: the free initial `a`).
- * Undrawable screens have NO entry: `providers` is deferred (network I/O),
- * `gain`/`traces`/`frustration` have no spec or are excluded — a jump that
- * paints a page the panel cannot honestly fill wastes the keystroke.
+ * Every drawable screen has an entry; a jump that paints a page the panel
+ * cannot honestly fill would waste the keystroke.
  */
 const HOTKEYS: Record<string, string> = {
 	overview: "o",
@@ -135,11 +140,11 @@ const HOTKEYS: Record<string, string> = {
 
 /**
  * Sidebar structure; the order here is the order on screen (nav.ts: `the
- * order here is the order on screen`). Usage keeps the web's order minus
- * deferred `providers`; Activity leads with the OURS `activity` summary, then
- * the web's `requests`, `errors` (excluded `traces` has no row); Insights
- * keeps `tools`, `projects` (excluded `frustration`, spec-less `gain` persisting
- * only as a scaffold have no row).
+ * order here is the order on screen`). Usage keeps the web's order with
+ * `providers` beside the screens it bills; Activity leads with the OURS
+ * `activity` summary, then the web's `requests`, `errors`, `traces`; Insights
+ * keeps `tools`, `projects`, `gain`, `frustration`. `NAV_GROUPS` drops any id
+ * the IR does not describe.
  */
 const GROUPS: Record<string, readonly string[]> = {
 	Usage: ["overview", "models", "costs", "providers"],
@@ -168,7 +173,9 @@ export const NAV_GROUPS: readonly NavGroup[] = Object.entries(GROUPS).map(([head
 	items: ids.flatMap(id => {
 		const spec = specForScreen(id);
 		const hotkey = HOTKEYS[id] ?? "";
-		return spec && isDrawableScreen(id) && hotkey !== "" ? [{ id: spec.id, label: spec.label, hotkey }] : [];
+		return spec && isDrawableScreen(id) && hotkey !== ""
+			? [{ id: spec.id, label: spec.label, hotkey, icon: TAB_ICON[spec.id as keyof typeof TAB_ICON] }]
+			: [];
 	}),
 }));
 
@@ -182,7 +189,7 @@ export function screenForHotkey(key: string): ScreenSpec["id"] | null {
 	const lower = key.toLowerCase();
 	for (const group of NAV_GROUPS) {
 		for (const item of group.items) {
-			if (item.hotkey === lower) return item.id;
+			if (item.hotkey === lower) return item.id as ScreenSpec["id"];
 		}
 	}
 	return null;
@@ -327,12 +334,67 @@ export interface Sidebar {
  * row reads as DISABLED, and the group cue lives in the heading where it can be
  * read without disabling anything.
  */
-export function sidebar(theme: Theme, preset: SymbolPreset, activeId: string, hoveredId?: string | null): Sidebar {
-	const activeGroup = NAV_GROUPS.find(group => group.items.some(item => item.id === activeId));
-	const items = NAV_GROUPS.flatMap(group => group.items);
+/**
+ * THE NAV IS A PARAMETER, NOT A CONSTANT. `groups` defaults to `NAV_GROUPS`, so
+ * the panel calls the 4-arg form and gets the real registry; the showcase passes
+ * its own sections and gets the SAME geometry, ink ladder, measurements and
+ * hover/active rules. The icon travels on the item (`NavItem.icon`) rather than
+ * being looked up from the id, because a nav that is not the screen registry has
+ * no `TAB_ICON` entry. `showcase/nav.ts` is now a list of rows, not a second
+ * painter.
+ */
+const SIDEBAR_CACHE = new WeakMap<Theme, Map<string, Sidebar>>();
+/** Identity of a nav list in the cache: a frozen array's identity is stable. */
+const GROUPS_ID = new WeakMap<readonly NavGroup[], string>();
+let nextGroupsId = 0;
+function groupsId(groups: readonly NavGroup[]): string {
+	const existing = GROUPS_ID.get(groups);
+	if (existing !== undefined) return existing;
+	const id = `nav${nextGroupsId++}`;
+	GROUPS_ID.set(groups, id);
+	return id;
+}
+
+export function sidebar(
+	theme: Theme,
+	preset: SymbolPreset,
+	activeId: string,
+	hoveredId?: string | null,
+	groups: readonly NavGroup[] = NAV_GROUPS,
+): Sidebar {
+	const key = `${groupsId(groups)}${preset}${activeId}${hoveredId ?? ""}`;
+	let byKey = SIDEBAR_CACHE.get(theme);
+	if (byKey === undefined) SIDEBAR_CACHE.set(theme, byKey = new Map());
+	const hit = byKey.get(key);
+	if (hit !== undefined) return { width: hit.width, lines: hit.lines };
+	const computed = computeSidebar(theme, preset, activeId, hoveredId ?? null, groups);
+	byKey.set(key, computed);
+	return { width: computed.width, lines: computed.lines };
+}
+
+/**
+ * `sidebar` MEASURES every icon and label on every call, and the panel calls it on
+ * every render. It is pure in `(theme, preset, activeId, hoveredId, groups)`, so
+ * it memoizes. The theme is keyed by IDENTITY in a `WeakMap` because it is the one
+ * argument whose identity — not its value — carries the styling; a string key
+ * would collide two themes that happen to share a preset. `groups` is keyed by
+ * identity too, for the same reason: two nav lists with equal contents are still
+ * two lists, and the showcase's is not the panel's.
+ *
+ * The returned `lines` array is SHARED. Callers read it; nothing writes to it.
+ */
+function computeSidebar(
+	theme: Theme,
+	preset: SymbolPreset,
+	activeId: string,
+	hoveredId: string | null,
+	groups: readonly NavGroup[],
+): Sidebar {
+	const activeGroup = groups.find(group => group.items.some(item => item.id === activeId));
+	const items = groups.flatMap(group => group.items);
 	// Measured, not assumed: the preset's icon width is data ink and the host
 	// registry does not always agree with `STATS_ICONS`.
-	const iconWidth = Math.max(...items.map(item => visibleWidth(statsIcon(preset, TAB_ICON[item.id], theme))));
+	const iconWidth = Math.max(...items.map(item => visibleWidth(statsIcon(preset, item.icon, theme))));
 	const labelWidth = Math.max(...items.map(item => visibleWidth(item.label)));
 	// `G <letter>` is a closed shape, so its width is a constant of the format.
 	const keyWidth = visibleWidth(JUMP_KEY_PREFIX) + 1;
@@ -342,7 +404,7 @@ export function sidebar(theme: Theme, preset: SymbolPreset, activeId: string, ho
 	const jump = (key: string): string => theme.fg(SIDEBAR_INK.jumpKey, key);
 	const lines: string[] = [];
 	const tail = " ".repeat(SIDEBAR_GAP);
-	for (const group of NAV_GROUPS) {
+	for (const group of groups) {
 		const heading =
 			group === activeGroup
 				? theme.bold(theme.fg(SIDEBAR_INK.headingActive, group.heading))
@@ -352,7 +414,7 @@ export function sidebar(theme: Theme, preset: SymbolPreset, activeId: string, ho
 			// `.nav-row-label { flex: 1 }` ported as a fixed label column plus a
 			// fixed trailing gap, which is what puts all eight jump keys in one
 			// column at the row's trailing edge.
-			const icon = pad(statsIcon(preset, TAB_ICON[item.id], theme), iconWidth);
+			const icon = pad(statsIcon(preset, item.icon, theme), iconWidth);
 			const label = pad(item.label, labelWidth);
 			const key = `${JUMP_KEY_PREFIX}${item.hotkey.toUpperCase()}`;
 			if (item.id === activeId) {
@@ -394,6 +456,41 @@ export function sidebar(theme: Theme, preset: SymbolPreset, activeId: string, ho
 	return { width, lines };
 }
 
+/** Cells the zip adds beside the sidebar: space, gutter, space. The body plan must subtract this. */
+export const SIDEBAR_ZIP_PREFIX = 3;
+
+/**
+ * Put the nav column beside a window of body rows: sidebar row first, a DIM
+ * column bar, body row after. The bar is `glyph(preset, "columnGap")` rather
+ * than `theme.symbol("sep.pipe")`, which measures three cells under two of the
+ * three presets.
+ *
+ * CALLED ON THE SLICED WINDOW, never on the source — the nav is frame chrome, so
+ * zipping it after the slice means the row index is the BODY's visible row rather
+ * than its document row.
+ *
+ * THE NAV SETS A FLOOR ON THE FRAME, NEVER THE OTHER WAY ROUND. Mapping over the
+ * body alone would make the nav exactly as tall as the body happened to be, so a
+ * short body silently DROPPED the bottom of the nav — the active marker
+ * disappearing on the screen that owns the last nav row. The frame is therefore
+ * at least `max(body rows, nav lines)` tall and the body is padded with blanks.
+ */
+export function zipSidebar(
+	theme: Theme,
+	bodyRows: readonly string[],
+	sidebarLines: readonly string[],
+	sidebarWidth: number,
+	preset: SymbolPreset,
+): readonly string[] {
+	const gutter = theme.fg("dim", glyph(preset, "columnGap"));
+	const height = Math.max(bodyRows.length, sidebarLines.length);
+	return Array.from({ length: height }, (_, index) => {
+		const side = index < sidebarLines.length ? sidebarLines[index]! : " ".repeat(sidebarWidth);
+		const body = index < bodyRows.length ? bodyRows[index]! : "";
+		return `${side} ${gutter} ${body}`;
+	});
+}
+
 export interface TopbarOptions {
 	range: Range;
 	chip: string;
@@ -401,6 +498,10 @@ export interface TopbarOptions {
 	freshness: string;
 	innerWidth: number;
 }
+
+const TOPBAR_CACHE = new WeakMap<Theme, Map<string, string>>();
+/** Bounded because a resize drag walks every width; clearing is safe (a cache, not state). */
+const TOPBAR_CACHE_LIMIT = 512;
 
 /**
  * THE TOPBAR IS THREE REGIONS, NOT ONE SENTENCE.
@@ -447,6 +548,24 @@ export interface TopbarOptions {
  * control always survives — the range IS the window you are looking at.
  */
 export function topbar(theme: Theme, opts: TopbarOptions): string {
+	const key = `${opts.range} ${opts.chip} ${opts.freshness} ${opts.innerWidth}`;
+	let byKey = TOPBAR_CACHE.get(theme);
+	if (byKey === undefined) TOPBAR_CACHE.set(theme, byKey = new Map());
+	const hit = byKey.get(key);
+	if (hit !== undefined) return hit;
+	const line = computeTopbar(theme, opts);
+	if (byKey.size >= TOPBAR_CACHE_LIMIT) byKey.clear();
+	byKey.set(key, line);
+	return line;
+}
+
+/**
+ * The memoized body of {@link topbar}. `topbar` is pure in
+ * `(theme, range, chip, freshness, innerWidth)`, and the chip and freshness strings
+ * already carry the sync state and the wall clock, so a hit means the bar cannot
+ * have changed. The theme is keyed by identity, as in {@link sidebar}.
+ */
+function computeTopbar(theme: Theme, opts: TopbarOptions): string {
 	const innerWidth = Math.max(0, opts.innerWidth);
 	const mode = framePolicy(innerWidth + HORIZONTAL_INSET).topbar;
 	const bar = tabBarTheme(theme);

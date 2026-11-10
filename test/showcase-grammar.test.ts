@@ -31,9 +31,10 @@
  *   - A WRAPPED table cell is out of the grammar by design (chart-redraw):
  *     wrapping breaks one-row-per-record, which every row-count invariant
  *     downstream depends on. The showcase shows TRUNCATION and labels it as such.
- *   - The `custom` band is unreachable through `renderScreen` (`toBand` turns
- *     every custom band into a NOTE) and is being retired. A showcase that used
- *     it would be demonstrating the grammar's bypass, not the grammar.
+ *   - The `custom` band is gone: it was unreachable through `renderScreen`
+ *     (the conversion turned it into a NOTE) and no spec declared one. A
+ *     showcase that used it would be demonstrating the grammar's bypass, not
+ *     the grammar.
  */
 
 import { expect, test } from "bun:test";

@@ -14,12 +14,10 @@ export type GlyphRole =
 	| "sparkRamp"
 	| "heatCell"
 	| "heatEmpty"
-	| "heatMarker"
 	| "columnGap"
 	| "axisLine"
 	| "trendUp"
 	| "trendFlat"
-	| "trendDown"
 	/**
 	 * The keyboard cursor on the selected row of a list. `▶` is the row pointer,
 	 * NOT a trend arrow — see {@link GlyphRole} `trendUp` for why the two must
@@ -39,13 +37,9 @@ export type GlyphRole =
 	| "pointHollow"
 	| "pointFilled"
 	/**
-	 * The horizontal axis a chart is measured against, drawn as a corner+rule
-	 * pair. `axisCorner` is the `└` that turns the corner; `axisRule` is the run
-	 * that follows it. They are separate roles because a rule with no corner is
-	 * a different shape, and the ascii ladder needs `+` for one and `-` for the
-	 * other.
+	 * The horizontal run a plot's corner turns into. A rule with no corner is a
+	 * different shape worth naming on its own; ascii needs `-` for it.
 	 */
-	| "axisCorner"
 	| "axisRule"
 	/**
 	 * A vertical spine at the left edge of a plot — the same mark as
@@ -53,12 +47,6 @@ export type GlyphRole =
 	 * silently restyle the other.
 	 */
 	| "plotSpine"
-	/**
-	 * The hairline gridline a plot measures against, dashed so it never reads as
-	 * the axis itself. Deliberately NOT `trendFlat`: that is a value mark inside
-	 * a cell, this is structure around the plot.
-	 */
-	| "plotGrid"
 	/**
 	 * A marker dropped on a track. Deliberately a filled diamond so it cannot
 	 * be confused with `pointFilled` at a glance.
@@ -68,15 +56,7 @@ export type GlyphRole =
 	 * The playhead: where "now" is on a time axis. It points DOWN because it sits
 	 * above the axis it marks, and down is the direction of the thing it labels.
 	 */
-	| "playhead"
-	/**
-	 * The selected bucket on a plot's x axis. It points UP because it sits BELOW
-	 * the axis and marks the column above it — the mirror of `playhead`, which
-	 * sits above a time axis and points down at it. Two roles rather than one
-	 * "axis marker" because the two are drawn on opposite sides of their axis and
-	 * a single role would force one of them to point the wrong way.
-	 */
-	| "plotCursor";
+	| "playhead";
 
 /**
  * A role resolves to either a single glyph or, for a ramp, an ordered ladder
@@ -88,7 +68,6 @@ export type GlyphSet = Readonly<Record<GlyphRole, GlyphValue>>;
 /** Ramp lengths, exported so charts can size a level domain without hardcoding numbers. */
 export const HEAT_LEVELS = 4;
 export const SPARK_LEVELS = 8;
-export const BAR_LEVELS = 8;
 
 /**
  * The unicode ladder. Block elements are font-independent rather than
@@ -109,7 +88,6 @@ const UNICODE_GLYPHS = {
 // beside the colour and read as a different calendar next to the real one.
 heatCell: ["■", "■", "■", "■"], // U+25A0 ×4 — every rung is BLACK SQUARE
 	heatEmpty: "·", // U+00B7 — byte-identical to the host's own /usage heatmap
-	heatMarker: "□", // U+25A1
 	// Bare U+2502, never `theme.symbol("sep.pipe")`: sep.pipe measures 3 cells
 	// under unicode/ascii and 1 under nerd, so it would triple the gap on two
 	// presets and look correct on the third.
@@ -132,8 +110,7 @@ heatCell: ["■", "■", "■", "■"], // U+25A0 ×4 — every rung is BLACK SQ
 	// preset, which it did not before.
 	axisLine: "_", // U+005F
 	trendUp: "▲", // U+25B2
-	trendFlat: "─", // U+2500
-	trendDown: "▼", // U+25BC
+	trendFlat: "─", // U+2500 — a flat value; live in the frustration connector row
 	/**
 	 * `▶` — the row the keyboard cursor is on. It is a POINTER, not a trend:
 	 * `▶` and `▲` both point at something, and reading them as one mark is how
@@ -155,12 +132,10 @@ heatCell: ["■", "■", "■", "■"], // U+25A0 ×4 — every rung is BLACK SQ
 	pointHollow: "•", // U+2022
 	pointFilled: "●", // U+25CF
 	/**
-	 * `└` + `─` — the L that turns a plot's corner. The corner says "origin",
-	 * the rule says "this is where values are read from"; they are two roles
-	 * because ascii needs `+` and `-` to draw the same L, and a rule with no
-	 * corner is a different shape worth naming on its own.
+	 * `─` — the run that follows a plot's corner. The corner says "origin", the
+	 * rule says "this is where values are read from"; they are two roles because
+	 * a rule with no corner is a different shape worth naming on its own.
 	 */
-	axisCorner: "└", // U+2514
 	axisRule: "─", // U+2500
 	/**
 	 * `│` — the plot's left spine. Identical to `columnGap` and kept apart on
@@ -170,12 +145,6 @@ heatCell: ["■", "■", "■", "■"], // U+25A0 ×4 — every rung is BLACK SQ
 	 */
 	plotSpine: "│", // U+2502
 	/**
-	 * `┄` — a dashed gridline, dashed precisely so it never reads as the axis.
-	 * Both are horizontal and differ only by weight; solid-vs-solid would make
-	 * them the same line.
-	 */
-	plotGrid: "┄", // U+2504
-	/**
 	 * `◆` — an event marked on a track. A DIAMOND rather than a disc so it
 	 * cannot be mistaken for `pointFilled` at a glance, which is the whole job
 	 * of marking something that is not a plotted value.
@@ -184,18 +153,8 @@ heatCell: ["■", "■", "■", "■"], // U+25A0 ×4 — every rung is BLACK SQ
 	/**
 	 * `▼` — the playhead on a time axis. Points DOWN because it sits above the
 	 * axis and points at it; up would point away from the thing it labels.
-	 * Same shape as `trendDown` and a different meaning (a value fell), which
-	 * is why it is its own role rather than a reuse.
 	 */
 	playhead: "▼", // U+25BC
-	/**
-	 * `▲` — the selected bucket on a plot's x axis, drawn BELOW the axis and
-	 * pointing up at the column it marks. The mirror of `playhead`, and a
-	 * separate role for exactly that reason: both mean "where the cursor is on an
-	 * axis", they are drawn on OPPOSITE sides of that axis, and one role would
-	 * force one of them to point the wrong way.
-	 */
-	plotCursor: "▲", // U+25B2
 } as const satisfies GlyphSet;
 
 /**
@@ -213,7 +172,6 @@ const ASCII_GLYPHS = {
 	// visually distinct from the faintest recorded day.
 	heatCell: [".", "-", "+", "#"],
 	heatEmpty: " ",
-	heatMarker: "o",
 	columnGap: "|",
 	// The same `_` the unicode set uses, for the same reason: a baseline sits at
 	// the bottom of the cell. It is never a blank, or the floor would vanish under
@@ -221,39 +179,26 @@ const ASCII_GLYPHS = {
 	axisLine: "_", // U+005F
 	trendUp: "^",
 	trendFlat: "-",
-	trendDown: "v",
-	// Every fallback below is chosen for what it must DISAMBIGUISHATE from the
+	// Every fallback below is chosen for what it must DISAMBIGUATE from the
 	// characters already in this set, not for how it looks alone.
 	//
 	// `>` matches the host's own ascii `nav.cursor` (symbols.ts:1182), so a list
 	// row points the same way under ascii as it does in the sidebar. `*` is the
-	// legend key because `o` is already `heatMarker` and `.` is already both
-	// `barEmpty` and `sparkRamp[0]`; `+` and `@` are the two point marks because
-	// `+` is `sparkRamp[5]` and `@` is `sparkRamp[7]` — neither co-occurs with a
-	// sparkline in the same view, which is the same bargain the existing ladder
-	// already makes. `|` is the spine because it is literally `columnGap`'s
-	// character, and `v` is the playhead because it is the only downward ASCII
-	// mark. `trackMarker` takes `^`, which is distinct from all three.
+	// legend key because `.` is already both `barEmpty` and `sparkRamp[0]`;
+	// `+` and `@` are the two point marks because `+` is `sparkRamp[5]` and
+	// `@` is `sparkRamp[7]` — neither co-occurs with a sparkline in the same
+	// view, which is the same bargain the existing ladder already makes. `|` is
+	// the spine because it is literally `columnGap`'s character.
 	rowCursor: ">", // U+003E — the host's ascii nav.cursor
-	legendKey: "*", // U+002A — `o` is heatMarker, `.` is barEmpty/sparkRamp[0]
+	legendKey: "*", // U+002A — `.` is barEmpty/sparkRamp[0]
 	pointHollow: "+", // U+002B
 	pointFilled: "@", // U+0040 — sparkRamp[7]; never in the same view
-	// `+` then `-` draw the same L as `└` then `─`. `-` is also `trendFlat`,
-	// which is right: an axis and a flat value are both one horizontal mark, and
-	// the two never share a view.
-	axisCorner: "+", // U+002B
+	// `-` is also `trendFlat`, which is right: an axis and a flat value are both
+	// one horizontal mark, and the two never share a view.
 	axisRule: "-", // U+002D — same mark as trendFlat, never in the same view
 	plotSpine: "|", // U+007C — the same vertical mark as columnGap
-	// `:` and NOT `-`, because a gridline and an axis both being `-` would make
-	// them the same line — exactly the confusion the dashed unicode form exists
-	// to prevent. `:` is the ascii idiom for a light reference line and is
-	// unused elsewhere in this set.
-	plotGrid: ":", // U+003A
-	trackMarker: "o", // U+006F — heatMarker's `o`, never in the same view
-	playhead: "v", // U+0076 — same as trendDown, never in the same view
-	// `^` for the plot cursor, mirroring the playhead's `v`: the two sit on
-	// opposite sides of their axis and point at it from opposite directions.
-	plotCursor: "^", // U+005E — same as trendUp, never in the same view
+	trackMarker: "o", // U+006F — never in the same view as a point mark
+	playhead: "v", // U+0076 — the only downward ASCII mark
 } as const satisfies GlyphSet;
 
 /**

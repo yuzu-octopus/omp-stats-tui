@@ -655,9 +655,12 @@ export class StatsPanel implements Component {
 	 *   focus, search, selection, calendar page, async payload — which no panel
 	 *   field mirrors. The feature context's `changed` is the only signal that state
 	 *   moved, so it bumps this.
-	 * - a MINUTE bucket of `now`. `ago` and the calendar's "today" read the wall
-	 *   clock, which is not in anyone's state; a minute is the finest granularity
-	 *   either of them renders.
+	 * Wall-clock readers live OUTSIDE the key. `ago` (the Live chip) and the
+	 * calendar's "today" read `now`, which is in no one's state; the chip is
+	 * recomputed on every `#frame` hit without recomposing the body (see
+	 * `#refreshChrome`), and the calendar only names a new day at a day
+	 * boundary the 30s reload already recomposes for. A bare minute tick must
+	 * not recompose the body, plan, nav, or feature render.
 	 *
 	 * COMPARED OUTSIDE THE STRING: `theme`, `data` and `#liveStatus` by IDENTITY.
 	 * A theme swap restyles every line at an unchanged preset, `data` is replaced
@@ -670,6 +673,9 @@ export class StatsPanel implements Component {
 	#frameKey(width: number, rows: number, preset: SymbolPreset): string {
 		const state = this.#state;
 		const event = state.syncEvent;
+		// No clock here: the whole frame agrees on the `now` read in
+		// `#chromeSync` / `#refreshChrome`, but only the chrome may change
+		// with it — never the cached body.
 		return [
 			width, rows, state.screenId, state.range, preset, state.generation,
 			state.error ?? "", state.syncError ?? "", state.readStage,
@@ -677,9 +683,43 @@ export class StatsPanel implements Component {
 			state.lastSyncedAt ?? -1,
 			state.hoveredSidebarId, state.hoveredStripId,
 			this.#featureRevision,
-			// Read once, here, so the whole frame agrees on one clock.
-			Math.floor((this.#options.now?.() ?? Date.now()) / 60_000),
 		].join(" ");
+	}
+
+	/**
+	 * The freshness notice the topbar carries, derived from state (already in
+	 * the key) — shared by `#frame` and `#refreshChrome` so the two agree.
+	 */
+	#freshness(): string {
+		const dirty = this.#state.data?.rollupStatus?.dirtyHours ?? 0;
+		// Above the host's exact limit the union stops happening, so this is no
+		// longer "pending" — it is holes in the numbers below.
+		return dirty > 0
+			? this.#theme.fg(
+					dirty > EXACT_DIRTY_LIMIT ? "warning" : "dim",
+					`${dirty} dirty ${dirty === 1 ? "hour" : "hours"}`,
+				)
+			: "";
+	}
+
+	/**
+	 * Recompute the clock-reading chrome over a cache hit, without recomposing
+	 * the body. `#frameKey` carries no clock, so a bare minute tick lands here:
+	 * the Live chip's `ago` advances while `source`, `plan` and `nav` stay the
+	 * same reference — and `composes` does not move.
+	 */
+	#refreshChrome(frame: FrameCache, width: number): void {
+		const innerWidth = Math.max(1, width - 4);
+		const chip = this.#phase() === "error"
+			? this.#theme.fg("error", `${this.#theme.symbol("status.error")} Read failed`)
+			: chipFor(this.#theme, this.#chromeSync());
+		const top = topbar(this.#theme, { range: this.#state.range, chip, freshness: this.#freshness(), innerWidth });
+		const progress = progressLineFor(this.#state.syncEvent, innerWidth);
+		const topLines = progress === "" ? [top] : [top, progress];
+		const strip = frame.headerLines.slice(frame.topbarRows);
+		frame.topbar = top;
+		frame.topbarRows = topLines.length;
+		frame.headerLines = [...topLines, ...strip];
 	}
 
 	/**
@@ -698,22 +738,16 @@ export class StatsPanel implements Component {
 			state.source = cached.source;
 			state.bodyHits = cached.bodyHits;
 			state.featureHits = cached.featureHits;
+			// The key carries no clock, so a wall-clock reader (Live chip `ago`)
+			// must be recomputed over the hit — never a recompose.
+			this.#refreshChrome(cached, width);
 			return cached;
 		}
 
 		const policy = framePolicy(width);
 		const innerWidth = Math.max(1, width - 4);
 
-		const dirty = state.data?.rollupStatus?.dirtyHours ?? 0;
-		// Above the host's exact limit the union stops happening, so this is no
-		// longer "pending" — it is holes in the numbers below.
-		const freshness =
-			dirty > 0
-				? this.#theme.fg(
-						dirty > EXACT_DIRTY_LIMIT ? "warning" : "dim",
-						`${dirty} dirty ${dirty === 1 ? "hour" : "hours"}`,
-					)
-				: "";
+		const freshness = this.#freshness();
 
 		// THE TOPBAR is the chrome's first row (web parity: Shell.tsx's fixed
 		// topbar), plus the thin progress line while a sync streams — the bar the

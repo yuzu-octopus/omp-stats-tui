@@ -87,15 +87,15 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
 		let data: unknown;
 		if (request.type === "fetch") {
 			const payload = await fetchFor(request.needs, request.range);
-			// `rollupStatus` is requested on every load; scanning for it would
-			// make the freshness check the most expensive part of the cheapest
-			// request. Anything else refreshes the cache at most once per interval.
-			const rollupOnly = request.needs.length === 1 && request.needs[0] === "rollupStatus";
-			if (!rollupOnly && Date.now() - pendingSessionsScannedAt >= FRESHNESS_SCAN_INTERVAL_MS) {
-				await scanPendingSessions();
+			// Freshness rides along, never blocks: attach the last-known count
+			// with its honest scan timestamp, emit, then refresh in background.
+			// The next live-status emission or next fetch carries the new count.
+			payload.freshness = { records: getMessageCount(), pendingSessions, observedAt: pendingSessionsScannedAt };
+			await emit({ id: request.id, data: payload });
+			if (Date.now() - pendingSessionsScannedAt >= FRESHNESS_SCAN_INTERVAL_MS) {
+				void scanPendingSessions().catch(error => console.error(error));
 			}
-			payload.freshness = { records: getMessageCount(), pendingSessions, observedAt: Date.now() };
-			data = payload;
+			continue;
 		} else if (request.type === "sync") {
 			live.requestSync();
 			data = live.status();

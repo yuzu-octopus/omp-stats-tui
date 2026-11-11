@@ -3,6 +3,7 @@ import type { FeatureContext } from "../features/types";
 import { resolveSeries } from "../palette";
 import { compactTokens, formatPercent } from "../format";
 import { glyph } from "../glyphs";
+import { clampCells } from "./measure";
 import { planTimeline, renderHostChart } from "./host-adapter";
 
 export interface TimelineRow {
@@ -51,6 +52,14 @@ function emptyState(active: readonly TimelineRow[]): string {
 }
 
 /**
+ * `MM-DD HH:mm` in UTC — the axis labels' only date shape. One helper so the
+ * header, footer-start and footer-end conversions stay byte-identical.
+ */
+function formatBucket(dateMs: number): string {
+	return new Date(dateMs).toISOString().slice(5, 16).replace("T", " ");
+}
+
+/**
  * Recorded buckets share one scale; null stays a gap and narrow views follow the selected point.
  *
  * GEOMETRY IS THE HOST'S. `planTimeline` builds the host table, `planChart`
@@ -68,7 +77,7 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 	const active = rows.filter(row => !options.hidden?.has(row.key));
 	const colors = resolveSeries(Math.max(rows.length, ...rows.map(row => (row.colorIndex ?? 0) + 1)), ctx.theme);
 	selected = Math.max(0, Math.min(axis.length - 1, selected));
-	const date = new Date(axis[selected]).toISOString().slice(5, 16).replace("T", " ");
+	const date = formatBucket(axis[selected]!);
 	const lines = wrapTextWithAnsi(ctx.theme.fg("dim", `${options.unit ? options.unit + " · " : ""}${date} UTC · ${axis.length} buckets`), w);
 	if (!active.length) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", "All series hidden; select a legend and toggle visibility to restore it."), w));
 	else {
@@ -86,17 +95,17 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 			labels: false,
 		}));
 	}
-	const first = new Date(axis[0]).toISOString().slice(5, 16).replace("T", " ");
-	const last = new Date(axis[axis.length - 1]).toISOString().slice(5, 16).replace("T", " ");
+	const first = formatBucket(axis[0]!);
+	const last = formatBucket(axis[axis.length - 1]!);
 	lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", `${first} → ${last} UTC`), w));
 	if (options.legend !== false) for (let r = 0; r < rows.length; r++) {
 		const row = rows[r], hidden = options.hidden?.has(row.key);
 		const value = row.values[selected];
 		const detail = (options.formatValue?.(row.key, value, selected) ?? (value === null || value === undefined ? "—" : format(value))) + (row.legendValue === undefined ? "" : ` · ${row.legendValue}`);
 		const prefix = `${row.key === options.selectedKey ? glyph(preset, "rowCursor") : " "} ${ctx.theme.fg(hidden ? "dim" : colors[row.colorIndex ?? r], glyph(preset, "legendKey"))} `;
-		const label = truncateToWidth((hidden ? "off " : "") + row.label, Math.max(1, w - visibleWidth(prefix) - visibleWidth(detail) - 2));
+		const label = clampCells((hidden ? "off " : "") + row.label, Math.max(1, w - visibleWidth(prefix) - visibleWidth(detail) - 2));
 		const line = prefix + label + " ".repeat(Math.max(1, w - visibleWidth(prefix + label) - visibleWidth(detail))) + detail;
 		lines.push(hidden ? ctx.theme.fg("dim", line) : line);
 	}
-	return lines.map(line => truncateToWidth(line, w));
+	return lines.map(line => clampCells(line, w));
 }

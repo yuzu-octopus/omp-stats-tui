@@ -8,6 +8,7 @@ import {
 	panelAction,
 	__testing,
 } from "../src/tui/panel";
+import type { LiveStatus } from "@oh-my-pi/omp-stats/shared-types";
 import type { PanelAction, PanelReads, PanelTestState, StatsPanel } from "../src/tui/panel";
 import { DATA_NEEDS, type DataNeed, type PanelData } from "../src/data/api";
 import { DEFAULT_RANGE, RANGES, nextRange, rangeLabel } from "../src/data/ranges";
@@ -965,6 +966,51 @@ test("a feature's own state change invalidates the body cache", async () => {
 	panel.render(100);
 	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
 });
+
+test("a bare minute tick does not recompose, but the chrome's relative time still advances", async () => {
+	// The frame key carries no clock: `ago` (the Live chip) is the only reader
+	// that changes across a minute boundary with identical state, and it is
+	// recomputed over the cache hit — never a recompose.
+	let now = FIXTURE_NOW + 3 * 3_600_000;
+	let listener: ((status: LiveStatus) => void) | undefined;
+	const reads = {
+		...stubReader(),
+		subscribe: (status: (status: LiveStatus) => void) => {
+			listener = status;
+			return () => {};
+		},
+	};
+	const panel = __testing.makePanel({
+		reads,
+		now: () => now,
+		rows: 40,
+	});
+	await __testing.settled(panel);
+	// A settled sync five minutes back renders `5m ago` under the first clock.
+	// The chip reads the subscription's sync state, so push a live status
+	// whose last sync finished 5 minutes ago.
+	listener?.({
+		version: 1,
+		indexingHours: 0,
+		sync: { phase: "idle", current: 0, total: 0, processed: 1, lastSyncedAt: now - 5 * 60_000, error: null },
+	});
+	const first = panel.render(100).map(stripAnsi);
+	expect(first.join("\n")).toContain("5m ago");
+	const before = __testing.debugComposeCount(panel);
+	const body = __testing.debugState(panel).source;
+	// 61s later, same state: the body is byte-identical and no recompose ran.
+	now += 61_000;
+	const second = panel.render(100).map(stripAnsi);
+	expect(__testing.debugComposeCount(panel)).toBe(before);
+	expect(__testing.debugState(panel).source).toBe(body);
+	// Chrome DID advance: the chip now reads `6m ago` while every other line
+	// is byte-identical.
+	expect(second.join("\n")).toContain("6m ago");
+	expect(second.filter((line) => !line.includes("ago"))).toEqual(
+		first.filter((line) => !line.includes("ago")),
+	);
+});
+
 
 // ---------------------------------------------------------------------------
 // Correctness rules that are visible in the painted rows

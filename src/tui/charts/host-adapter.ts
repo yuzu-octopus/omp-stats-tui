@@ -27,6 +27,7 @@ import type { TimelineRow, TimeSeriesOptions } from "./time-series";
 import type { SeriesChartSeries } from "./compose";
 export type { SeriesChartSeries };
 import { bandHeights, bandMax } from "./compose";
+import { NO_ACTIVITY } from "./measure";
 import { renderDailyBars } from "./bars";
 import { resolveSeries, type PaletteTheme } from "../palette";
 import { glyph, glyphsFor, SPARK_LEVELS, type SymbolPreset } from "../glyphs";
@@ -100,6 +101,27 @@ function cell(value: number | null | undefined, currency: boolean): string {
   return value < 0 ? `-$${-value}` : `$${value}`;
 }
 
+/**
+ * The Bucket column as ISO strings, so the host reads it as temporal.
+ *
+ * `analyzeTable` types a column from every cell (temporal needs >=80%
+ * date-kind cells), so a single sample row would flip the plan — the whole
+ * column stays ISO. Built ONCE per axis shape and cached: bucket axes are
+ * uniform, so length + first + last identify the contents exactly, and cache
+ * hits allocate zero Dates. The plan output is byte-identical by construction.
+ */
+const ISO_CACHE_LIMIT = 8;
+const isoColumnCache = new Map<string, string[]>();
+function isoColumn(axis: readonly number[]): string[] {
+  const key = `${axis.length}:${axis[0]}:${axis[axis.length - 1]}`;
+  const hit = isoColumnCache.get(key);
+  if (hit !== undefined) return hit;
+  const column = axis.map((timestamp) => new Date(timestamp).toISOString());
+  if (isoColumnCache.size >= ISO_CACHE_LIMIT) isoColumnCache.delete(isoColumnCache.keys().next().value!);
+  isoColumnCache.set(key, column);
+  return column;
+}
+
 // ─── Timeline planning ───────────────────────────────────────────────────────
 
 /**
@@ -125,11 +147,14 @@ export function planTimeline(
   if (!axis.length || !rows.length) return undefined;
 
   const currency = rows.map((row) => options.currency ?? (row.key === "cost"));
+  // Typed once: the whole ISO column (not a sample row — uniform types keep
+  // the host's temporal typing), cached per axis shape so repeat renders
+  // allocate O(1) Dates instead of O(buckets).
+  const bucket = isoColumn(axis);
   const table = analyzeTable(
     ["Bucket", ...rows.map((row) => row.label)],
-    axis.map((timestamp, index) => [
-      // An ISO timestamp, so the host reads the column as temporal.
-      new Date(timestamp).toISOString(),
+    bucket.map((when, index) => [
+      when,
       ...rows.map((row, column) => cell(row.values[index], currency[column]!)),
     ]),
   );
@@ -337,14 +362,6 @@ export interface HostChartOptions {
   dim?: (text: string) => string;
   labels?: boolean;
 }
-
-/**
- * What a temporal spec says when every reading is zero. The band renderer's
- * own sentence, retyped here so the two renderings of one state agree — the
- * plot only reaches this on the defensive path, since `worthCharting` already
- * rejects an all-zero table before a spec exists.
- */
-const NO_ACTIVITY = "No activity recorded in this range.";
 
 /**
  * A multi-series temporal plot on ONE shared scale — the geometry the old

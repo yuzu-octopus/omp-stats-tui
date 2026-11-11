@@ -43,3 +43,6 @@ export function ellipsizeCells(text: string, width: number): string {
  * deliberate — not this sentence.)
  */
 export const NO_ACTIVITY = "No activity recorded in this range.";
+
+/** A clickable bucket span, rows relative to the chart's own output. The caller adds its layout offset and series identity. */
+export interface BucketSpan { rowStart: number; rowEnd: number; colStart: number; colEnd: number; index: number; }

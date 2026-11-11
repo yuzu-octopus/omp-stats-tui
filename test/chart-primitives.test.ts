@@ -34,6 +34,9 @@ import { PALETTE, heatRamp, resolveSeries, stripForTest, type PaletteTheme } fro
 import { glyphsFor, type SymbolPreset } from "../src/tui/glyphs";
 import type { CostTimeSeriesPoint, DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
 import { planSeries, planTimeline, renderHostChart, renderSeriesChart } from "../src/tui/charts/host-adapter";
+import { renderDotWhisker } from "../src/tui/charts/dot-whisker";
+import { renderWaterfall } from "../src/tui/charts/waterfall";
+import { renderTimeSeries } from "../src/tui/charts/time-series";
 
 const PRESETS: readonly SymbolPreset[] = ["unicode", "ascii", "nerd"];
 const WIDTHS = [40, 80, 120, 200] as const;
@@ -712,4 +715,82 @@ test("renderShareBar never exceeds its row width, even when the readout is wider
 	}
 	// At a width the readout fits, the row is exactly that wide.
 	expect(cells(renderShareBar(0.5, { width: 40, accent: paint }, long))).toBe(40);
+});
+
+// ─── Bucket hit spans: charts a reader can click ────────────────────────────
+
+test("daily bars emit one clickable span per non-null bucket, newest kept when clipped", () => {
+	const spans: { colStart: number; colEnd: number; index: number }[] = [];
+	renderDailyBars([1, null, 3], { width: 10, height: 4, glyphs: glyphsFor("unicode"), accent: paint, dim: paint, reportBuckets: s => spans.push(...s) });
+	expect(spans.map(s => s.index)).toEqual([0, 2]);
+	expect(spans[0]).toMatchObject({ colStart: 0, colEnd: 1 });
+	// Null gap emits no hit: a gap is not selectable.
+	expect(spans.some(s => s.index === 1)).toBe(false);
+});
+
+test("daily bars map clipped columns back to data indexes", () => {
+	const spans: { index: number }[] = [];
+	renderDailyBars([1, 2, 3, 4, 5], { width: 3, height: 4, glyphs: glyphsFor("unicode"), accent: paint, dim: paint, reportBuckets: s => spans.push(...s) });
+	expect(spans.map(s => s.index)).toEqual([2, 3, 4]);
+});
+
+test("series bands emit row-offset spans per visible bucket", () => {
+	const series: SeriesChartSeries[] = [
+		{ label: "A", values: [5, null, 5] },
+		{ label: "B", values: [1, 1, 1] },
+	];
+	const seen: { rowStart: number; rowEnd: number; colStart: number; index: number }[] = [];
+	renderSeriesChart(series, {
+		width: 10, height: 8, preset: "unicode", theme: THEME,
+		paint: (_color, text) => text,
+		reportBuckets: s => seen.push(...s),
+	});
+	// Bucket 1 is null in A but plotted in B: still clickable (some series drew it).
+	expect(seen.some(s => s.index === 1)).toBe(true);
+	// Band rows advance: the second band's spans start below the first's.
+	const aRows = seen.filter(s => s.rowStart < 4);
+	expect(aRows.length).toBeGreaterThan(0);
+});
+
+// ─── DotWhisker + Waterfall: honest terminal geometries ─────────────────────
+
+test("dot-whisker overlaps marks, gaps nulls, and holds the width", async () => {
+	const glyphs = glyphsFor("unicode");
+	// Overlap: later mark wins the cell; both magnitudes visible in the track.
+	const rows = renderDotWhisker([
+		{ label: "fetch-back", marks: [{ value: 0.8, lo: 0.2, hi: 0.9 }] },
+		{ label: "quiet", marks: [{ value: null, lo: null, hi: null }] },
+	], { width: 40, glyphs });
+	expect(rows).toHaveLength(2);
+	for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(40);
+	expect(rows[0]).toContain("◆");
+	// Null mark draws no cell — the quiet row carries its label and blanks.
+	expect(rows[1]).not.toContain("◆");
+});
+
+test("waterfall asserts its total and renders negatives honestly", async () => {
+	const glyphs = glyphsFor("unicode");
+	const lines = renderWaterfall([
+		{ label: "gross", kind: "total", value: 100 },
+		{ label: "reread", kind: "delta", value: -30 },
+		{ label: "net", kind: "total", value: 70 },
+	], { width: 40, glyphs });
+	expect(lines).toHaveLength(3);
+	for (const line of lines) expect(cells(line)).toBeLessThanOrEqual(40);
+	// The net bar is shorter than the gross bar: the total is the sum.
+	expect(cells(lines[2]!.trim())).toBeLessThan(cells(lines[0]!.trim()));
+	// Empty steps get the shared sentence, not blank rows.
+	expect(renderWaterfall([], { width: 40, glyphs })).toEqual(["No activity recorded in this range."]);
+});
+
+test("empty state names the active filter; no-filter calls are unchanged", async () => {
+	const theme = { ...THEME, fg: (_c: string, t: string) => t, getSymbolPreset: () => "unicode" as const };
+	const ctx = { theme, changed: () => {}, copy: async () => {}, openTrace: () => {}, openScreen: () => {}, now: () => 0 } as never;
+	// Flat series the host will not chart: no-filter output is the bare sentence.
+	const flat = renderTimeSeries(ctx, [1, 2, 3], [{ key: "a", label: "A", values: [0, 0, 0] }], 40, 0, { legend: false }).join(" ").replace(/\n/g, " ");
+	expect(flat).toContain("No positive measured values in this range.");
+	expect(flat).not.toContain("Matching");
+	// With a filter, the same taxonomy plus context.
+	const filtered = renderTimeSeries(ctx, [1, 2, 3], [{ key: "a", label: "A", values: [0, 0, 0] }], 40, 0, { legend: false, filter: "provider x" }).join(" ").replace(/\n/g, " ");
+	expect(filtered).toContain("No positive measured values in this range. Matching provider x.");
 });

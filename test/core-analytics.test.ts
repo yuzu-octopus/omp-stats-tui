@@ -332,3 +332,32 @@ test("performance retains missing samples as gaps, separately from measured zero
 	expect(measuredText).not.toContain("gaps are not zero");
 	expect(measuredText).toMatch(/(?:^|\s)0\.0 tok\/s/);
 });
+
+test("clicking a chart bucket selects the same point as the ,/. keys", async () => {
+	const feature = createAnalyticsFeature("models", context(MODELS));
+	await feature.load("all");
+	// Two buckets; the point starts on the latest (09-21). Click bucket 0.
+	expect(typeof feature.handleHit).toBe("function");
+	feature.handleHit!({ type: "selectBucket", series: "requests", index: 0 });
+	const viaClick = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(viaClick).toContain("09-20 00:00 UTC · 2 buckets");
+	// Keyboard agrees: back to latest with ".", then one step left with ",".
+	feature.handleInput(".");
+	feature.handleInput(",");
+	const viaKeys = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(viaKeys).toContain("09-20 00:00 UTC · 2 buckets");
+});
+
+test("model rows carry an inline trend sparkline at wide widths, dropped when narrow", async () => {
+	const feature = createAnalyticsFeature("models", context(MODELS));
+	await feature.load("all");
+	const wide = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(wide).toContain("Trend");
+	// The sparkline is shape ink, not a number: the row carries block glyphs.
+	const row = wide.split("\n").find(line => line.includes("same-model · provider-a") && line.includes("tok/s")) ?? "";
+	expect(row).toMatch(/[▁▂▃▄▅▆▇█]/);
+	const narrow = feature.render(60, 60).map(stripForTest).join("\n");
+	expect(narrow).not.toContain("Trend");
+	// Numbers survive narrowing even when the shape is dropped.
+	expect(narrow).toContain("same-model · provider-a");
+});

@@ -3,7 +3,8 @@ import type { FeatureContext } from "../features/types";
 import { resolveSeries } from "../palette";
 import { compactTokens, formatPercent } from "../format";
 import { glyph } from "../glyphs";
-import { clampCells } from "./measure";
+import { clampCells, type BucketSpan } from "./measure";
+export type { BucketSpan };
 import { planTimeline, renderHostChart } from "./host-adapter";
 
 export interface TimelineRow {
@@ -27,6 +28,10 @@ export interface TimeSeriesOptions {
 	legend?: boolean;
 	/** Caller intent: mark this chart as currency. When absent, falls back to key sniffing (row.key === "cost"). */
 	currency?: boolean;
+	/** Called with clickable bucket spans (chart-relative rows). Null-gap and width-clamped buckets are omitted. */
+	reportBuckets?: (spans: readonly BucketSpan[]) => void;
+	/** Active filter context appended to the empty state ("Matching X."). No-filter calls render byte-identical strings. */
+	filter?: string;
 }
 
 /**
@@ -38,7 +43,7 @@ export interface TimeSeriesOptions {
  * judged too flat to draw. Those are three different claims and the reader
  * must not be handed the same one for each.
  */
-function emptyState(active: readonly TimelineRow[]): string {
+function emptyState(active: readonly TimelineRow[], filter?: string): string {
 	let measured = false;
 	let max = 0;
 	for (const row of active) for (const value of row.values) {
@@ -46,9 +51,13 @@ function emptyState(active: readonly TimelineRow[]): string {
 		measured = true;
 		if (value > max) max = value;
 	}
-	if (!measured) return "No readings in the visible series; gaps are not zero.";
-	if (max === 0) return "No positive measured values in this range.";
-	return "No chart-worthy data in this range.";
+	const base = !measured ? "No readings in the visible series; gaps are not zero."
+		: max === 0 ? "No positive measured values in this range."
+		: "No chart-worthy data in this range.";
+	// Context is a suffix, never a fourth sentence: the taxonomy (no readings /
+	// all zero / not chart-worthy) is picked first, the active filter appended.
+	// No-filter calls render byte-identical strings.
+	return filter ? `${base} Matching ${filter}.` : base;
 }
 
 /**
@@ -81,8 +90,9 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 	const lines = wrapTextWithAnsi(ctx.theme.fg("dim", `${options.unit ? options.unit + " · " : ""}${date} UTC · ${axis.length} buckets`), w);
 	if (!active.length) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", "All series hidden; select a legend and toggle visibility to restore it."), w));
 	else {
+		const plotStart = lines.length;
 		const spec = planTimeline(axis, active, options);
-		if (!spec) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", emptyState(active)), w));
+		if (!spec) lines.push(...wrapTextWithAnsi(ctx.theme.fg("dim", emptyState(active, options.filter)), w));
 		else lines.push(...renderHostChart(spec, {
 			width: w,
 			height: options.height,
@@ -93,6 +103,7 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 			// renderer keeps. Labels are off: the legend below names the series.
 			dim: text => ctx.theme.fg("dim", text),
 			labels: false,
+			reportBuckets: options.reportBuckets ? spans => options.reportBuckets!(spans.map(span => ({ ...span, rowStart: span.rowStart + plotStart, rowEnd: span.rowEnd + plotStart }))) : undefined,
 		}));
 	}
 	const first = formatBucket(axis[0]!);

@@ -7,9 +7,10 @@ import type { ModelStats, ToolDashboardStats } from "@oh-my-pi/omp-stats/shared-
 import type { CostPayload, ModelDashboardPayload } from "../../../data/api";
 import type { Range } from "../../../data/ranges";
 import { renderTimeSeries } from "../../charts/time-series";
+import { renderSparkline } from "../../charts/sparkline";
 import type { StatTile } from "../../band";
 import { focusTabs, metricGrid, sectionHeading } from "../presentation";
-import type { FeatureContext, FeatureController } from "../types";
+import type { FeatureContext, FeatureController, FeatureHitAction } from "../types";
 import { ChartState, ListState, fields, wrap, type CoreSeries, type ListColumn, type Sorters } from "./shared";
 
 type AnalyticsId = "models" | "costs" | "tools";
@@ -59,6 +60,7 @@ class AnalyticsFeature implements FeatureController {
 	private detailMode: "performance" | "trend" = "performance";
 	private trends = new Map<string, CoreSeries>();
 	private readonly tables: Table[];
+	private performancePoints = 0;
 	private buckets: number[] = [];
 	private modes: { label: string; series: CoreSeries[]; unit: string }[] = [];
 	private metrics: StatTile[] = [];
@@ -212,6 +214,16 @@ class AnalyticsFeature implements FeatureController {
 		return t.state.rows(t.rows.filter(r => (this.id !== "tools" || index !== 1 || filter === null || r.tool === filter) && (!search || `${r.label} ${fields(r.values).join(" ")}`.toLocaleLowerCase().includes(search))), sorters(t.rows));
 	}
 
+	/** Per-row trend values by row key. Models/tools reuse the detail trends; costs uses the plotted mode's series. */
+	private sparkSeries(): Map<string, CoreSeries> {
+		if (this.id === "costs") {
+			const mode = this.mode();
+			return new Map((mode?.series ?? []).map(s => [s.key, s]));
+		}
+		return this.trends;
+	}
+
+
 	private mode() { return this.modes[this.chart.mode % Math.max(1, this.modes.length)]; }
 
 	render(width: number, height: number): readonly string[] {
@@ -226,7 +238,16 @@ class AnalyticsFeature implements FeatureController {
 				if (this.id === "models" && this.detailMode === "performance") lines.push(...this.renderPerformance(selected.key, width), "m requests trend");
 				else if (this.id === "models" || this.id === "tools") {
 					const trend = this.trends.get(this.id === "tools" ? selected.tool ?? selected.key : selected.key);
-					lines.push(this.id === "tools" ? "Tool call trend (all models)" : "Model request trend", ...this.trendChart.render(this.ctx, width, this.buckets, trend ? [trend] : [], { height: 5, unit: this.id === "tools" ? "calls" : "requests", format: formatInteger }), ...(this.id === "models" ? ["m performance chart"] : []));
+					lines.push(this.id === "tools" ? "Tool call trend (all models)" : "Model request trend");
+					const trendStart = lines.length;
+					const trendKey = this.trendChart.selectedKey ?? (trend ? trend.key : "") ?? "";
+					lines.push(...this.trendChart.render(this.ctx, width, this.buckets, trend ? [trend] : [], { height: 5, unit: this.id === "tools" ? "calls" : "requests", format: formatInteger,
+						reportBuckets: spans => this.ctx.reportHits?.(spans.map(span => ({
+							rowStart: span.rowStart + trendStart, rowEnd: span.rowEnd + trendStart,
+							colStart: span.colStart, colEnd: span.colEnd,
+							action: { type: "selectBucket", series: trendKey, index: span.index },
+						}))),
+					}), ...(this.id === "models" ? ["m performance chart"] : []));
 				}
 				lines.push(...fields(selected.display));
 				lines.push("b/Esc back · Tab focus · q close");
@@ -256,10 +277,17 @@ class AnalyticsFeature implements FeatureController {
 			const unknown = this.unpriced.reduce((total, count) => total + count, 0);
 			if (this.id === "costs" && unknown > 0 && mode.series.every(s => s.values.every(value => value === 0)))
 				chartBlock.push(`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`);
+			const blockStart = lines.length + chartBlock.length;
+			const seriesKey = this.chart.selectedKey ?? mode.series[0]?.key ?? "";
 			chartBlock.push(...this.chart.render(this.ctx, width, this.buckets, mode.series, {
 				unit: mode.unit === "USD" ? "known-priced USD / day" : mode.unit, percent: mode.unit === "share", stacked: true,
 				format: mode.unit === "USD" ? formatCost : mode.unit === "share" ? formatPercent : formatCompact, height: chartPlot,
 				formatValue: mode.unit === "USD" ? (key, value, point) => value === null || value === undefined ? "—" : formatEstimatedCost(value, this.chart.mode % 2 === 0 ? this.costSeriesUnknown.get(key)?.[point] ?? 0 : this.unpriced[point] ?? 0) : undefined,
+				reportBuckets: spans => this.ctx.reportHits?.(spans.map(span => ({
+					rowStart: span.rowStart + blockStart, rowEnd: span.rowEnd + blockStart,
+					colStart: span.colStart, colEnd: span.colEnd,
+					action: { type: "selectBucket", series: seriesKey, index: span.index },
+				}))),
 			}));
 			this.chart.point = Math.min(this.chart.point, Math.max(0, this.buckets.length - 1));
 			const point = this.chart.point;
@@ -288,6 +316,10 @@ class AnalyticsFeature implements FeatureController {
 			},
 		});
 		const columns: ListColumn<Row>[] = [{ key: "identity", header: this.id === "tools" ? "Tool / model" : index === 1 ? "Component" : "Model / provider", align: "left", value: row => row.label }];
+		// Inline shape: the web draws an 80×20 Sparkline per model/tool row.
+		// Ours is one 12-cell line, first-dropped when narrow (priority 8 beats
+		// every numeric column) — numbers survive narrowing, shapes don't have to.
+		if (index === 0) columns.push({ key: "trend", header: "Trend", align: "left", priority: 8, value: row => sparkCell(this.sparkSeries().get(row.key)?.values ?? []) });
 		if (this.id === "models") columns.push(numeric("totalRequests", "Requests"), numeric("totalCost", "Estimate", 1), numeric("errorRate", "Errors", 3), numeric("conversationTokens", "Tokens", 4), numeric("avgDuration", "Duration", 5), numeric("avgTtft", "TTFT", 6), numeric("avgTokensPerSecond", "tok/s", 7));
 		else if (this.id === "costs") columns.push(numeric("cost", "Estimate"), numeric("unpricedRequests", "Unpriced", 1), numeric("share", "Share", 3), ...(index === 0 ? [numeric("requests", "Requests", 2), numeric("perPricedRequest", "/ priced req", 4)] : []));
 		else columns.push(numeric("calls", "Calls"), numeric("errors", "Errors", 2), numeric("costShare", "Estimate", 1), numeric("totalTokensShare", "Tokens", 3), numeric("errorRate", "Error %", 4));
@@ -297,6 +329,7 @@ class AnalyticsFeature implements FeatureController {
 
 	private renderPerformance(key: string, width: number): string[] {
 		const points = this.performance.get(key) ?? [];
+		this.performancePoints = points.length;
 		if (!points.length) return ["No performance samples. Timing is recorded for streamed responses."];
 		this.performanceChart.reconcile(points.map(point => point.timestamp), ["tps", "ttft"]);
 		const p = points[this.performanceChart.point];
@@ -307,9 +340,18 @@ class AnalyticsFeature implements FeatureController {
 			{ label: "Requests", value: formatInteger(p.requests), hint: new Date(p.timestamp).toISOString() },
 		]), ...series.map((s, i) => `${i === this.performanceChart.seriesIndex % series.length ? ">" : " "} ${this.performanceChart.hidden.has(s.key) ? "off" : "on"} ${s.label}`)];
 		// Different units retain independent scales and honest missing samples.
-		for (const s of series) if (!this.performanceChart.hidden.has(s.key)) lines.push(...renderTimeSeries(this.ctx, points.map(point => point.timestamp), [s], width, this.performanceChart.point, {
-			height: 4, unit: s.key === "tps" ? "tok/s" : "s", format: value => s.key === "tps" ? formatTokensPerSecond(value) : formatDurationMs(value * 1000), legend: false,
-		}));
+		for (const s of series) if (!this.performanceChart.hidden.has(s.key)) {
+			const perfStart = lines.length;
+			const skey = s.key;
+			lines.push(...renderTimeSeries(this.ctx, points.map(point => point.timestamp), [s], width, this.performanceChart.point, {
+				height: 4, unit: s.key === "tps" ? "tok/s" : "s", format: value => s.key === "tps" ? formatTokensPerSecond(value) : formatDurationMs(value * 1000), legend: false,
+				reportBuckets: spans => this.ctx.reportHits?.(spans.map(span => ({
+					rowStart: span.rowStart + perfStart, rowEnd: span.rowEnd + perfStart,
+					colStart: span.colStart, colEnd: span.colEnd,
+					action: { type: "selectBucket", series: skey, index: span.index },
+				}))),
+			}));
+		}
 		lines.push("n/v series · ,/. point");
 		return lines;
 	}
@@ -364,7 +406,29 @@ class AnalyticsFeature implements FeatureController {
 		return consumed;
 	}
 
+	handleHit(action: FeatureHitAction): void {
+		// Click a bucket = the `,`/`.` keyboard path: select that point. The
+		// series comes from the legend selection the click aliases. Clicks on
+		// the expanded detail trend or performance charts select their points.
+		// Each chart clamps to its own axis: the performance chart plots the
+		// detail's samples, not the screen buckets.
+		if (action.type !== "selectBucket") return;
+		if ((action.series === "tps" || action.series === "ttft") && this.performancePoints > 0) {
+			this.performanceChart.point = Math.max(0, Math.min(this.performancePoints - 1, action.index));
+		} else if (this.buckets.length) {
+			const point = Math.max(0, Math.min(this.buckets.length - 1, action.index));
+			if (action.series === this.trendChart.selectedKey) this.trendChart.point = point;
+			else this.chart.point = point;
+		}
+		this.ctx.changed();
+	}
+
 	dispose(): void { this.closed = true; this.generation++; }
+}
+
+/** One 12-cell inline trend. Nulls sit on the baseline without poisoning the scale (sparkline rule 3); empty series render blank, never zero. */
+function sparkCell(values: readonly (number | null)[]): string {
+	return renderSparkline(values.map(v => v ?? NaN), { width: 12 });
 }
 
 export function createAnalyticsFeature(id: AnalyticsId, ctx: FeatureContext): FeatureController {

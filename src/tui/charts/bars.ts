@@ -42,7 +42,7 @@ import { densify, pivotSeries } from "@oh-my-pi/omp-stats/client/data/series";
 import { buildCostSummary } from "@oh-my-pi/omp-stats/client/data/view-models";
 import type { CostTimeSeriesPoint } from "@oh-my-pi/omp-stats/shared-types";
 import type { GlyphSet, GlyphValue } from "../glyphs";
-import { NO_ACTIVITY, clampCells as clamp } from "./measure";
+import { NO_ACTIVITY, clampCells as clamp, type BucketSpan } from "./measure";
 
 export interface BarsOptions {
 	/** Columns available to the chart. No rendered row may exceed it. */
@@ -79,6 +79,8 @@ export interface BarsOptions {
 	 * series colour.
 	 */
 	dim: (text: string) => string;
+	/** Called with clickable bucket spans (chart-relative rows). Null and clamped buckets omitted. */
+	reportBuckets?: (spans: readonly BucketSpan[]) => void;
 }
 
 /**
@@ -279,6 +281,15 @@ export function renderDailyBars(values: readonly (number | null)[], opts: BarsOp
 	];
 
 	const rows = plotRows(opts.height);
+	if (opts.reportBuckets) {
+		const base = values.length - kept.length;
+		const spans: BucketSpan[] = [];
+		for (let c = 0; c < kept.length; c++) {
+			if (kept[c] === null) continue;
+			spans.push({ rowStart: 0, rowEnd: rows + 1, colStart: c, colEnd: c + 1, index: base + c });
+		}
+		opts.reportBuckets(spans);
+	}
 	return compose(heights(columns, rows, opts.max), rows, { ...opts, width });
 }
 

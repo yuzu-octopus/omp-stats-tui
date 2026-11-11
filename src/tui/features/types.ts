@@ -13,7 +13,8 @@ export interface FeatureReader {
 /** What a body hit does when clicked. Features own the semantics. */
 export type FeatureHitAction =
 	| { type: "selectRow"; key: string }
-	| { type: "selectDay"; day: string };
+	| { type: "selectDay"; day: string }
+	| { type: "selectBucket"; series: string; index: number };
 
 /**
  * A clickable span in the feature's OWN render output: 0-based rows, half-open

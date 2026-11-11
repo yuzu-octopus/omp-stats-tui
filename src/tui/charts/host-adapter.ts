@@ -27,7 +27,7 @@ import type { TimelineRow, TimeSeriesOptions } from "./time-series";
 import type { SeriesChartSeries } from "./compose";
 export type { SeriesChartSeries };
 import { bandHeights, bandMax } from "./compose";
-import { NO_ACTIVITY } from "./measure";
+import { NO_ACTIVITY, type BucketSpan } from "./measure";
 import { renderDailyBars } from "./bars";
 import { resolveSeries, type PaletteTheme } from "../palette";
 import { glyph, glyphsFor, SPARK_LEVELS, type SymbolPreset } from "../glyphs";
@@ -85,6 +85,8 @@ export interface SeriesChartOptions {
 	 * chart themselves turn it off.
 	 */
 	labels?: boolean;
+	/** Called with clickable bucket spans (chart-relative rows). Null-gap and clamped buckets omitted. */
+	reportBuckets?: (spans: readonly BucketSpan[]) => void;
 }
 
 // ─── Table cells ─────────────────────────────────────────────────────────────
@@ -319,8 +321,9 @@ export function renderSeriesChart(
       }
     }
   }
-
   const rows: string[] = [];
+
+  const report = opts.reportBuckets;
   for (const [index, entry] of series.entries()) {
     const color = colors[index] ?? colors[0]!;
     const apply = (text: string) => opts.paint(color, text);
@@ -334,7 +337,8 @@ export function renderSeriesChart(
       // `dim` is CHROME, not this series' hue: the floor belongs to the
       // chart, and painting it in a data colour is what made the old track
       // fill read as measured values.
-      rows.push(...renderDailyBars(entry.values, { width, height, max, glyphs, accent: apply, dim }));
+      rows.push(...renderDailyBars(entry.values, { width, height, max, glyphs, accent: apply, dim,
+        reportBuckets: report ? spans => report(spans.map(span => ({ ...span, rowStart: span.rowStart + rows.length, rowEnd: span.rowEnd + rows.length }))) : undefined }));
     }
     if (labelled) {
       // Padded to the full width so the block stays rectangular: the primitive
@@ -361,6 +365,8 @@ export interface HostChartOptions {
   paint: (color: ThemeColor, text: string) => string;
   dim?: (text: string) => string;
   labels?: boolean;
+  /** Called with clickable bucket spans (chart-relative rows). Null-gap and clamped buckets omitted. */
+  reportBuckets?: (spans: readonly BucketSpan[]) => void;
 }
 
 /**
@@ -426,6 +432,15 @@ function renderSharedAxisPlot(
   const cellWidth = Math.max(1, Math.floor(available / slots));
   const plotWidth = slots * cellWidth;
   const start = count - slots;
+  if (opts.reportBuckets) {
+    const spans: BucketSpan[] = [];
+    for (let slot = 0; slot < slots; slot++) {
+      const i = start + slot;
+      if (!series.some(entry => entry.values[i] !== null)) continue;
+      spans.push({ rowStart: 0, rowEnd: height, colStart: spineWidth + slot * cellWidth, colEnd: spineWidth + (slot + 1) * cellWidth, index: i });
+    }
+    opts.reportBuckets(spans);
+  }
 
   const grid: string[][] = Array.from({ length: height }, () => Array<string>(plotWidth).fill(" "));
   for (let slot = 0; slot < slots; slot++) {

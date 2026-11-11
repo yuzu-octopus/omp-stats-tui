@@ -144,6 +144,8 @@ export class ChartState {
 		this.seriesIndex = series >= 0 ? series : this.seriesIndex % Math.max(1, keys.length);
 		if (this.selectedSeries === null && keys.length) this.selectedSeries = keys[this.seriesIndex];
 	}
+	/** Key of the legend-selected series, for click-to-inspect actions. */
+	get selectedKey(): string | null { return this.selectedSeries; }
 	render(ctx: FeatureContext, width: number, buckets: readonly number[], series: readonly CoreSeries[], options: TimeSeriesOptions = {}): string[] {
 		this.reconcile(buckets, series.map(row => row.key));
 		return [...renderTimeSeries(ctx, buckets, series, width, this.point, {

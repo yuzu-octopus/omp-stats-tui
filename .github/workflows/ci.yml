@@ -58,7 +58,7 @@ jobs:
       # toolchain in neither, so an explicit version is the only pin.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
@@ -84,13 +84,10 @@ jobs:
       - name: Test
         run: bun test
 
-      # NOTE: typescript is not a declared devDependency, so `bunx` resolves and
-      # downloads it unpinned on every run. That is a real reproducibility gap
-      # (it tracks whatever tsc is latest that day), but pinning it means adding
-      # it to devDependencies and re-locking, which is a deliberate change to
-      # bun.lock rather than something CI should quietly do.
+      # `typescript` is pinned in devDependencies (exact), so `bun run check`
+      # typechecks with the locked compiler.
       - name: Typecheck
-        run: bunx tsc --noEmit
+        run: bun run check
 
   extension-load:
     name: extension loads in the pinned omp host
@@ -100,7 +97,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile

@@ -2,7 +2,7 @@
 
 ## Current architecture
 
-Supported runtime: compiled omp 18.18.2 and standalone Bun 1.4.2. The manifest loads `dist/index.js` after `bun install` and `bun run build`; direct source loading is not the supported compiled-host entry. This handoff replaces the former IR-only migration ledger and its historical version, keymap and test-count claims. See [the active roadmap](plans/2026-10-05-dashboard-parity.md) for mounted/package/theme evidence and external paid/broker prerequisites.
+Supported runtime: compiled omp 18.18.2 and standalone Bun 1.4.4. The manifest loads `dist/index.js` after `bun install` and `bun run build`; direct source loading is not the supported compiled-host entry. This handoff replaces the former IR-only migration ledger and its historical version, keymap and test-count claims. See [the active roadmap](plans/2026-10-05-dashboard-parity.md) for mounted/package/theme evidence and external paid/broker prerequisites.
 
 There are twelve production `FeatureController`s: Overview, Activity, Models, Costs, Projects, Requests, Errors, Tools, Providers, Gain, Traces and Frustration. `StatsPanel` retains their state and renders their interactive bodies. The `ScreenSpec → renderScreen → renderBands` IR is **deleted** (ADR 0007): `/stats-tui` renders `FeatureController` bodies only. The screen registry (`src/tui/screens/`) is nav identity, and `src/tui/band.ts` is the shared drawing grammar reused by `features/presentation.ts`.
 
@@ -54,7 +54,7 @@ Use the existing palette/series resolver, shared graph/legend identity and hue d
 
 ## Verification ownership and evidence
 
-The integration owner runs shared checks after related edits settle, not each worker mid-flight. Suggested checks: `bun run build`, affected/full `bun test`, render probes at narrow/wide widths, and compiled-host loading with `omp models -e /abs/path/to/dist/index.js`. Read stderr; the exit code alone is not an extension-load assertion. Render probes cannot validate retained controller state or keyboard workflows. CI (`.github/workflows/ci.yml`) automates exactly this list on every push and PR, plus `bun run verify:patch` and `bunx tsc --noEmit`; the current suite is 916 pass / 0 fail across 61 files with a clean typecheck.
+The integration owner runs shared checks after related edits settle, not each worker mid-flight. Suggested checks: `bun run build`, affected/full `bun test`, render probes at narrow/wide widths, and compiled-host loading with `omp models -e /abs/path/to/dist/index.js`. Read stderr; the exit code alone is not an extension-load assertion. Render probes cannot validate retained controller state or keyboard workflows. CI (`.github/workflows/ci.yml`) automates exactly this list on every push and PR, plus `bun run verify:patch` and `bun run check`; the suite count at the time of writing was 916 pass / 0 fail across 61 files with a clean typecheck <!-- as-of b147593 2026-11-11 --> (see [AGENTS.md §Testing & QA](../AGENTS.md#testing--qa) for the live count).
 
 Observed later-phase evidence supplied by the integration workstream: no main-thread DB startup; navigation/resize during a blocked read-worker scenario at 86 ms (an observation, not a guarantee); actual unknown-price `N/A`; persistent-worker automatic ingest of a root plus two children totaling eight recorded requests; request details including timing/tokens/component costs and associated trace opened; child reaping and alternate-screen restoration. Those isolated mounted scenarios used no credentials or LLM calls.
 

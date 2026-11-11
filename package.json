@@ -9,10 +9,14 @@
   ],
   "scripts": {
     "build": "bun run scripts/build.ts",
+    "check": "tsc --noEmit",
     "test": "bun test",
     "verify:patch": "bun run scripts/verify-patch.ts",
+    "probe:band-heights": "bun run scripts/probe-band-heights.ts",
     "probe:data": "bun run scripts/probe-data.ts",
+    "probe:frame": "bun run scripts/probe-frame.ts",
     "probe:glyphs": "bun run scripts/probe-glyphs.ts",
+    "probe:mouse-truth": "bun run scripts/probe-mouse-truth.ts",
     "probe:render": "bun run scripts/probe-render.ts",
     "test:mutation": "bun run scripts/mutate.ts"
   },
@@ -29,7 +33,8 @@
   },
   "devDependencies": {
     "@oh-my-pi/pi-tui": "18.18.2",
-    "@types/bun": "^1.4.2"
+    "@types/bun": "^1.4.2",
+    "typescript": "7.0.2"
   },
   "patchedDependencies": {
     "@oh-my-pi/omp-stats@18.18.2": "patches/@oh-my-pi%2Fomp-stats@18.18.2.patch"

@@ -107,16 +107,16 @@ bun test
 
 # Render any screen to stdout at any width, without launching a terminal.
 # This is how a screen gets reviewed.
-bun scripts/probe-render.ts [screenId] [--width N] [--range 24h] [--preset P]
+bun scripts/probe-render.ts [screenId] [--width N] [--rows N] [--range 24h] [--preset P]
 ```
 
-`bun test` is the runner: **669 pass / 0 fail across 44 files**. Feature-controller tests assert consumer-visible workflows, and the shared drawing grammar's invariants are asserted directly. **The panel test seam runs the production controller path:** `__testing.makePanel` builds a stub `PanelReads` from the passed `data` (or the caller's `reads`), so `#feature()` always resolves a real controller and `#bodyLines` renders `feature.render(...)`. Mounted host verification remains separate from fixture coverage.
+`bun test` is the runner — see §Testing & QA for the live count. Feature-controller tests assert consumer-visible workflows, and the shared drawing grammar's invariants are asserted directly. **The panel test seam runs the production controller path:** `__testing.makePanel` builds a stub `PanelReads` from the passed `data` (or the caller's `reads`), so `#feature()` always resolves a real controller and `#bodyLines` renders `feature.render(...)`. Mounted host verification remains separate from fixture coverage.
 
 ### CI
 
 `.github/workflows/ci.yml` runs on every push to `main` and every PR, in two jobs. Both are the commands documented above, in order — if a step is not something a contributor already runs by hand, it does not belong there.
 
-- **`test`** — `bun install --frozen-lockfile` → `bun run verify:patch` → `bun test` → `bunx tsc --noEmit`.
+- **`test`** — `bun install --frozen-lockfile` → `bun run verify:patch` → `bun test` → `bun run check`.
 - **`extension-load`** — install → `verify:patch` → `bun run build` → install the pinned omp host → `omp models -e "$PWD/dist/index.js"`, asserting on **stderr** for `Failed to load extension`, per the exit-code rule above.
 
 Two things in that file are load-bearing and must not be "tidied":
@@ -125,7 +125,7 @@ Two things in that file are load-bearing and must not be "tidied":
 
 **`node_modules` is deliberately not cached.** Its contents are a function of `bun.lock` **and** `patches/*.patch`; a cache keyed on the lockfile alone can restore an unpatched tree. If you ever add `actions/cache` for it, the key must contain both `hashFiles('bun.lock')` and `hashFiles('patches/*.patch')`. `setup-bun` already caches the one download worth caching, and a cold `bun install --frozen-lockfile` is ~3.4 s against a 933 MB tree.
 
-`typescript` is still not a declared devDependency, so `bunx` resolves it unpinned on each run. That is a real reproducibility gap and is deliberately left visible in the workflow rather than hidden.
+`typescript` is pinned as an exact devDependency, so `bun run check` typechecks with the locked compiler.
 
 ## Code Conventions & Common Patterns
 
@@ -189,7 +189,7 @@ Supporting source worth knowing:
 
 ## Runtime & Tooling Constraints
 
-- **Supported runtime:** compiled omp 18.18.2, standalone Bun 1.4.2; stats/TUI/coding-agent packages are pinned to 18.18.2 (`package.json`, `src/index.ts` `PINNED`).
+- **Supported runtime:** compiled omp 18.18.2, standalone Bun 1.4.4; stats/TUI/coding-agent packages are pinned to 18.18.2 (`package.json`, `src/index.ts` `PINNED`).
 - **Production entry:** `bun run build` emits `dist/index.js` and `dist/data-worker.js`; the manifest loads the bundle. Direct source loading is not the supported compiled-host entry.
 - **Module ownership:** bundle local stats/private dependencies; externalize only supported host API specifiers through the exact-match build resolver. Preserve host theme/keybinding/native singletons. Never discover a host source root or mutate installed packages to repair runtime resolution. The committed Bun dependency patch is the reproducible upstream correction.
 - **Imports:** static public TUI/coding-agent roots plus supported named theme/chrome subpaths. Private overlays are not runtime APIs. The real standalone judge subpath resolves from the installed runtime coding-agent dependency in standalone Bun, not the compiled host registry; its resources open lazily when requested.
@@ -200,7 +200,7 @@ Supporting source worth knowing:
 
 ## Testing & QA
 
-**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **669 pass / 0 fail across 44 files**. Full TypeScript checking passes (`bun check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
+**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **669 pass / 0 fail across 44 files** (the live number; update it in the same commit as any suite change). Full TypeScript checking passes (`bun run check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
 
 **Unit-testable:**
 

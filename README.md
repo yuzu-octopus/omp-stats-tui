@@ -9,7 +9,7 @@ Fullscreen local usage-stats panel for [omp](https://github.com/can1357/oh-my-pi
 
 ## Install
 
-Prerequisites: [Bun](https://bun.sh) ≥ 1.4.2 and supported compiled omp **18.18.2** on `PATH`. Stats reads and live ingestion require a standalone `bun` executable even when omp itself is compiled.
+Prerequisites: [Bun](https://bun.sh) ≥ 1.4.4 and supported compiled omp **18.18.2** on `PATH`. Stats reads and live ingestion require a standalone `bun` executable even when omp itself is compiled.
 
 For the PR checkout commands, manual acceptance checklist, safety limits and troubleshooting, see the [testing guide](docs/TESTING.md).
 
@@ -111,12 +111,13 @@ Running judge state is independent of passive-read success: progress and cancell
 bun test
 bun run build
 bun scripts/probe-render.ts all --width 100 --width 60
+bun scripts/probe-render.ts overview --width 40 --rows 30
 omp models -e /abs/path/to/omp-stats-tui/dist/index.js
 ```
 
-`probe-render` renders a production screen body through its `FeatureController`, using the shared fixture payload from `test/fixtures/panel.ts`. It accepts `--range` from the six keys and `--preset unicode|nerd|ascii`. Controller acceptance needs a mounted host in addition to fixture/render tests. Panel body tests built on `__testing.makePanel` exercise the same controller path: `makePanel({ data })` builds a stub reader from the fixture, so `#feature()` always resolves a real controller. Other probes: `bun run scripts/probe-data.ts`, `bun run scripts/probe-glyphs.ts`.
+`probe-render` renders a production screen body through its `FeatureController`, using the shared fixture payload from `test/fixtures/panel.ts`. It accepts `--width N` (repeatable), `--rows N` (default 40), `--range` from the six keys and `--preset unicode|nerd|ascii`. The 40x30 review matrix from the testing guide is `--width 40 --rows 30`. Controller acceptance needs a mounted host in addition to fixture/render tests. Panel body tests built on `__testing.makePanel` exercise the same controller path: `makePanel({ data })` builds a stub reader from the fixture, so `#feature()` always resolves a real controller. Other probes: `bun run probe:data`, `bun run probe:glyphs`, `bun run probe:frame`, `bun run probe:band-heights`, `bun run probe:mouse-truth`.
 
-`bun test` currently passes **669 tests across 44 files**, and the full TypeScript check (`bun check`) passes. CI (`.github/workflows/ci.yml`) runs both, plus a build and an `omp models -e` extension-load smoke check, on every push to `main` and every PR. Because the panel's money honesty depends on a dependency patch Bun applies at install time, CI asserts `bun run verify:patch` immediately after `bun install --frozen-lockfile` — if you ever cache `node_modules`, its key must include both `bun.lock` and `patches/*.patch`.
+`bun test` currently passes **669 tests across 44 files** (see [AGENTS.md §Testing & QA](AGENTS.md#testing--qa) for the live count), and the full Typecheck (`bun run check`) passes. CI (`.github/workflows/ci.yml`) runs both, plus a build and an `omp models -e` extension-load smoke check, on every push to `main` and every PR. Because the panel's money honesty depends on a dependency patch Bun applies at install time, CI asserts `bun run verify:patch` immediately after `bun install --frozen-lockfile` — if you ever cache `node_modules`, its key must include both `bun.lock` a... [truncated 9113 chars]
 Source-mode development uses standalone Bun and installed dependencies. `StatsReadClient` resolves `scripts/data-worker.ts` relative to its source module; the production build's `__STATS_READ_WORKER__` macro instead resolves `./data-worker.js` relative to `dist/index.js`. Workers use absolute paths, inherit the host working directory for project/judge configuration, and receive the active agent directory plus `OMP_PROFILE`/`PI_PROFILE`; `PI_BUNDLED` is cleared. Launching compiled omp from another directory does not relocate the worker. Directly loading `src/index.ts` in compiled omp is not the supported distribution entry.
 
 ## Architecture

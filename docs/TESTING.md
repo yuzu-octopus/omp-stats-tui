@@ -1,6 +1,6 @@
 # Testing the terminal stats dashboard PR
 
-Review target: [UI refinement PR #2](https://github.com/yuzu-octopus/omp-stats-tui/pull/2), from [the fork branch](https://github.com/mitnichiter/omp-stats-tui/tree/omp/dashboard-terminal-parity). [Dashboard workflow PR #1](https://github.com/yuzu-octopus/omp-stats-tui/pull/1) is merged; its historical head does not contain the subsequent UI refinement.
+Review target: [UI refinement PR #2](https://github.com/yuzu-octopus/omp-stats-tui/pull/2), from [the fork branch](https://github.com/mitnichiter/omp-stats-tui/tree/omp/dashboard-terminal-parity). [Dashboard workflow PR #1](https://github.com/yuzu-octopus/omp-stats-tui/pull/1) is merged; its historical head does not contain the subsequent UI refinement. The fork branch is history, not head — current work targets `main` (see §2).
 
 ## 1. Check prerequisites
 
@@ -10,20 +10,22 @@ bun --version
 command -v bun
 ```
 
-Verified runtime: compiled **omp 18.18.2**, standalone **Bun 1.4.2**, Linux arm64. Bun must be on the PATH inherited by omp: the compiled host still launches a separate Bun stats worker. Other omp versions/platforms are not claimed verified.
+Verified runtime: compiled **omp 18.18.2**, standalone **Bun 1.4.4**, Linux arm64. Bun must be on the PATH inherited by omp: the compiled host still launches a separate Bun stats worker. Other omp versions/platforms are not claimed verified.
 
 Use an interactive terminal, initially about 100 columns by 40 rows. Print/headless/RPC modes cannot display this overlay. No browser server or upstream omp source checkout is required.
 
 ## 2. Check out the PR and build
 
-From a directory that does not already contain `omp-stats-tui-review`:
-
 ```sh
-git clone --branch omp/dashboard-terminal-parity --single-branch https://github.com/mitnichiter/omp-stats-tui.git omp-stats-tui-review
-cd omp-stats-tui-review
+git clone https://github.com/yuzu-octopus/omp-stats-tui.git
+cd omp-stats-tui
+git checkout main
 bun install --frozen-lockfile
 bun run build
 ```
+
+> [!NOTE]
+> History: earlier reviews checked out `--branch omp/dashboard-terminal-parity` from the `mitnichiter/omp-stats-tui` fork. That branch predates the merged PR #1 and is not current head; use `main` above.
 
 The build must produce `dist/index.js` and `dist/data-worker.js`. Keep `node_modules` installed; the worker's real standalone judge depends on runtime packages. Bun applies the committed dependency patch during installation; do not manually edit installed packages.
 
@@ -109,13 +111,13 @@ bun test
 bun run build
 ```
 
-Latest observed suite: **669 passed, 0 failed, 44 files**, 85,872 assertions. Production build and the dependency-patch check passed. After integrating current maintainer `main`, the UI was reviewed again on the compiled host at **40x30, 100x40 and 160x45** across all twelve routes; initialization was excluded from the settled-body review. Representative light/Unicode, dark/ASCII and custom/Nerd reviews also passed, including observed custom ANSI colors.
+Latest observed suite: **669 passed, 0 failed, 44 files** (see [AGENTS.md §Testing & QA](../AGENTS.md#testing--qa) for the live count), 85,872 assertions. Production build and the dependency-patch check passed. After integrating current maintainer `main`, the UI was reviewed again on the compiled host at **40x30, 100x40 and 160x45** across all twelve routes; initialization was excluded from the settled-body review. Representative light/Unicode, dark/ASCII and custom/Nerd reviews also passed, including observed custom ANSI colors.
 
 **Panel body tests exercise production controllers.** `__testing.makePanel` builds a stub `PanelReads` from `state.data` (its `fetch` returns the fixture and its `api` serves it by URL suffix), so `#feature()` resolves a real `FeatureController` and `makePanel({ data })` renders the production body. A test that wants the loading or error phase passes `reads` explicitly.
 
 Mounted scenarios included literal `q[]` search/clear, populated and filtered-empty lists, real recorded savings and quota histories, blank trace-title fallback, nested child navigation, minimap range selection, quiet-day details, missing-judge quote dismissal and an intentional missing-Bun read failure. Ctrl+C restored zero overlays, the normal screen and a visible editor cursor. These are local/recorded scenarios, not paid judging or credentialed networking. Prior packed-install coverage is documented in the [workflow roadmap](plans/2026-10-05-dashboard-parity.md); UI review details are in the [refinement plan](plans/2026-10-06-ui-polish.md).
 
-Whole-repository TypeScript checking **passes** (`tsc --noEmit`, exit 0). The maintainer baseline's typing corrections were preserved, including the layout-test `DataNeed` import. The review machine's incomplete `@types/bun` installation needed a forced locked reinstall from an isolated cache; the subsequent default typecheck passed. The old 19-diagnostic list is historical, not the current UI branch's status.
+Whole-repository TypeScript checking **passes** (`bun run check`, exit 0). The maintainer baseline's typing corrections were preserved, including the layout-test `DataNeed` import. The review machine's incomplete `@types/bun` installation needed a forced locked reinstall from an isolated cache; the subsequent default typecheck passed. The old 19-diagnostic list is historical, not the current UI branch's status.
 
 CI (`.github/workflows/ci.yml`) runs locked installation, `bun run verify:patch`, tests and TypeScript, plus a separate compiled-host extension-load job. `verify:patch` remains required after installation: a passing build is not proof that the dependency's unknown-spend correction is installed.
 

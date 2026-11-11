@@ -9,11 +9,11 @@
  *
  * Usage:
  *   bun scripts/probe-render.ts [screenId|all] [--width N] [--width N]
- *     [--range 24h] [--preset unicode|nerd|ascii]
+ *     [--rows N] [--range 24h] [--preset unicode|nerd|ascii] [--help]
  *
  * Defaults to the overview at width 100 and width 60, which is the pair the plan
  * asks for: 100 is the common terminal, 60 is where the layout has to start
- * dropping things.
+ * dropping things. --rows defaults to 40; --width 40 --rows 30 is the 40x30 review matrix.
  */
 
 import { visibleWidth } from "@oh-my-pi/pi-tui";
@@ -37,11 +37,22 @@ const widths: number[] = [];
 let screenId = "overview";
 let range: Range = DEFAULT_RANGE;
 let preset: SymbolPreset = "unicode";
+let rows = 40;
 
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i];
-	if (arg === "--width" || arg === "-w") {
+	if (arg === "--help" || arg === "-h") {
+		console.log(`usage: probe-render.ts [screenId|all] [--width N]... [--rows N] [--range R] [--preset P]`);
+		console.log(`  screenId: one screen id, or "all" (default "overview")`);
+		console.log(`  --width N, -w N: render width; repeatable (default: 100 60)`);
+		console.log(`  --rows N: body height in rows (default 40; e.g. --width 40 --rows 30)`);
+		console.log(`  --range R, -r R: one of ${RANGES.join(", ")} (default ${DEFAULT_RANGE})`);
+		console.log(`  --preset P, -p P: unicode, nerd or ascii (default unicode)`);
+		process.exit(0);
+	} else if (arg === "--width" || arg === "-w") {
 		widths.push(Number(args[++i]));
+	} else if (arg === "--rows") {
+		rows = Number(args[++i]);
 	} else if (arg === "--range" || arg === "-r") {
 		const next = args[i + 1] ?? "";
 		if (!isRange(next)) {
@@ -84,7 +95,6 @@ if (wanted.length === 0) {
 	process.exit(1);
 }
 
-const ROWS = 40;
 const data: PanelData = liveData();
 const reader: FeatureReader = {
 	fetch: async () => data,
@@ -118,15 +128,15 @@ for (const width of widths) {
 		};
 		const feature = createFeature(screen.id, ctx);
 		await feature.load(range);
-		const rows = feature.render(width, ROWS);
-		const over = rows.filter(row => visibleWidth(row) > width);
+		const body = feature.render(width, rows);
+		const over = body.filter(row => visibleWidth(row) > width);
 
 		console.log(`\n${"═".repeat(width)}`);
 		console.log(`${screen.id}  width=${width}  range=${range}  preset=${preset}`);
 		console.log(`${"─".repeat(width)}`);
-		console.log(rows.join("\n"));
+		console.log(body.join("\n"));
 		console.log(`${"─".repeat(width)}`);
-		console.log(`${rows.length} rows${over.length === 0 ? "" : `, ${over.length} OVER WIDE`}`);
+		console.log(`${body.length} rows${over.length === 0 ? "" : `, ${over.length} OVER WIDE`}`);
 		feature.dispose();
 	}
 }

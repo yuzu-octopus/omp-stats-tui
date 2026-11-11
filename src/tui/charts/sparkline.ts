@@ -42,6 +42,9 @@
 import { costWithUnpriced, formatInteger } from "../format";
 import { glyph, glyphsFor, type GlyphValue, type SymbolPreset } from "../glyphs";
 import { visibleWidth, truncateToWidth } from "@oh-my-pi/pi-tui";
+// Single width implementation: local ellipsize/pad*/clampLine were byte-identical
+// to these; see ./measure.
+import { clampCells as clampLine, ellipsizeCells as ellipsize, padEndCells as padEndTo, padStartCells as padStartTo } from "./measure";
 
 /** Gap between a share bar's track and its readout, in cells. */
 const SHARE_GAP = 1;
@@ -148,39 +151,6 @@ export interface RankedBarsOptions {
 	accent: (text: string) => string;
 }
 
-/**
- * Truncate to `width` cells with a trailing ellipsis.
- *
- * Measured in ANSI-AWARE cells. `Bun.stringWidth` counts the escape BYTES of a
- * coloured string, so a themed figure measured wider than it rendered and every
- * row was truncated — a bare `…` off the end of the burn chart.
- */
-function ellipsize(text: string, width: number): string {
-	if (width <= 0) return "";
-	if (visibleWidth(text) <= width) return text;
-	return truncateToWidth(text, width);
-}
-
-function padStartTo(text: string, width: number): string {
-	const gap = width - visibleWidth(text);
-	return gap > 0 ? " ".repeat(gap) + text : text;
-}
-
-function padEndTo(text: string, width: number): string {
-	const gap = width - visibleWidth(text);
-	return gap > 0 ? text + " ".repeat(gap) : text;
-}
-
-/**
- * Clamp to `width` cells, measured in CELLS rather than UTF-16 units.
- *
- * A guard, never a source of an ellipsis: every caller sizes its parts to fit,
- * so this only fires when a caller hands in a width smaller than the content
- * it asked for.
- */
-function clampLine(text: string, width: number): string {
-	return visibleWidth(text) > width ? truncateToWidth(text, width) : text;
-}
 /**
  * A ranked horizontal bar list: label, bar, figure, one row per entry.
  *
@@ -357,7 +327,7 @@ export function renderShareBar(share: number, opts: ShareBarOptions, readout = "
 	// chart must never cause. The bar has already yielded completely at that
 	// width (track === 0), so nothing is traded away by clipping the fact.
 	const fitted = visibleWidth(readout) > width ? truncateToWidth(readout, width) : readout;
-	const textWidth = Bun.stringWidth(fitted);
+	const textWidth = visibleWidth(fitted);
 	const gap = fitted ? Math.min(SHARE_GAP, Math.max(0, width - textWidth)) : 0;
 	const track = Math.max(0, width - textWidth - gap);
 

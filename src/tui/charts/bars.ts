@@ -42,6 +42,7 @@ import { densify, pivotSeries } from "@oh-my-pi/omp-stats/client/data/series";
 import { buildCostSummary } from "@oh-my-pi/omp-stats/client/data/view-models";
 import type { CostTimeSeriesPoint } from "@oh-my-pi/omp-stats/shared-types";
 import type { GlyphSet, GlyphValue } from "../glyphs";
+import { NO_ACTIVITY, clampCells as clamp } from "./measure";
 
 export interface BarsOptions {
 	/** Columns available to the chart. No rendered row may exceed it. */
@@ -232,29 +233,6 @@ function compose(columnHeights: readonly number[], rows: number, opts: BarsOptio
 	return out;
 }
 
-/**
- * What a range with no buckets says. Named once so the two entry points below
- * cannot drift into two different sentences for the same state.
- */
-const NO_ACTIVITY = "No activity recorded in this range.";
-
-/**
- * Truncate to `width` cells, measured rather than counted.
- *
- * Data ink is guaranteed one cell wide (Task 3's invariant), but a styling
- * callback may return ANSI escape sequences, so `text.length` would be the
- * wrong measure. Every line this module returns goes through here or through
- * the same width check, because one over-wide line corrupts the whole overlay.
- */
-function clamp(text: string, width: number): string {
-	if (Bun.stringWidth(text) <= width) return text;
-	let out = "";
-	for (const ch of text) {
-		if (Bun.stringWidth(out + ch) > width) break;
-		out += ch;
-	}
-	return out;
-}
 
 
 /**

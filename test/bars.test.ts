@@ -190,8 +190,10 @@ test("an empty series renders an honest empty state, not a wall of zero bars", (
 	expect(renderDailyBars([], opts(40))).toEqual(["No activity recorded in this range."]);
 	// And truncated, never overflowing, when the panel is narrower than the
 	// message — the empty state obeys the width rule like every other line.
+	// The shared clamp truncates with an ellipsis (19 cells + …), where the
+	// old local clamp cut silently. Same 20 cells, one policy everywhere.
 	const narrow = renderDailyBars([], opts(20))[0] ?? "";
-	expect(narrow).toBe("No activity recorded");
+	expect(narrow).toBe("No activity recorde…");
 	expect(Bun.stringWidth(narrow)).toBe(20);
 });
 

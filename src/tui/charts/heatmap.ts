@@ -2,6 +2,7 @@ import { calendarLayout } from "./calendar";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { DailyActivityPoint } from "@oh-my-pi/omp-stats/shared-types";
 import type { GlyphSet } from "../glyphs";
+import { clampCells } from "./measure";
 
 /**
  * The calendar heatmap. Monday-first, one cell per day, exactly like `/usage`'s
@@ -131,29 +132,9 @@ export function renderHeatmap(
 	// Clamp to the requested width. Truncating is correct here and wrapping is
 	// not: a wrapped row silently doubles the row count and shifts the whole grid.
 	const width = Math.max(0, opts.innerWidth);
-	return [monthRow, ...body].map(row => (Bun.stringWidth(row) > width ? clip(row, width) : row));
+	return [monthRow, ...body].map(row => clampCells(row, width));
 }
 
-/** Clip to `width` visible cells without splitting an ANSI escape sequence. */
-function clip(row: string, width: number): string {
-	if (width <= 0) return "";
-	let visible = 0;
-	let out = "";
-	for (let i = 0; i < row.length; ) {
-		if (row[i] === "\x1b") {
-			const end = row.indexOf("m", i);
-			const stop = end === -1 ? row.length : end + 1;
-			out += row.slice(i, stop);
-			i = stop;
-			continue;
-		}
-		if (visible >= width) break;
-		out += row[i];
-		visible++;
-		i++;
-	}
-	return out;
-}
 
 /**
  * Read one rung of a role's ladder out of the `GlyphSet` the caller already

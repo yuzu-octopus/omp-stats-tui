@@ -72,15 +72,38 @@ class SummaryFeature implements FeatureController {
 		this.ctx.changed();
 		try {
 			let data: PanelData;
+			let scopedError: string | null = null;
 			if (this.id === "overview") {
-				const [overview, recent] = await Promise.all([
+				// Overview and recent settle independently: a failed recent read
+				// must not discard a good overview. Both halves share the
+				// fetchFor { data, errors } contract, so a missing need reads as
+				// not loaded (the render path says "unavailable"), never as zero.
+				const [fetched, recent] = await Promise.all([
 					this.ctx.reader.fetch(["overview"], range),
-					this.ctx.reader.api<MessageStats[]>("/api/stats/recent", { range, limit: "12" }),
+					this.ctx.reader.api<MessageStats[]>("/api/stats/recent", { range, limit: "12" }).then(
+						value => ({ value, error: null as string | null }),
+						(cause: unknown): { value: null; error: string } => ({
+							value: null,
+							error: cause instanceof Error ? cause.message : String(cause),
+						}),
+					),
 				]);
-				data = { ...overview, recent };
-			} else data = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);
+				const settlement = fetched as { data?: Partial<PanelData>; errors?: Partial<Record<string, string>> };
+				const overviewData: PanelData = settlement.data !== undefined ? { ...(settlement.data as PanelData) } : (fetched as PanelData);
+				const fetchFailures: string[] = settlement.errors !== undefined ? Object.values(settlement.errors).filter((message): message is string => typeof message === "string") : [];
+				data = { ...overviewData, ...(recent.value === null ? {} : { recent: recent.value }) };
+				const failures = [...fetchFailures, ...(recent.error === null ? [] : [recent.error])];
+				if (failures.length > 0) scopedError = failures.join("; ");
+			} else {
+				const fetched = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);
+				const onlySettlement = fetched as { data?: Partial<PanelData>; errors?: Partial<Record<string, string>> };
+				data = onlySettlement.data !== undefined ? { ...(onlySettlement.data as PanelData) } : (fetched as PanelData);
+				const failures = onlySettlement.errors !== undefined ? Object.values(onlySettlement.errors).filter((message): message is string => typeof message === "string") : [];
+				if (failures.length > 0) scopedError = failures.join("; ");
+			}
 			if (this.closed || generation !== this.generation) return;
 			this.data = data;
+			this.error = scopedError;
 		} catch (error) {
 			if (this.closed || generation !== this.generation) return;
 			this.error = error instanceof Error ? error.message : String(error);

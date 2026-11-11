@@ -254,17 +254,30 @@ const ROUTE_FETCHERS: Record<DataNeed, Fetcher> = {
 	rollupStatus: async () => fetchRollupStatus(),
 };
 
+/**
+ * Per-need settlement: every need that succeeded appears in `data`, every
+ * need that failed appears in `errors` with its `String(cause)` message.
+ * String-only messages keep the settlement JSON-serializable across the
+ * worker boundary. A missing need reads as not loaded, never as zero.
+ */
+export interface FetchSettlement {
+	data: Partial<PanelData>;
+	errors: Partial<Record<DataNeed, string>>;
+	/** Attached by the worker after settlement; never set by fetchFor itself. */
+	freshness?: { records: number; pendingSessions: number; observedAt: number };
+}
+
 /** Fetch declared upstream reads. Production executes this in the data worker. */
 export async function fetchFor(
 	needs: readonly DataNeed[],
 	range: Range,
 	read: Reader = liveReader,
 	overrides: Partial<Record<DataNeed, Fetcher>> = {},
-): Promise<PanelData> {
-	const routes = { ...ROUTE_FETCHERS };
-	for (const [need, fetcher] of Object.entries(overrides) as [DataNeed, Fetcher][]) {
-		routes[need] = fetcher;
+): Promise<FetchSettlement> {
+	for (const need of needs) {
+		if (!(need in ROUTE_FETCHERS)) throw new Error(`unknown data need: ${String(need)}`);
 	}
+	const routes = { ...ROUTE_FETCHERS };
 	// A reader only redirects the route-backed reads; the two direct calls have
 	// no HTTP shape to redirect.
 	if (read !== liveReader) {
@@ -278,13 +291,29 @@ export async function fetchFor(
 		routes.providers = r => fetchProviders(r, read);
 		routes.gain = r => fetchGain(r, read);
 	}
+	// Explicit overrides win over both the defaults and the fixture reader.
+	for (const [need, fetcher] of Object.entries(overrides) as [DataNeed, Fetcher][]) {
+		routes[need] = fetcher;
+	}
 
-	const entries = await Promise.all(
+	const settled = await Promise.allSettled(
 		needs.map(async need => [need, await routes[need](range)] as const),
 	);
-	return Object.fromEntries(entries) as PanelData;
+	const data = {} as Partial<PanelData>;
+	const errors: Partial<Record<DataNeed, string>> = {};
+	settled.forEach((outcome, index) => {
+		if (outcome.status === "fulfilled") {
+			const [need, value] = outcome.value;
+			(data as Record<DataNeed, unknown>)[need] = value;
+		} else {
+			errors[needs[index] as DataNeed] = String(outcome.reason);
+		}
+	});
+	// NOTE: `errors` is attached to the worker payload in scripts/data-worker.ts
+	// (owned by another task) so the panel can render scoped errors beside
+	// retained data; string messages keep the payload JSON-serializable.
+	return { data, errors };
 }
-
 // Deliberately absent, and each absence is load-bearing:
 //   /api/stats/provider-windows — getProviderWindowStats does network I/O.
 //   /api/sync                   — starts real background ingest; 7141 ms of

@@ -167,7 +167,7 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 		range = nextRange; const request = ++generation; loading = true; error = null; ctx.changed();
 		try { const result = await ctx.reader.api<MessageStats[]>(id === "requests" ? "/api/stats/recent" : "/api/stats/errors", { range, limit: String(steps[step]) }); if (closed || request !== generation) return; rows = result; hasData = true; }
 		catch (caught) { if (closed || request !== generation) return; error = String(caught); }
-		loading = false; ctx.changed();
+		finally { if (!closed && request === generation) { loading = false; ctx.changed(); } }
 	};
 	return {
 		load,

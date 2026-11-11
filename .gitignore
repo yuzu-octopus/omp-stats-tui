@@ -13,3 +13,7 @@ node_modules/
 # Scratch files agents have repeatedly dropped in scripts/. The real probes
 # (probe-*.ts) and data-worker.ts are tracked; only the tmp- prefix is caught.
 /scripts/tmp-*.ts
+
+ # Omp runtime (session data lives in the global store, not here)
+ .omp/plugins/
+ .omp/cache/

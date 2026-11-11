@@ -3,7 +3,7 @@ import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import type { CostTimeSeriesPoint, ToolDashboardStats, ToolUsageStats } from "@oh-my-pi/omp-stats/shared-types";
 import type { CostPayload, ModelDashboardPayload } from "../src/data/api";
-import type { FeatureContext, FeatureReader } from "../src/tui/features/types";
+import type { FeatureContext, FeatureHit, FeatureReader } from "../src/tui/features/types";
 import { createAnalyticsFeature } from "../src/tui/features/core/analytics";
 import { stripForTest } from "../src/tui/palette";
 import { AGGREGATE } from "./fixtures/panel";
@@ -346,6 +346,166 @@ test("clicking a chart bucket selects the same point as the ,/. keys", async () 
 	feature.handleInput(",");
 	const viaKeys = feature.render(180, 60).map(stripForTest).join("\n");
 	expect(viaKeys).toContain("09-20 00:00 UTC · 2 buckets");
+});
+
+test("a click aliasing an unknown series falls through to the main chart", async () => {
+	const feature = createAnalyticsFeature("models", context(MODELS));
+	await feature.load("all");
+	// No legend selection exists outside the expanded detail (the trend chart
+	// only reconciles there), so a fabricated series string reaches the
+	// `else` branch of handleHit — it must select the main-chart point, not
+	// drop the click or throw.
+	feature.handleHit!({ type: "selectBucket", series: "zzz-no-such-series", index: 0 });
+	const viaClick = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(viaClick).toContain("09-20 00:00 UTC · 2 buckets");
+});
+
+// Eight days of varying per-provider requests: unlike MODELS (two days), this
+// spans enough buckets for the host's worthCharting gate, so the main charts
+// plot and report clickable spans. The three providers' shares are deliberately
+// non-proportional: constant shares trip the gate's uniform-series rejection
+// and leave nothing clickable.
+const CLICK_REQUESTS = [4, 6, 9, 14, 22, 35, 55, 90];
+const CLICK_OTHER = [90, 55, 35, 22, 14, 9, 6, 4];
+const CLICK_THIRD = [7, 7, 7, 60, 7, 7, 7, 7];
+const CLICK_MODELS: ModelDashboardPayload = {
+	byModel: [
+		{ ...AGGREGATE, model: "same-model", provider: "provider-a", totalRequests: 235, avgTtft: 250, avgTokensPerSecond: 12.5 },
+		{ ...AGGREGATE, model: "same-model", provider: "provider-b", totalRequests: 235, avgTtft: 1500, avgTokensPerSecond: 80 },
+		{ ...AGGREGATE, model: "same-model", provider: "provider-c", totalRequests: 109, avgTtft: 900, avgTokensPerSecond: 40 },
+	],
+	modelSeries: CLICK_REQUESTS.flatMap((requests, i) => [
+		{ timestamp: NOW - (CLICK_REQUESTS.length - 1 - i) * DAY, model: "same-model", provider: "provider-a", requests },
+		{ timestamp: NOW - (CLICK_REQUESTS.length - 1 - i) * DAY, model: "same-model", provider: "provider-b", requests: CLICK_OTHER[i]! },
+		{ timestamp: NOW - (CLICK_REQUESTS.length - 1 - i) * DAY, model: "same-model", provider: "provider-c", requests: CLICK_THIRD[i]! },
+	]),
+	modelPerformanceSeries: [
+		{ timestamp: NOW - 7 * DAY, model: "same-model", provider: "provider-a", requests: 4, avgTtft: 200, avgTokensPerSecond: 8 },
+		{ timestamp: NOW - 6 * DAY, model: "same-model", provider: "provider-a", requests: 6, avgTtft: 300, avgTokensPerSecond: 10 },
+		{ timestamp: NOW - 5 * DAY, model: "same-model", provider: "provider-a", requests: 9, avgTtft: 400, avgTokensPerSecond: 15 },
+		{ timestamp: NOW - 4 * DAY, model: "same-model", provider: "provider-a", requests: 11, avgTtft: 150, avgTokensPerSecond: 12 },
+		{ timestamp: NOW - 3 * DAY, model: "same-model", provider: "provider-a", requests: 14, avgTtft: 900, avgTokensPerSecond: 18 },
+		{ timestamp: NOW - 2 * DAY, model: "same-model", provider: "provider-a", requests: 18, avgTtft: 280, avgTokensPerSecond: 14 },
+		{ timestamp: NOW - DAY, model: "same-model", provider: "provider-a", requests: 10, avgTtft: 250, avgTokensPerSecond: 12.5 },
+		{ timestamp: NOW, model: "same-model", provider: "provider-a", requests: 3, avgTtft: 500, avgTokensPerSecond: 25 },
+		{ timestamp: NOW, model: "same-model", provider: "provider-b", requests: 20, avgTtft: 1500, avgTokensPerSecond: 80 },
+	],
+};
+
+function hitContext(payload: unknown): { ctx: FeatureContext; hits: FeatureHit[] } {
+	const hits: FeatureHit[] = [];
+	const reader: FeatureReader = {
+		api: async <T>() => payload as T,
+		fetch: async () => { throw new Error("Analytics must use its actual dashboard API reader"); },
+	};
+	const ctx: FeatureContext = {
+		reader, theme, changed: () => {}, copy: async () => {}, openTrace: () => {}, openScreen: () => {}, now: () => NOW,
+		// Empty render lines report no spans, so only spans with a real bucket index count.
+		reportHits: reported => { hits.push(...reported.filter(hit => hit.action.type === "selectBucket" && hit.action.index >= 0)); },
+	};
+	return { ctx, hits };
+}
+
+function bucketSeries(hits: readonly FeatureHit[]): string | undefined {
+	for (const hit of hits) if (hit.action.type === "selectBucket" && hit.action.series !== "tps" && hit.action.series !== "ttft") return hit.action.series;
+	return undefined;
+}
+
+
+test("clicking an expanded trend bucket moves the trend point, not the main point", async () => {
+	const { ctx, hits } = hitContext(CLICK_MODELS);
+	const feature = createAnalyticsFeature("models", ctx);
+	await feature.load("all");
+	feature.render(180, 60);
+	const mainSeries = bucketSeries(hits);
+	expect(mainSeries).toBeDefined();
+	feature.handleInput("\t");
+	feature.handleInput("\r");
+	feature.handleInput("m");
+	let text = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(text).toContain("Details: same-model · provider-a");
+	expect(text).toContain("Model request trend");
+	feature.handleHit!({ type: "selectBucket", series: mainSeries!, index: 0 });
+	text = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(text).toContain("requests · 09-14 00:00 UTC · 8 buckets");
+	// Regression: the selection sticks across a second render (the stale
+	// reconcile anchor used to snap it back to the latest bucket).
+	text = feature.render(180, 60).map(stripForTest).join("\n");
+	expect(text).toContain("requests · 09-14 00:00 UTC · 8 buckets");
+	// Keyboard agrees: one step right lands on 09-15.
+	feature.handleInput(".");
+	expect(feature.render(180, 60).map(stripForTest).join("\n")).toContain("requests · 09-15 00:00 UTC · 8 buckets");
+	feature.handleInput("b");
+	expect(feature.render(180, 60).map(stripForTest).join("\n")).toContain("share · 09-21 00:00 UTC · 8 buckets");
+});
+
+test("clicking a performance bucket follows the detail samples and clamps to them", async () => {
+	// provider-a carries eight samples: clicking the oldest bucket inspects the
+	// oldest sample, and the ttft series routes to the same performance point.
+	{
+		const { ctx } = hitContext(CLICK_MODELS);
+		const feature = createAnalyticsFeature("models", ctx);
+		await feature.load("all");
+		feature.render(180, 60);
+		feature.handleInput("\t");
+		feature.handleInput("\r");
+		let text = feature.render(180, 60).map(stripForTest).join("\n");
+		expect(text).toContain("Details: same-model · provider-a");
+		expect(text).toContain("25.0 tok/s");
+		feature.handleHit!({ type: "selectBucket", series: "ttft", index: 0 });
+		text = feature.render(180, 60).map(stripForTest).join("\n");
+		expect(text).toContain("8.0 tok/s");
+		expect(text).toContain("0.20s");
+		// Regression: the selection sticks across a second render.
+		text = feature.render(180, 60).map(stripForTest).join("\n");
+		expect(text).toContain("8.0 tok/s");
+		// Keyboard agrees: one step right lands on the second sample.
+		feature.handleInput(".");
+		text = feature.render(180, 60).map(stripForTest).join("\n");
+		expect(text).toContain("10.0 tok/s");
+		expect(text).toContain("0.30s");
+	}
+	// provider-b carries a single sample against an eight-bucket screen: an overshooting click clamps to it.
+	{
+		const { ctx } = hitContext(CLICK_MODELS);
+		const feature = createAnalyticsFeature("models", ctx);
+		await feature.load("all");
+		feature.render(180, 60);
+		feature.handleInput("\t");
+		feature.handleInput("/");
+		feature.handleInput("provider-b");
+		feature.handleInput("\r");
+		feature.handleInput("\r");
+		let text = feature.render(180, 60).map(stripForTest).join("\n");
+		expect(text).toContain("Details: same-model · provider-b");
+		expect(text).toContain("80.0 tok/s");
+		feature.handleHit!({ type: "selectBucket", series: "tps", index: 99 });
+		text = feature.render(180, 60).map(stripForTest).join("\n");
+		expect(text).toContain("80.0 tok/s");
+	}
+});
+
+test("chart clicks alias the legend-selected series", async () => {
+	const { ctx, hits } = hitContext(CLICK_MODELS);
+	const feature = createAnalyticsFeature("models", ctx);
+	await feature.load("all");
+	feature.render(180, 60);
+	const initial = bucketSeries(hits);
+	expect(initial).toBeDefined();
+	// Toggle the legend and read the newly reported span: its series key is the
+	// click alias — a second "n" press cycles back, so one press is a new key.
+	feature.handleInput("n");
+	hits.length = 0;
+	feature.render(180, 60);
+	const selected = bucketSeries(hits);
+	expect(selected).toBeDefined();
+	expect(selected).not.toBe(initial);
+	feature.handleHit!({ type: "selectBucket", series: selected!, index: 6 });
+	expect(feature.render(180, 60).map(stripForTest).join("\n")).toContain("09-20 00:00 UTC · 8 buckets");
+	// The keyboard path agrees with the click.
+	feature.handleInput(".");
+	feature.handleInput(",");
+	expect(feature.render(180, 60).map(stripForTest).join("\n")).toContain("09-20 00:00 UTC · 8 buckets");
 });
 
 test("model rows carry an inline trend sparkline at wide widths, dropped when narrow", async () => {

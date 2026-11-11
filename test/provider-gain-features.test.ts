@@ -534,3 +534,44 @@ test("clicking a windows row scopes the utilization chart like j/k does", async 
 	expect(viaClick).toContain("a · day");
 	controller.dispose();
 });
+
+test("output burn names older points without output tokens as gaps, never zero", async () => {
+	const old = now - 20 * 3_600_000;
+	const series = [
+		{ timestamp: old, provider: "p", totalTokens: 10, requests: 1, cost: 1, unpricedRequests: 0 },
+		{ timestamp: now, provider: "p", totalTokens: 10, outputTokens: 5, requests: 1, cost: 1, unpricedRequests: 0 },
+	];
+	const controller = createProvidersFeature(context(async <T>(path: string) => (
+		path.endsWith("/providers") ? { ...local, series } : { windowInsights: [], usageSeries: [] }
+	) as T));
+	await controller.load("24h");
+	controller.handleInput("v");
+	controller.handleInput("m");
+	for (let i = 0; i < 20; i++) controller.handleInput("h");
+	const text = stripForTest(controller.render(120, 50).join("\n"));
+	expect(text).toContain("Output burn unavailable for older payload points (gaps, not zero).");
+	expect(text).toContain(new Date(old).toISOString());
+	expect(text).not.toContain(": 0 output");
+	expect(text).toMatch(/p\s+— · 5/);
+	controller.dispose();
+});
+
+test("utilization keeps null readings as gaps while exhausted accounts stay named", async () => {
+	const numeric = account("a", "one", 0.5);
+	const gap = account("a", "two", 0.5);
+	gap.points = [{ timestamp: now, usedFraction: null, exhausted: true }];
+	const windows = [insight("a", "day")];
+	const controller = createProvidersFeature(context(async <T>(path: string, params?: Record<string, string>) => (
+		path.endsWith("/providers") ? local : { windowInsights: windows, usageSeries: params?.provider ? [numeric, gap] : [] }
+	) as T));
+	await controller.load("24h");
+	controller.handleInput("\x1b[Z");
+	await settle();
+	const text = stripForTest(controller.render(150, 50).join("\n"));
+	const gapLine = text.split("\n").find(line => line.includes("shared@example #2:"));
+	expect(gapLine).toContain("No reading (gap)");
+	expect(gapLine).not.toContain("%");
+	expect(text).toContain("shared@example #1: 50.0%");
+	expect(text).toContain("EXHAUSTED: shared@example #2");
+	controller.dispose();
+});

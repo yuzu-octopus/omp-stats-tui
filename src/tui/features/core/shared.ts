@@ -124,6 +124,12 @@ export class ChartState {
 		if (data === ".") { this.point++; this.timestamp = null; return true; }
 		return false;
 	}
+	/** Click a bucket: the `,`/`.` keyboard path. Clears the reconcile anchor so the next render keeps the clicked point. */
+	selectPoint(index: number, count: number): void {
+		if (count <= 0) return;
+		this.point = Math.max(0, Math.min(count - 1, index));
+		this.timestamp = null;
+	}
 	/** Initial focus follows the newest recorded bucket, not a densified quiet endpoint. */
 	seedLatestPoint(buckets: readonly number[], timestamps: Iterable<number>): void {
 		if (this.point >= 0 || !buckets.length) return;

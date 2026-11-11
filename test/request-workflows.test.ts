@@ -218,3 +218,31 @@ test("priced detail components format decimals instead of exposing arithmetic ta
 	expect(component).toContain("$");
 	expect(component).not.toContain("00000000000000004");
 });
+
+test("a search matching nothing renders the no-matches sentence, not an empty table", async () => {
+	const feature = createRequestsFeature("requests", context(async <T>() => [row(1), row(2)] as T));
+	await feature.load("24h");
+	feature.handleInput("/"); for (const char of "zzz-no-match") feature.handleInput(char); feature.handleInput("\r");
+	const text = feature.render(200, 40).join("\n");
+	expect(text).toContain("No matches. Esc clears search.");
+	expect(text).not.toContain("No visible records");
+});
+
+test("timing-less request rows read em-dash latency, never NaN or 0ms", async () => {
+	const feature = createRequestsFeature("requests", context(async <T>() => [
+		row(1, { duration: null, ttft: null }),
+		row(2, { duration: null, ttft: null }),
+	] as T));
+	await feature.load("24h");
+	const text = feature.render(200, 40).join("\n");
+	const lines = text.split("\n");
+	const medianLabel = lines.findIndex(line => line.includes("Median latency"));
+	const p95Label = lines.findIndex(line => line.includes("p95 latency"));
+	expect(medianLabel).toBeGreaterThan(-1);
+	expect(p95Label).toBeGreaterThan(-1);
+	expect(lines[medianLabel + 1] ?? "").toContain("\u2014");
+	expect(lines[p95Label + 1] ?? "").toContain("\u2014");
+	expect(text).not.toContain("NaN");
+	expect(text).not.toMatch(/0ms|0\.0s/);
+	feature.dispose();
+});

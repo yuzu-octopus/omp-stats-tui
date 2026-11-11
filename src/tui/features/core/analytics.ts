@@ -414,11 +414,10 @@ class AnalyticsFeature implements FeatureController {
 		// detail's samples, not the screen buckets.
 		if (action.type !== "selectBucket") return;
 		if ((action.series === "tps" || action.series === "ttft") && this.performancePoints > 0) {
-			this.performanceChart.point = Math.max(0, Math.min(this.performancePoints - 1, action.index));
+			this.performanceChart.selectPoint(action.index, this.performancePoints);
 		} else if (this.buckets.length) {
-			const point = Math.max(0, Math.min(this.buckets.length - 1, action.index));
-			if (action.series === this.trendChart.selectedKey) this.trendChart.point = point;
-			else this.chart.point = point;
+			if (action.series === this.trendChart.selectedKey) this.trendChart.selectPoint(action.index, this.buckets.length);
+			else this.chart.selectPoint(action.index, this.buckets.length);
 		}
 		this.ctx.changed();
 	}

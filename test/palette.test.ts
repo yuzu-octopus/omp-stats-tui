@@ -243,8 +243,10 @@ test("palette.ts is the ONLY module allowed to emit a colour escape", async () =
 	// name a colour directly.
 	const ALLOWED = new Set(["src/tui/palette.ts"]);
 	const offenders: string[] = [];
+	const scanned = [...new Bun.Glob("src/**/*.ts").scanSync({ cwd: import.meta.dir + "/.." })];
+	expect(scanned.length).toBeGreaterThan(0);
 
-	for (const file of new Bun.Glob("src/**/*.ts").scanSync({ cwd: import.meta.dir + "/.." })) {
+	for (const file of scanned) {
 		if (ALLOWED.has(file)) continue;
 		const source = await Bun.file(`${import.meta.dir}/../${file}`).text();
 		// Comments document escapes legitimately; only code can leak one.

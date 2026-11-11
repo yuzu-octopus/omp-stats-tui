@@ -45,6 +45,7 @@ const SCAN_PRELOAD = [
 	'  },',
 	'}));',
 ].join("\n");
+let preloadSeq = 0;
 
 /** The real worker, with the scan-counting preload and an isolated profile. */
 function spawnScannedWorker(preload: string, log: string, doneLog: string): StatsWorkerProcess {
@@ -73,7 +74,7 @@ test("a rollupStatus-only fetch never scans session files", async () => {
 	// The preload must live inside the repo: a preload in the OS temp dir
 	// resolves `@oh-my-pi/omp-stats/parser` from Bun's global cache, not the
 	// project's node_modules, and the mock would miss the worker's import.
-	const preload = resolve(import.meta.dir, "../scripts", `tmp-scan-preload-${process.pid}.ts`);
+	const preload = resolve(import.meta.dir, "../scripts", `tmp-scan-preload-${process.pid}-${preloadSeq++}.ts`);
 	const log = temp.join("scans.log");
 	const doneLog = temp.join("scanned.done");
 	await Bun.write(preload, SCAN_PRELOAD);
@@ -347,12 +348,13 @@ const SLOW_SCAN_PRELOAD = [
 describe("004 freshness off the critical path", () => {
 	test("payload emits before the scan completes with pre-scan observedAt", async () => {
 		const temp = TempDir.createSync("@stats-worker-scan-");
-		const preload = resolve(import.meta.dir, "../scripts", `tmp-slow-scan-preload-${process.pid}.ts`);
+		const preload = resolve(import.meta.dir, "../scripts", `tmp-slow-scan-preload-${process.pid}-${preloadSeq++}.ts`);
 		const log = temp.join("scans.log");
 		const doneLog = temp.join("scanned.done");
 		await Bun.write(preload, SLOW_SCAN_PRELOAD);
 		let child: StatsWorkerProcess | undefined;
 		const client = new StatsReadClient(() => child = spawnScannedWorker(preload, log, doneLog));
+		let stopWatch: (() => void) | undefined;
 		try {
 			const payload = await client.fetch(["rollupStatus"], "24h");
 			// With a 5 s scan, a blocking fetch path could not have resolved
@@ -370,21 +372,31 @@ describe("004 freshness off the critical path", () => {
 			const settlement = payload as unknown as SettlementProbe; // worker sends the settlement union, typed as PanelData on the client
 			expect(settlement.errors).toEqual({});
 			// The fire-and-forget scan still runs: the done marker appears after.
-			// Real child process + 5 s I/O scan: fake timers cannot advance the worker clock.
-			const deadline = Date.now() + 30_000;
-			let done = "";
-			while (!done.includes("scanned") && Date.now() < deadline) {
-				const gate = Promise.withResolvers<void>();
-				setTimeout(gate.resolve, 250);
-				await gate.promise;
-				try {
-					done = await Bun.file(doneLog).text();
-				} catch {
-					// Not written yet; keep polling until the deadline.
-				}
+			// Watch for it via the filesystem rather than polling on a clock.
+			const { promise: scanned, resolve: resolveScanned, reject: rejectScanned } = Promise.withResolvers<void>();
+			let watcher: FSWatcher | undefined;
+			watcher = watch(temp.path(), (_event, filename) => {
+				if (filename !== "scanned.done") return;
+				watcher?.close();
+				watcher = undefined;
+				stopWatch = undefined;
+				resolveScanned();
+			});
+			watcher.on("error", error => {
+				watcher?.close();
+				watcher = undefined;
+				stopWatch = undefined;
+				rejectScanned(error);
+			});
+			stopWatch = () => watcher?.close();
+			const timeout = setTimeout(() => rejectScanned(new Error("timed out waiting for scanned.done")), 30_000);
+			try {
+				await scanned;
+			} finally {
+				clearTimeout(timeout);
 			}
-			expect(done).toContain("scanned");
 		} finally {
+			stopWatch?.();
 			client.close();
 			if (child) await child.exited;
 			await rm(preload, { force: true });

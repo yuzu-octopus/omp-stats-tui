@@ -28,12 +28,13 @@ export interface StatsTestIsolation {
 }
 
 export function installStatsTestIsolation(prefix: string): StatsTestIsolation {
-	const originalAgentDir = getAgentDir();
+	let originalAgentDir: string;
 	let originalConfigDir: string | undefined;
 	const originalXdg: Record<string, string | undefined> = {};
 	let tempDir: TempDir | null = null;
 
 	beforeEach(() => {
+		originalAgentDir = getAgentDir();
 		tempDir = TempDir.createSync(prefix);
 		originalConfigDir = process.env.PI_CONFIG_DIR;
 		for (const key of XDG_KEYS) {

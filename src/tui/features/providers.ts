@@ -13,7 +13,7 @@ import { glyph } from "../glyphs";
 
 const VIEWS = ["Provider totals", "Burn by provider", "Peak local hours", "Subscription windows", "Account utilization"];
 const METRICS = ["tokens", "output", "requests", "cost"] as const;
-const TOTAL_SORTS = ["tokens", "provider", "requests", "errors", "models", "share", "output", "cost", "premium", "speed"];
+const TOTAL_SORTS = ["tokens", "provider", "requests", "errors", "models", "request share", "output", "cost", "premium", "speed"];
 const WINDOW_SORTS = ["consumed", "window", "accounts", "cycles", "capacity", "peak", "ideal", "exhausted"];
 const ACCOUNT_SORTS = ["latest", "account", "window", "status", "peak", "samples", "recorded", "resets"];
 type AccountRow = AccountReadings & { series: UsageWindowSeries; name: string };
@@ -56,8 +56,10 @@ export function createProvidersFeature(ctx: FeatureContext): FeatureController {
 
 	function sortedTotals(): ProviderAggregate[] {
 		const key = TOTAL_SORTS[totalSort];
-		const value = (p: ProviderAggregate): string | number => key === "provider" ? p.provider : key === "requests" ? p.totalRequests : key === "errors" ? p.totalRequests > 0 ? p.failedRequests / p.totalRequests : 0 : key === "models" ? p.models : key === "output" ? p.totalOutputTokens : key === "cost" ? p.totalCost : key === "premium" ? p.totalPremiumRequests : key === "speed" ? p.avgTokensPerSecond ?? -1 : p.totalTokens;
-		return [...data?.providers ?? []].sort((a, b) => {
+		const providers = [...data?.providers ?? []];
+		const totalRequests = providers.reduce((sum, p) => sum + p.totalRequests, 0);
+		const value = (p: ProviderAggregate): string | number => key === "provider" ? p.provider : key === "requests" ? p.totalRequests : key === "errors" ? p.totalRequests > 0 ? p.failedRequests / p.totalRequests : 0 : key === "models" ? p.models : key === "request share" ? (totalRequests > 0 ? p.totalRequests / totalRequests : 0) : key === "output" ? p.totalOutputTokens : key === "cost" ? p.totalCost : key === "premium" ? p.totalPremiumRequests : key === "speed" ? p.avgTokensPerSecond ?? -1 : p.totalTokens;
+		return providers.sort((a, b) => {
 			const av = value(a), bv = value(b);
 			return (typeof av === "string" && typeof bv === "string" ? av.localeCompare(bv) : Number(av) - Number(bv)) * (descending ? -1 : 1);
 		});

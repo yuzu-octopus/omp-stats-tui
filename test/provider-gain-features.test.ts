@@ -492,3 +492,19 @@ test("an all-unpriced cost bucket reads N/A in the burn legend, never $0.00", as
 	expect(text).not.toContain("$0.00");
 	controller.dispose();
 });
+
+test("provider totals sort by request share, not tokens", async () => {
+	const many = { ...local.providers[0], provider: "many-requests", totalRequests: 90, totalTokens: 100 };
+	const few = { ...local.providers[0], provider: "few-requests", totalRequests: 10, totalTokens: 900 };
+	const controller = createProvidersFeature(context(async <T>(path: string) => (
+		path.endsWith("/providers") ? { ...local, providers: [few, many] } : { windowInsights: [], usageSeries: [] }
+	) as T));
+	await controller.load("24h");
+	let text = stripForTest(controller.render(120, 40).join("\n"));
+	expect(text.indexOf("few-requests")).toBeLessThan(text.indexOf("many-requests"));
+	for (let i = 0; i < 5; i++) controller.handleInput("o");
+	text = stripForTest(controller.render(120, 40).join("\n"));
+	expect(text).toContain("request share");
+	expect(text.indexOf("many-requests")).toBeLessThan(text.indexOf("few-requests"));
+	controller.dispose();
+});

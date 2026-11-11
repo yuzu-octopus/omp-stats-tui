@@ -18,6 +18,7 @@ export class StatsReadClient {
 	#pending = new Map<number, { resolve: (data: unknown) => void; reject: (error: Error) => void; stage?: (stage: ReadStage) => void }>();
 	#sequence = 0;
 	#closed = false;
+	#malformedLines = 0;
 	#stderr = "";
 	#writeError: unknown;
 	readonly #spawn: () => StatsWorkerProcess;
@@ -58,6 +59,7 @@ export class StatsReadClient {
 				const child = this.#spawn();
 				this.#child = child;
 				this.#stderr = "";
+				this.#malformedLines = 0;
 				this.#writeError = undefined;
 				void this.#watch(child);
 			}
@@ -106,16 +108,25 @@ export class StatsReadClient {
 			while (true) {
 				const { value, done } = await reader.read();
 				buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+				// Fold a trailing partial line into the same per-line handling below.
+				if (done) buffer += "\n";
 				let end: number;
 				while ((end = buffer.indexOf("\n")) !== -1) {
 					const line = buffer.slice(0, end);
 					buffer = buffer.slice(end + 1);
-					if (line.trim()) this.#receive(JSON.parse(line));
+					if (!line.trim()) continue;
+					let message: DataWorkerResponse;
+					try {
+						message = JSON.parse(line);
+					} catch {
+						this.#malformedLines++;
+						this.#stderr = (this.#stderr + `\nmalformed worker stdout line ${this.#malformedLines}: ${line.slice(0, 200)}`).slice(-8192);
+						if (this.#malformedLines > 10) throw new Error(`Stats read worker emitted ${this.#malformedLines} malformed stdout lines`);
+						continue;
+					}
+					this.#receive(message);
 				}
-				if (done) {
-					if (buffer.trim()) this.#receive(JSON.parse(buffer));
-					break;
-				}
+				if (done) break;
 			}
 		})().catch(error => {
 			child.kill("SIGKILL");

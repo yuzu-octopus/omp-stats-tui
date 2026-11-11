@@ -395,10 +395,13 @@ class SummaryFeature implements FeatureController {
 				const list = [this.projects, this.costRanking, this.requestRanking][this.focus];
 				if (list) list.selected = action.key;
 			} else this.days.selected = action.key;
-		} else {
+		} else if (action.type === "selectDay") {
 			this.calendarDay = action.day;
 			this.calendarEnd = null;
 		}
+		// selectBucket is not consumed here: the overview chart lives in the
+		// analytics feature (models/costs/tools/overview-performance), whose
+		// handleHit selects the point. Unknown actions change nothing.
 		this.ctx.changed();
 	}
 	dispose(): void { this.closed = true; this.generation++; this.details.dispose(); }

@@ -188,7 +188,10 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 			const summary = summarizeRequests(rows);
 			const gs = signatures.rows(groups(), signatureSorters);
 			const ms = modelRows();
-			const scope = complete ? "Complete range" : `Latest ${rows.length}; older ${id === "errors" ? "failures" : "requests"} are not loaded`;
+			// Population honesty, mirroring the web's "N of latest M" header:
+			// a complete load names its own total; a capped load states the
+			// loaded count with the total unavailable (no second fetch buys it).
+			const scope = complete ? `${formatInteger(rows.length)} of ${formatInteger(rows.length)} in ${range}` : `${formatInteger(rows.length)} loaded (total unavailable)`;
 			const lines = [sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
 				...metricGrid(ctx, width, [
 					{ label: id === "errors" ? "Loaded failures" : "Loaded requests", value: formatInteger(rows.length), emphasis: "primary", hint: `${counts.ok} ok` },

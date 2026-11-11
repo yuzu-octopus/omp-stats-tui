@@ -3,7 +3,7 @@ import type { ProviderAggregate, ProviderDashboardStats, ProviderWindowInsight, 
 import type { Range } from "../../data/ranges";
 import { compactTokens, costWithUnpriced, formatCost, formatInteger, formatPercent } from "../format";
 import { SERIES_COLORS } from "../palette";
-import type { FeatureContext, FeatureController } from "./types";
+import type { FeatureContext, FeatureController, FeatureHitAction } from "./types";
 import { accountNames, accountReadings, rangeAxis, rangeStep, resolveWindow, utilization, type AccountReadings, type WindowRef } from "./provider-gain-data";
 import { boundLines, recordViewport } from "./provider-gain-chart";
 import { renderTimeSeries } from "../charts/time-series";
@@ -261,6 +261,7 @@ export function createProvidersFeature(ctx: FeatureContext): FeatureController {
 				const selected = rows.findIndex(i => i.provider === picked?.provider && i.windowKey === picked?.windowKey);
 				const i = rows[selected];
 				lines.push(sectionHeading(ctx, width, "Subscription windows", `${WINDOW_SORTS[windowSort]} ${descending ? "↓" : "↑"} · ${rows.length} windows`, true));
+				const blockStart = lines.length;
 				const viewport = recordViewport(rows, Math.max(0, selected), Math.max(1, height - lines.length + 10), rows.length);
 				lines.push(...dataTable(ctx, width, "", [
 					{ key: "window", header: "Provider / window", align: "left" },
@@ -269,6 +270,12 @@ export function createProvidersFeature(ctx: FeatureContext): FeatureController {
 					{ key: "capacity", header: "Capacity", align: "right", priority: 2 },
 					{ key: "exhaustions", header: "Exhaustions", align: "right", priority: 3 },
 				], viewport.rows.map(i => ({ window: `${i.provider} / ${i.windowLabel}`, burned: i.fractionConsumed.toFixed(2), accounts: formatInteger(i.accounts), capacity: i.estTokensPerWindow === null ? "—" : compactTokens(i.estTokensPerWindow), exhaustions: formatInteger(i.exhaustedEvents) })), selected - viewport.start));
+				// Click a row = the j/k path: select that window into the utilization chart.
+				ctx.reportHits?.(viewport.rows.map((w, line) => ({
+					rowStart: blockStart + 1 + line, rowEnd: blockStart + 2 + line,
+					colStart: 0, colEnd: width,
+					action: { type: "selectRow", key: `${w.provider}::${w.windowKey}` },
+				})));
 				if (i) lines.push(ctx.theme.bold(`${i.provider} · ${i.windowLabel}`), `Windows burned ${i.fractionConsumed.toFixed(2)} · resets ${i.cycles} · capacity ${i.estTokensPerWindow === null ? "— (too little consumed to estimate)" : `${compactTokens(i.estTokensPerWindow)} tokens/window`}`, `Peak ${formatPercent(i.peakConcurrentFraction)} summed · fleet ${i.accounts} accounts · fleet load ${i.accounts ? formatPercent(i.peakConcurrentFraction / i.accounts) : "—"}`, `Accounts needed ${i.idealAccounts} at <90% · have ${i.accounts} · ${i.idealAccounts > i.accounts ? `short ${i.idealAccounts - i.accounts}` : `headroom ${i.accounts - i.idealAccounts}`} · exhaustions ${i.exhaustedEvents}`);
 				if (insights && !insights.length) lines.push("No usage snapshots in this range. Snapshots accumulate when limits are fetched (footer, /usage, omp usage).");
 				lines.push("Capacity uses upstream broker fleet tokens when present, otherwise local provider tokens; it is an estimate, not billing.");
@@ -364,6 +371,17 @@ export function createProvidersFeature(ctx: FeatureContext): FeatureController {
 			} else if (input === "\x1b" && expanded && view === 0) expanded = null;
 			else return false;
 			ctx.changed(); return true;
+		},
+
+		handleHit(action: FeatureHitAction): void {
+			// Click a windows row = the j/k path: scope the utilization chart.
+			// Enter still navigates to Accounts; clicks select in place.
+			if (action.type === "selectRow" && view === 3) {
+				const [provider, windowKey] = action.key.split("::");
+				const found = (insights ?? []).find(i => i.provider === provider && i.windowKey === windowKey);
+				if (found) selectWindow(found);
+				ctx.changed();
+			}
 		},
 		dispose() { closed = true; localGeneration++; windowsGeneration++; accountsGeneration++; },
 	};

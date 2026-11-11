@@ -43,9 +43,11 @@ test("status intersects search while status counts stay unfiltered", async () =>
 test("full server limit reports incomplete and load-more uses next limit", async () => {
 	const limits: string[] = [];
 	const feature = createRequestsFeature("requests", context(async <T>(_path: string, params?: Record<string, string>) => { limits.push(params!.limit); return Array.from({ length: 500 }, (_, index) => row(index)) as T; }));
-	await feature.load("24h"); expect(feature.render(160, 30).join("\n")).toContain("older requests are not loaded");
+	// Capped at the server limit: loaded count stated, total honestly unavailable.
+	await feature.load("24h"); expect(feature.render(160, 30).join("\n")).toContain("500 loaded (total unavailable)");
 	feature.handleInput("l"); await Promise.resolve();
-	expect(limits).toEqual(["500", "2000"]); expect(feature.render(160, 30).join("\n")).toContain("Complete range");
+	// Stepped up past the population: a complete load names its own total.
+	expect(limits).toEqual(["500", "2000"]); expect(feature.render(160, 30).join("\n")).toContain("500 of 500 in 24h");
 });
 
 test("expanded error signature exposes every member, not only the latest", async () => {

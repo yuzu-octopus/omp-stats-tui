@@ -508,3 +508,29 @@ test("provider totals sort by request share, not tokens", async () => {
 	expect(text.indexOf("many-requests")).toBeLessThan(text.indexOf("few-requests"));
 	controller.dispose();
 });
+
+test("clicking a windows row scopes the utilization chart like j/k does", async () => {
+	const windows = [insight("a", "day", 2), insight("b", "day", 1)];
+	const controller = createProvidersFeature(context(async <T>(path: string, params?: Record<string, string>) => {
+		if (path.endsWith("/providers")) return local as T;
+		if (!params?.provider) return { windowInsights: windows, usageSeries: [] } as T;
+		return { windowInsights: windows, usageSeries: [account(params.provider, "k")] } as T;
+	}));
+	await controller.load("24h");
+	// Three "v" presses reach the Windows view (Totals -> Burn -> Hours -> Windows).
+	controller.handleInput("v"); controller.handleInput("v"); controller.handleInput("v");
+	await settle();
+	const before = stripForTest(controller.render(130, 50).join("\n"));
+	expect(before).toContain("Subscription windows");
+	// Keyboard: move selection with j/k (selects via selectWindow already).
+	controller.handleInput("j");
+	const viaKeys = stripForTest(controller.render(130, 50).join("\n"));
+	// Click the first window row directly: same scoping without Tab navigation.
+	expect(typeof controller.handleHit).toBe("function");
+	controller.handleHit!({ type: "selectRow", key: "a::day" });
+	const viaClick = stripForTest(controller.render(130, 50).join("\n"));
+	// The windows detail block names the selected window; Enter would navigate,
+	// clicks select in place.
+	expect(viaClick).toContain("a · day");
+	controller.dispose();
+});

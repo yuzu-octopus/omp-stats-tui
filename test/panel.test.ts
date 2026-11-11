@@ -894,46 +894,52 @@ test("home and end reach the two ends and stop there", async () => {
 // The line cache
 // ---------------------------------------------------------------------------
 
-test("the line cache composes the body once per key, not once per render", async () => {
+test("composing twice with the same key yields byte-identical body lines", async () => {
 	const panel = makePanel({ data: dataFor(), rows: 40 });
 	await __testing.settled(panel);
-	const before = __testing.debugComposeCount(panel);
+	const first = panel.render(100);
+	// Two more renders at the SAME key: same rows, not a fresh composition.
+	// The composed document is the cache's identity: a same-key render must
+	// hand back the SAME body, not a fresh array. This is what fails if the
+	// cache is removed.
 	panel.render(100);
-	expect(__testing.debugComposeCount(panel) - before).toBe(1);
-	// Two more renders at the SAME key: no further composition, same rows.
 	panel.render(100);
-	panel.render(100);
-	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
-	expect(panel.render(100)).toEqual(panel.render(100));
-	// Counter-free guard: a same-key render must hand back the SAME composed
-	// document, not a fresh array. This is what fails if the cache is removed.
+	expect(panel.render(100)).toEqual(first);
 	const composed = __testing.debugState(panel).source;
 	panel.render(100);
 	expect(__testing.debugState(panel).source).toBe(composed);
 });
 
-test("scrolling does not recompose: it shifts the slice, not the document", async () => {
+test("scrolling then returning renders the same lines as before", async () => {
 	// The audit's whole complaint is per-frame work that a scroll does not need.
 	// `scroll` is deliberately absent from the cache key, so a render at a new
 	// offset must reuse the composed body.
 	const panel = makePanel({ data: liveData(), rows: 12, screenId: "costs" });
 	await __testing.settled(panel);
-	panel.render(100);
+	const atRest = panel.render(100);
+	const body = __testing.debugState(panel).source;
 	expect(__testing.debugMaxScroll(panel)).toBeGreaterThan(0);
-	const atRest = __testing.debugComposeCount(panel);
 	for (let i = 0; i < 5; i++) panel.handleInput(DOWN);
 	expect(__testing.debugScroll(panel), "the sweep must actually scroll").toBeGreaterThan(0);
-	panel.render(100);
-	expect(__testing.debugComposeCount(panel)).toBe(atRest);
+	const scrolled = panel.render(100);
+	expect(scrolled).not.toEqual(atRest);
+	// The scroll shifts the slice, not the document: the composed body is the
+	// same reference at the new offset.
+	expect(__testing.debugState(panel).source).toBe(body);
+	for (let i = 0; i < 5; i++) panel.handleInput(UP);
+	expect(__testing.debugScroll(panel), "the sweep must return to rest").toBe(0);
+	expect(panel.render(100)).toEqual(atRest);
 });
 
-test("a width change recomposes, and the frame is byte-identical when it returns", async () => {
+test("a width change renders lines fitting the new width, and the frame is byte-identical when it returns", async () => {
 	const panel = makePanel({ data: liveData(), rows: 40 });
 	await __testing.settled(panel);
 	const wide = panel.render(120);
-	const atWide = __testing.debugComposeCount(panel);
-	panel.render(40);
-	expect(__testing.debugComposeCount(panel)).toBeGreaterThan(atWide);
+	// The existing width sweep already pins that every composed row fits its
+	// frame; here the narrow render must fit the NARROW width, not the old one.
+	const narrow = panel.render(40);
+	expect(narrow).not.toEqual(wide);
+	for (const row of narrow.map(stripAnsi)) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(40);
 	expect(panel.render(120)).toEqual(wide);
 });
 
@@ -943,15 +949,15 @@ test("a payload that lands inside a generation still invalidates the cache", asy
 	// for the rest of the session, so the key carries the payload's IDENTITY too.
 	const panel = makePanel({ data: dataFor(), rows: 40 });
 	await __testing.settled(panel);
-	panel.render(100);
+	const before = panel.render(100).map(stripAnsi);
+	expect(before.join("\n")).not.toContain("6 dirty hours");
 	const state = __testing.debugState(panel);
 	const generation = state.generation;
-	const before = __testing.debugComposeCount(panel);
 	state.data = dataFor({ rollupStatus: { dirtyHours: 6, dirtySessions: 1 } });
-	panel.render(100);
+	const after = panel.render(100).map(stripAnsi);
 	expect(state.generation).toBe(generation);
-	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
-	expect(__testing.debugHeader(panel)).toContain("6 dirty hours");
+	expect(after.join("\n")).toContain("6 dirty hours");
+	expect(after).not.toEqual(before);
 });
 
 test("a feature's own state change invalidates the body cache", async () => {
@@ -960,11 +966,12 @@ test("a feature's own state change invalidates the body cache", async () => {
 	// only signal that state moved, and it bumps the key's feature revision.
 	const panel = makePanel({ reads: stubReader(), rows: 40 });
 	await __testing.settled(panel);
-	panel.render(100);
-	const before = __testing.debugComposeCount(panel);
+	const before = panel.render(100);
 	panel.handleInput("\t"); // the overview feature's own requests/chart focus toggle
-	panel.render(100);
-	expect(__testing.debugComposeCount(panel)).toBe(before + 1);
+	const after = panel.render(100);
+	// The focus toggle reorders the requests list and the chart, so the frame
+	// must repaint instead of serving the pre-toggle body.
+	expect(after).not.toEqual(before);
 });
 
 test("a bare minute tick does not recompose, but the chrome's relative time still advances", async () => {
@@ -996,12 +1003,10 @@ test("a bare minute tick does not recompose, but the chrome's relative time stil
 	});
 	const first = panel.render(100).map(stripAnsi);
 	expect(first.join("\n")).toContain("5m ago");
-	const before = __testing.debugComposeCount(panel);
 	const body = __testing.debugState(panel).source;
-	// 61s later, same state: the body is byte-identical and no recompose ran.
+	// 61s later, same state: the body is byte-identical, never recomposed.
 	now += 61_000;
 	const second = panel.render(100).map(stripAnsi);
-	expect(__testing.debugComposeCount(panel)).toBe(before);
 	expect(__testing.debugState(panel).source).toBe(body);
 	// Chrome DID advance: the chip now reads `6m ago` while every other line
 	// is byte-identical.

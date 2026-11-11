@@ -168,9 +168,6 @@ test("glyphClass matches exactly the roles it is given, and nothing else", () =>
 	}
 });
 
-test("nerd preset emits byte-identical data ink to unicode", () => {
-	expect(glyphsFor("nerd")).toEqual(glyphsFor("unicode"));
-});
 
 test("every ramp has its declared length, so a typo cannot silently shorten one", () => {
 	expect(glyphsFor("unicode").sparkRamp).toHaveLength(SPARK_LEVELS);

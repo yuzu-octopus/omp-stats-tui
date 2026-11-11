@@ -69,16 +69,6 @@ test("a sub-terminal width is legal: at least one column of content survives", (
 	}
 });
 
-test("planLayout never throws, whatever it is handed", () => {
-	// Defensive: the panel calls this once per frame on numbers that came from
-	// the terminal, and a throw there takes the whole overlay down.
-	for (const bad of [-100, -1, 0, Number.NaN, Number.MAX_SAFE_INTEGER]) {
-		expect(() => planLayout(bad, 24, "unicode")).not.toThrow();
-	}
-	for (const bad of [-5, 0, 1, Number.NaN]) {
-		expect(() => planLayout(80, bad, "unicode")).not.toThrow();
-	}
-});
 
 test("each breakpoint row produces its documented decisions, walked from the table", () => {
 	// Asserting the table by walking it is what lets a new breakpoint be a

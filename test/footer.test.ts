@@ -140,13 +140,16 @@ test("every key renders through formatKeyHints, so keycaps match the host", () =
 // ─── the fit ────────────────────────────────────────────────────────────────
 
 test("the row never exceeds the width it was handed, across 20..200", () => {
+	let asserted = 0;
 	for (let width = 20; width <= 200; width++) {
 		for (const mode of MODES) {
 			const [row] = footerHints(hintsFor(mode), theme, width);
 			if (row === undefined) continue; // nothing fit: the row is dropped
+			asserted++;
 			expect(visibleWidth(row), `${mode}@${width}`).toBeLessThanOrEqual(width);
 		}
 	}
+	expect(asserted).toBeGreaterThan(0);
 });
 
 test("close is pinned: it survives every width at which ANY hint fits", () => {

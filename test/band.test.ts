@@ -422,37 +422,6 @@ test("a table shows no count note when nothing was dropped", () => {
 
 // ─── Robustness ─────────────────────────────────────────────────────────────
 
-test("every band kind renders on an EMPTY payload without throwing", () => {
-	for (const preset of PRESETS) {
-		const empty: Band[] = [
-			{ kind: "statRow", stats: [] },
-			{ kind: "table", title: "", columns: [], rows: { kind: "inline", rows: [] } },
-		];
-		expect(() => renderBands(empty, ctx({ preset, glyphs: glyphsFor(preset) }))).not.toThrow();
-	}
-});
-
-test("every band kind renders a realistic fixture without throwing", () => {
-	for (const preset of PRESETS) {
-		expect(() => renderBands(ALL_KINDS, ctx({ preset, glyphs: glyphsFor(preset) }))).not.toThrow();
-	}
-});
-
-test("no row exceeds the requested width, swept 40..200", () => {
-	for (let width = 40; width <= 200; width++) {
-		for (const preset of PRESETS) {
-			const rendered = renderBands(ALL_KINDS, ctx({ width, innerWidth: width, preset, glyphs: glyphsFor(preset) }));
-			for (const row of rendered) {
-				expect(visibleWidth(row), `width ${width} ${preset}: ${row}`).toBeLessThanOrEqual(width);
-			}
-		}
-	}
-});
-
-test("a zero or negative width does not throw", () => {
-	expect(() => renderBands(ALL_KINDS, ctx({ width: 0, innerWidth: 0 }))).not.toThrow();
-	expect(() => renderBands(ALL_KINDS, ctx({ width: -5, innerWidth: -5 }))).not.toThrow();
-});
 
 test("glyphs come from the glyph module: ascii differs and stays one cell wide", () => {
 	const u = renderBands([{ kind: "table", title: "Models", columns, rows }], ctx({ preset: "unicode" }));

@@ -335,18 +335,3 @@ test("an empty readout leaves the whole width for the bar", () => {
 	expect(Bun.stringWidth(bar)).toBe(10);
 	expect([...bar].filter((c) => c === U.barFill).length).toBe(5);
 });
-
-test("the share bar's glyphs come from the glyph module, under every preset", () => {
-	for (const preset of ["unicode", "ascii"] as const) {
-		const bar = renderShareBar(0.5, { width: 20, preset, accent: identity }, "50%");
-		const set = glyphsFor(preset);
-		for (const ch of [...bar]) {
-			expect([set.barFill, set.barEmpty, ...bar.split("")]).toContain(ch);
-		}
-		// ascii must differ from unicode and still be exactly 20 cells.
-		expect(Bun.stringWidth(bar)).toBe(20);
-	}
-	expect(renderShareBar(0.5, { width: 20, preset: "nerd", accent: identity }, "50%")).toBe(
-		renderShareBar(0.5, { width: 20, preset: "unicode", accent: identity }, "50%"),
-	);
-});

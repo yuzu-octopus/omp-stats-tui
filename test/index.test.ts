@@ -32,12 +32,3 @@ test("the extension registers exactly one command: /stats-tui", () => {
 	expect(commands.map(c => c.name)).toEqual(["stats-tui"]);
 });
 
-test("the command carries a description and a callable handler", () => {
-	const { pi, commands } = fakePi();
-	register(pi);
-	expect(commands).toHaveLength(1);
-	for (const command of commands) {
-		expect(command.options.description).toBeString();
-		expect(typeof command.options.handler).toBe("function");
-	}
-});

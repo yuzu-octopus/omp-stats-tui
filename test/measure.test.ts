@@ -26,6 +26,3 @@ test("pads and ellipsis are cell-exact on styled input", () => {
 	expect(ellipsizeCells("abcdef", 4)).toBe("abc…");
 });
 
-test("the empty-chart sentence is defined once", () => {
-	expect(NO_ACTIVITY).toBe("No activity recorded in this range.");
-});

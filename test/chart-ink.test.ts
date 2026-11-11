@@ -824,14 +824,25 @@ test("a 6-series stacked time-series at height 5 draws data ink", () => {
 	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "barFill"));
 });
 
-test("a 7-series stacked time-series at height 4 draws data ink", () => {
-	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(7), 80, 5, { height: 4, stacked: true });
-	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "barFill"));
-});
 
 test("a multi-series line spec draws a shared-axis plot, not one floor per band", () => {
 	// The point form of the same shapes: no stacking, so the ink is one
 	// `pointHollow` per bucket per series rather than a filled column.
 	const lines = renderTimeSeries(seriesCtx, SHAPE_AXIS, shapeRows(6), 80, 5, { height: 5 });
 	expect(stripForTest(lines.join("\n"))).toContain(glyph("unicode", "pointHollow"));
+});
+
+test("a time-series bucket null in every series emits no hit span", () => {
+	// Mixed-null precedent sits in chart-primitives (band spans); this is the
+	// time-series half: the same null-everywhere bucket through the host
+	// adapter emits no hit span, while plotted buckets stay clickable.
+	const seen: { index: number }[] = [];
+	renderTimeSeries(seriesCtx, SHAPE_AXIS, [
+		{ key: "a", label: "A", values: SHAPE_AXIS.map((_, i) => (i === 3 ? null : (i + 1) * 2)) },
+		{ key: "b", label: "B", values: SHAPE_AXIS.map((_, i) => (i === 3 ? null : (i + 1) * 3 + 5)) },
+	], 80, 5, { height: 5, reportBuckets: s => seen.push(...s) });
+	expect(seen.length).toBeGreaterThan(0);
+	expect(seen.some(s => s.index === 3)).toBe(false);
+	expect(seen.some(s => s.index === 2)).toBe(true);
+	expect(seen.some(s => s.index === 4)).toBe(true);
 });

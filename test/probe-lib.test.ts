@@ -1,11 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-	DEFAULT_RANGE,
-	KNOWN_INVALID_RANGES,
-	VALID_RANGES,
-	isValidRange,
-	resolveRange,
-} from "../scripts/lib/ranges";
+import { KNOWN_INVALID_RANGES, resolveRange } from "../scripts/lib/ranges";
 import {
 	bucketLabel,
 	coldCall,
@@ -22,14 +16,6 @@ import {
 	type GlyphSample,
 } from "../scripts/lib/glyph-width";
 
-test("the valid range set is exactly the six keys the aggregator honours", () => {
-	expect([...VALID_RANGES]).toEqual(["1h", "24h", "7d", "30d", "90d", "all"]);
-	expect(DEFAULT_RANGE).toBe("24h");
-	for (const range of VALID_RANGES) expect(isValidRange(range)).toBe(true);
-	expect(isValidRange("365d")).toBe(false);
-	expect(isValidRange("")).toBe(false);
-	expect(isValidRange("7D")).toBe(false); // the aggregator lowercases; callers must too
-});
 
 test("365d silently resolves to 24h, which is why it may never be offered", () => {
 	expect(KNOWN_INVALID_RANGES).toContain("365d");

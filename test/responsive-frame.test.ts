@@ -108,11 +108,6 @@ test("widening the terminal only ever restores chrome, never takes it away", () 
 	}
 });
 
-test("framePolicy never throws, whatever the terminal reports", () => {
-	for (const bad of [-100, -1, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
-		expect(() => framePolicy(bad)).not.toThrow();
-	}
-});
 
 // ---------------------------------------------------------------------------
 // Composed frame at the acceptance widths

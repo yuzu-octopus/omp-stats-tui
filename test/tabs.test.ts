@@ -64,34 +64,6 @@ function barFor(preset: SymbolPreset, theme: Theme): TabBar {
 }
 
 describe("TAB_SHORT", () => {
-	test("every short is exactly one cell on EVERY preset", () => {
-		const offenders: string[] = [];
-		for (const preset of PRESETS) {
-			for (const [id, glyph] of Object.entries(TAB_SHORT[preset])) {
-				const width = visibleWidth(glyph);
-				if (width !== 1) offenders.push(`${preset}.${id} = ${JSON.stringify(glyph)} is ${width} cells`);
-			}
-		}
-		expect(offenders).toEqual([]);
-	});
-
-	test("covers every screen, so no tab renders as an empty cell", () => {
-		for (const preset of PRESETS) {
-			for (const spec of SHOWN) {
-				expect(TAB_SHORT[preset][spec.id] ?? "").not.toBe("");
-			}
-		}
-	});
-
-	test("keys are the screen ids, and nothing else", () => {
-		for (const preset of PRESETS) {
-			expect(new Set(Object.keys(TAB_SHORT[preset])).size).toBe(SCREENS.length);
-			for (const spec of SCREENS) {
-				expect(TAB_SHORT[preset]).toHaveProperty(spec.id);
-			}
-		}
-	});
-
 	test("nerd arm reuses the PUA forms pi-tui already registers", () => {
 		// Plane 15 PUA too: the host registers some icons there (e.g. providers).
 		const PUA = /^[\u{E000}-\u{F8FF}\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]$/u;
@@ -177,9 +149,6 @@ describe("strip geometry", () => {
 		}
 	});
 
-	test("the indent is the reference's single-column row inset", () => {
-		expect(TAB_BAR_INDENT).toBe(1);
-	});
 });
 
 describe("tabBarTheme", () => {

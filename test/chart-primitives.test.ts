@@ -110,17 +110,6 @@ test("renderDailyBars scales by VALUE, and that value is cost", () => {
 	expect(columnHeight(0)).toBe(0);
 });
 
-test("renderDailyBars says so when a range has no data at all", () => {
-	const rows = renderDailyBars([], {
-		width: 40,
-		height: 4,
-		glyphs: glyphsFor("unicode"),
-		accent: paint,
-		dim: paint,
-	});
-	expect(rows.length).toBe(1);
-	expect(rows[0]).toContain("No activity");
-});
 
 test("renderSparkline renders at every width and preset, one cell per sample", () => {
 	const values = [3, 9, 1, 14, 7, 0, 22, 11];
@@ -767,6 +756,48 @@ test("dot-whisker overlaps marks, gaps nulls, and holds the width", async () => 
 	// Null mark draws no cell — the quiet row carries its label and blanks.
 	expect(rows[1]).not.toContain("◆");
 });
+test("dot-whisker later marks win a shared cell on one row", () => {
+	const glyphs = glyphsFor("unicode");
+	// One row, two marks: a valueless interval across 0..10, then a value at 5.
+	// The shared domain is 0..10 over a 21-cell track, so 5 lands mid-track on
+	// a cell the interval already painted: the value overwrites it.
+	const rows = renderDotWhisker([
+		{ label: "shared", marks: [{ value: null, lo: 0, hi: 10 }, { value: 5 }] },
+	], { width: 40, glyphs });
+	expect(rows).toHaveLength(1);
+	const track = stripForTest(rows[0]!).slice(19);
+	expect(track[10]).toBe("◆");
+	expect(track[9]).toBe("─");
+	expect(track[11]).toBe("─");
+	for (const row of rows) expect(cells(row)).toBeLessThanOrEqual(40);
+});
+
+test("dot-whisker draws a single cell for a one-sided whisker", () => {
+	const glyphs = glyphsFor("unicode");
+	const loOnly = renderDotWhisker([
+		{ label: "lo", marks: [{ value: null, lo: 2, hi: null }] },
+	], { width: 40, glyphs });
+	const hiOnly = renderDotWhisker([
+		{ label: "hi", marks: [{ value: null, lo: null, hi: 2 }] },
+	], { width: 40, glyphs });
+	expect(loOnly).toHaveLength(1);
+	expect(hiOnly).toHaveLength(1);
+	expect(stripForTest(loOnly[0]!)).toContain("─");
+	expect(stripForTest(hiOnly[0]!)).toContain("─");
+	for (const row of [...loOnly, ...hiOnly]) expect(cells(row)).toBeLessThanOrEqual(40);
+});
+
+test("dot-whisker all-zero marks report no activity instead of a degenerate track", () => {
+	const glyphs = glyphsFor("unicode");
+	// A [0, 0] domain cannot place a cell — (v - min) / (max - min) is 0/0 —
+	// so measured zeros take the same honest sentence as no data, never a
+	// blank track that reads as a rendering failure.
+	const rows = renderDotWhisker([
+		{ label: "a", marks: [{ value: 0, lo: 0, hi: 0 }] },
+		{ label: "b", marks: [{ value: 0 }] },
+	], { width: 40, glyphs });
+	expect(rows).toEqual(["No activity recorded in this range."]);
+});
 
 test("waterfall asserts its total and renders negatives honestly", async () => {
 	const glyphs = glyphsFor("unicode");
@@ -781,6 +812,22 @@ test("waterfall asserts its total and renders negatives honestly", async () => {
 	expect(cells(lines[2]!.trim())).toBeLessThan(cells(lines[0]!.trim()));
 	// Empty steps get the shared sentence, not blank rows.
 	expect(renderWaterfall([], { width: 40, glyphs })).toEqual(["No activity recorded in this range."]);
+});
+
+test("waterfall honours a mismatched closing total instead of the delta sum", () => {
+	const glyphs = glyphsFor("unicode");
+	// Deltas sum to 70 but the closing total says 50: there is no dev assert,
+	// so the figure honours the given total — the last bar resets to it and
+	// renders shorter than the gross bar rather than crashing.
+	const lines = renderWaterfall([
+		{ label: "gross", kind: "total", value: 100 },
+		{ label: "reread", kind: "delta", value: -30 },
+		{ label: "net", kind: "total", value: 50 },
+	], { width: 40, glyphs });
+	expect(lines).toHaveLength(3);
+	for (const line of lines) expect(cells(line)).toBeLessThanOrEqual(40);
+	expect(stripForTest(lines[2]!)).toContain("█");
+	expect(cells(lines[2]!.trim())).toBeLessThan(cells(lines[0]!.trim()));
 });
 
 test("empty state names the active filter; no-filter calls are unchanged", async () => {

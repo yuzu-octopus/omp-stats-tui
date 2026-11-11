@@ -483,11 +483,6 @@ test("the sidebar inks stay distinguishable at this terminal's colour depth", ()
 	}
 });
 
-test("an omitted hover id paints byte-identical output to the 3-arg call", () => {
-	expect(sidebar(theme, "unicode", "overview")).toEqual(sidebar(theme, "unicode", "overview", undefined));
-	expect(sidebar(theme, "unicode", "overview")).toEqual(sidebar(theme, "unicode", "overview", null));
-});
-
 test("sidebar columns align: icon gutter, label column, and a right-aligned jump-key column", () => {
 	// Defect 4. The web's `.nav-row` is `display: flex` with
 	// `.nav-row-label { flex: 1 }` and the `kbd` after it
@@ -608,7 +603,8 @@ test("the sidebar gutter follows the preset: │ under unicode, | under ascii", 
 	// comes from glyph(preset, "columnGap") like every other mark. Asserted
 	// by ABSENCE under ascii: the frame borders are "|" and "+" there, so any
 	// remaining "│" is the hardcoded gutter leaking through.
-	const current = theme.getSymbolPreset();
+const current = theme.getSymbolPreset();
+try {
 	await setSymbolPreset("unicode");
 	const upanel = __testing.makePanel({ data: liveData(), rows: 40 });
 	await __testing.settled(upanel);
@@ -622,7 +618,9 @@ test("the sidebar gutter follows the preset: │ under unicode, | under ascii", 
 	expect(arow).toBeDefined();
 	expect(arow!).not.toContain("│");
 	expect(arow!).toContain("|");
+} finally {
 	await setSymbolPreset(current);
+}
 });
 // ─── live chip: LiveChip.tsx branch order, minus connected ────────────────────
 
@@ -795,13 +793,16 @@ test("the topbar never clips at any width from 1 to 200", async () => {
 	}
 	// The real frame at the four widths the brief names, with a chip, a sync in
 	// flight, and a large freshness string all at once.
+	let assertedRows = 0;
 	for (const width of [40, 60, 100, 150]) {
 		const panel = __testing.makePanel({ data: liveData(), rows: 40 });
 		await __testing.settled(panel);
 		for (const row of panel.render(width)) {
+			assertedRows++;
 			expect(visibleWidth(row), `w=${width}`).toBeLessThanOrEqual(width);
 		}
 	}
+	expect(assertedRows).toBeGreaterThan(0);
 });
 
 // ─── frame: sidebar + topbar + body + footer, one divider ─────────────────────

@@ -154,10 +154,10 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 		for (const row of rows) { const key = modelKey(row.model, row.provider); const found = map.get(key); if (found) found.count++; else map.set(key, { key, model: row.model, provider: row.provider, count: 1 }); }
 		return models.rows([...map.values()], { count: m => m.count, model: m => m.model, provider: m => m.provider });
 	};
-	const visible = () => {
+	const visible = (grouped: ErrorGroupView[], allModels: AffectedModel[]) => {
 		const needle = list.search.trim().toLowerCase();
-		const effectiveSignature = groups().some(g => g.signature === signature) ? signature : null;
-		const effectiveModel = modelRows().some(m => m.key === model) ? model : null;
+		const effectiveSignature = grouped.some(g => g.signature === signature) ? signature : null;
+		const effectiveModel = allModels.some(m => m.key === model) ? model : null;
 		return list.rows(rows.filter(r => (id !== "requests" || status === 0 || requestStatus(r) === statuses[status]) &&
 			(id !== "errors" || ((!effectiveSignature || errorSignature(r.errorMessage) === effectiveSignature) && (!effectiveModel || modelKey(r.model, r.provider) === effectiveModel))) &&
 			(!needle || [r.model, r.provider, r.folder, ...(id === "errors" ? [r.errorMessage ?? ""] : [])].some(value => value.toLowerCase().includes(needle)))), sorters);
@@ -165,7 +165,12 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 	const load = async (nextRange: Range) => {
 		if (closed) return;
 		range = nextRange; const request = ++generation; loading = true; error = null; ctx.changed();
-		try { const result = await ctx.reader.api<MessageStats[]>(id === "requests" ? "/api/stats/recent" : "/api/stats/errors", { range, limit: String(steps[step]) }); if (closed || request !== generation) return; rows = result; hasData = true; }
+		try {
+			const result = await ctx.reader.api<MessageStats[]>(id === "requests" ? "/api/stats/recent" : "/api/stats/errors", { range, limit: String(steps[step]) });
+			if (closed || request !== generation) return;
+			if (!Array.isArray(result)) { error = `${id === "requests" ? "Request" : "Error"} list payload is not an array`; return; }
+			rows = result; hasData = true;
+		}
 		catch (caught) { if (closed || request !== generation) return; error = String(caught); }
 		finally { if (!closed && request === generation) { loading = false; ctx.changed(); } }
 	};
@@ -177,7 +182,8 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 			if (!hasData) return wrap([sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
 				ctx.theme.fg(error ? "error" : "dim", error ? `${error} · l retry` : loading ? "Loading observations…" : "No observations loaded yet."),
 				...(list.editing || list.search ? [`Search: ${list.search || "—"} · Enter/Esc finish · Ctrl-U clear`] : [])], width);
-			const filtered = visible();
+			const grouped = groups(); const allModels = modelRows();
+			const filtered = visible(grouped, allModels);
 			let hasTiming = false;
 			const counts = { all: rows.length, ok: 0, aborted: 0, failed: 0 };
 			for (const row of rows) {
@@ -186,8 +192,8 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 			}
 			const complete = !loading && !error && rows.length < steps[step];
 			const summary = summarizeRequests(rows);
-			const gs = signatures.rows(groups(), signatureSorters);
-			const ms = modelRows();
+			const gs = signatures.rows(grouped, signatureSorters);
+			const ms = allModels;
 			// Population honesty, mirroring the web's "N of latest M" header:
 			// a complete load names its own total; a capped load states the
 			// loaded count with the total unavailable (no second fetch buys it).
@@ -238,7 +244,8 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 			if (closed || !list.editing && (data === "q" || data === "[" || data === "]") ||
 				data === "\x1b[D" || data === "\x1b[C") return false;
 			if (details.active) return details.handleInput(data);
-			const filtered = visible();
+			const grouped = groups(); const allModels = modelRows();
+			const filtered = visible(grouped, allModels);
 			if (list.editing && (data === "\t" || data === "\x1b[Z") && id === "errors") { list.editing = false; focus = (focus + (data === "\t" ? 1 : 2)) % 3; ctx.changed(); return true; }
 			if (list.editing) { const consumed = list.input(data, filtered); if (consumed) ctx.changed(); return consumed; }
 			if (data === "l") { if (step + 1 < steps.length) step++; void load(range); return true; }
@@ -253,17 +260,17 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 				ctx.changed(); return true;
 			}
 			if (id === "errors" && (data === "\t" || data === "\x1b[Z")) { focus = (focus + (data === "\t" ? 1 : 2)) % 3; ctx.changed(); return true; }
-			if (id === "errors" && data === "u") { const selected = groups().find(group => group.signature === signature); const latest = selected?.latest ?? rows.reduce<MessageStats | undefined>((best, r) => !best || r.timestamp > best.timestamp ? r : best, undefined); if (latest) void details.open(latest); return true; }
+			if (id === "errors" && data === "u") { const selected = grouped.find(group => group.signature === signature); const latest = selected?.latest ?? rows.reduce<MessageStats | undefined>((best, r) => !best || r.timestamp > best.timestamp ? r : best, undefined); if (latest) void details.open(latest); return true; }
 			if (data === "\r" || data === "\n") {
-				if (id === "errors" && focus === 0) { const selected = signatures.current(signatures.rows(groups(), signatureSorters)); if (selected) signature = signature === selected.signature ? null : selected.signature; }
-				else if (id === "errors" && focus === 1) { const selected = models.current(modelRows()); if (selected) model = model === selected.key ? null : selected.key; }
+				if (id === "errors" && focus === 0) { const selected = signatures.current(signatures.rows(grouped, signatureSorters)); if (selected) signature = signature === selected.signature ? null : selected.signature; }
+				else if (id === "errors" && focus === 1) { const selected = models.current(allModels); if (selected) model = model === selected.key ? null : selected.key; }
 				else { const selected = list.current(filtered); if (selected) void details.open(selected); }
 				ctx.changed(); return true;
 			}
 			// Search belongs to the failure list regardless of current panel focus.
 			if (data === "/" && id === "errors") focus = 2;
 			const consumed = data === "/" || data === "\x1b" || id === "requests" || focus === 2 ? list.input(data, filtered)
-				: focus === 0 ? signatures.input(data, signatures.rows(groups(), signatureSorters)) : models.input(data, modelRows());
+				: focus === 0 ? signatures.input(data, signatures.rows(grouped, signatureSorters)) : models.input(data, allModels);
 			if (consumed) ctx.changed(); return consumed;
 		},
 		dispose() { closed = true; ++generation; details.dispose(); },

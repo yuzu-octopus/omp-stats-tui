@@ -216,3 +216,23 @@ test("narrow list search keeps its full input and sort state visible when no obs
 	const text = stripForTest(list.render([], 12, 12, [{ key: "id", header: "ID", align: "left", value: row => String(row.id) }], f.ctx, "Records").join("\n")).replace(/\n/g, "");
 	expect(text).toContain("long-project-name");
 });
+
+test("a malformed recent payload leaves Overview in a defined error state instead of crashing", async () => {
+	const overview = liveData();
+	delete overview.recent; // `fetch(["overview"])` does not carry the separately-read recent list
+	const feature = createSummaryFeature("overview", {
+		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
+		reader: {
+			fetch: async () => overview,
+			async api<T>(path: string): Promise<T> {
+				if (path === "/api/stats/recent") return { unexpected: "shape" } as T;
+				throw new Error(`unexpected api read ${path}`);
+			},
+		},
+	});
+	await feature.load("24h");
+	let text = "";
+	expect(() => { text = stripForTest(feature.render(100, 30).join("\n")); }).not.toThrow();
+	expect(text).toContain("Recent requests payload is not an array");
+	feature.dispose();
+});

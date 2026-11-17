@@ -68,6 +68,9 @@ export function createFrustrationFeature(ctx: FeatureContext): FeatureController
 			if (disposed || generation !== readGeneration) return;
 			if (!result || !result.overall || !Array.isArray(result.byModel) || !result.job) {
 				error = "Frustration payload missing overall/byModel/job";
+				// Clear job only for malformed payloads: a transient network error
+				// leaves job intact so polling continues for a genuinely running job.
+				job = undefined;
 				return;
 			}
 			data = result;

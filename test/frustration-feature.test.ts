@@ -436,3 +436,33 @@ test("a payload missing every field renders a defined error state instead of thr
 	expect(body).toContain("Frustration payload missing overall/byModel/job");
 	h.feature.dispose();
 });
+
+test("a malformed poll during a running job stops the poll loop", async () => {
+	const callbacks: Array<() => void> = [];
+	const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void) => {
+		callbacks.push(handler as () => void);
+		return { id: callbacks.length } as unknown as Timer;
+	}) as typeof setTimeout);
+	const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+	let reads = 0;
+	const h = harness(request => {
+		if (request.path.endsWith("/cancel")) return { ...IDLE, state: "cancelled" };
+		reads++;
+		return reads === 1
+			? dashboard([model("coverage")], { ...IDLE, state: "running", total: 100, done: 10 })
+			: {};
+	});
+	try {
+		await h.feature.load("24h");
+		expect(callbacks).toHaveLength(1);
+		callbacks.shift()!();
+		await settle();
+		expect(reads).toBe(2);
+		expect(callbacks).toHaveLength(0);
+		expect(h.text()).toContain("Cached data retained; refresh failed: Frustration payload missing overall/byModel/job");
+	} finally {
+		h.feature.dispose();
+		timeout.mockRestore();
+		clear.mockRestore();
+	}
+});

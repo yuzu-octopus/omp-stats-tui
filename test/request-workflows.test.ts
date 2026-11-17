@@ -246,3 +246,15 @@ test("timing-less request rows read em-dash latency, never NaN or 0ms", async ()
 	expect(text).not.toMatch(/0ms|0\.0s/);
 	feature.dispose();
 });
+
+test("a non-array 200 payload becomes a defined error state instead of throwing in render", async () => {
+	for (const id of ["requests", "errors"] as const) {
+		const feature = createRequestsFeature(id, context(async <T>() => ({ unexpected: "shape" }) as T));
+		await feature.load("24h");
+		let text = "";
+		expect(() => { text = feature.render(100, 30).join("\n"); }).not.toThrow();
+		expect(text).toContain(id === "requests" ? "Request list payload is not an array" : "Error list payload is not an array");
+		expect(text).toContain("l retry");
+		feature.dispose();
+	}
+});

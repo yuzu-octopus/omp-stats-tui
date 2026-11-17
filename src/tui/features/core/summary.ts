@@ -91,8 +91,9 @@ class SummaryFeature implements FeatureController {
 				const settlement = fetched as { data?: Partial<PanelData>; errors?: Partial<Record<string, string>> };
 				const overviewData: PanelData = settlement.data !== undefined ? { ...(settlement.data as PanelData) } : (fetched as PanelData);
 				const fetchFailures: string[] = settlement.errors !== undefined ? Object.values(settlement.errors).filter((message): message is string => typeof message === "string") : [];
-				data = { ...overviewData, ...(recent.value === null ? {} : { recent: recent.value }) };
-				const failures = [...fetchFailures, ...(recent.error === null ? [] : [recent.error])];
+				const badRecent = recent.value !== null && !Array.isArray(recent.value);
+				data = badRecent ? { ...overviewData, recent: [] } : { ...overviewData, ...(recent.value === null ? {} : { recent: recent.value }) };
+				const failures = [...fetchFailures, ...(recent.error === null ? [] : [recent.error]), ...(badRecent ? ["Recent requests payload is not an array"] : [])];
 				if (failures.length > 0) scopedError = failures.join("; ");
 			} else {
 				const fetched = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);

@@ -381,6 +381,8 @@
 
 ### Task 5.2: Docs match the code
 
+> **Superseded (see `package.json`):** all pins are `18.18.2`. The `18.7.0` values in Task 5.2 — including the ADR 0008 patch filename — are historical; do **not** run this step or set any version to `18.7.0`.
+
 **Files:**
 - Modify: `AGENTS.md`, `CONTEXT.md`, `README.md`, `docs/TESTING.md`, `docs/HANDOFF-renderer.md`, `docs/adr/0004`, `docs/adr/0007`, `docs/adr/0008`
 - Test: none (docs).

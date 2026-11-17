@@ -121,7 +121,7 @@ bun scripts/probe-render.ts [screenId] [--width N] [--rows N] [--range 24h] [--p
 
 Two things in that file are load-bearing and must not be "tidied":
 
-**`bun run verify:patch` runs immediately after every install.** It greps the installed `node_modules/@oh-my-pi/omp-stats/src/db.ts` for the `messages_cost_unpriced_v2` marker. The patch is what makes an absent price card read as unknown spend (ADR 0008), so an unpatched tree reports green on money honesty while lying about money.
+**`bun run verify:patch` runs immediately after every install.** It asserts all eight patch markers across six files under `node_modules/@oh-my-pi/omp-stats/src` (`scripts/verify-patch.ts:17-26`), not just a single grep: the unpriced cost backfill, `StatsLive({ workers })`, rollup v3, provider `outputTokens` (value and type), and the three range-before-limit recent-request corrections. The patch is what makes an absent price card read as unknown spend (ADR 0008), so an unpatched tree reports green on money honesty while lying about money.
 
 **`node_modules` is deliberately not cached.** Its contents are a function of `bun.lock` **and** `patches/*.patch`; a cache keyed on the lockfile alone can restore an unpatched tree. If you ever add `actions/cache` for it, the key must contain both `hashFiles('bun.lock')` and `hashFiles('patches/*.patch')`. `setup-bun` already caches the one download worth caching, and a cold `bun install --frozen-lockfile` is ~3.4 s against a 933 MB tree.
 
@@ -200,7 +200,7 @@ Supporting source worth knowing:
 
 ## Testing & QA
 
-**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **669 pass / 0 fail across 44 files** (the live number; update it in the same commit as any suite change). Full TypeScript checking passes (`bun run check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
+**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **705 pass / 0 fail across 45 files** (the live number; update it in the same commit as any suite change). Full TypeScript checking passes (`bun run check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
 
 **Unit-testable:**
 

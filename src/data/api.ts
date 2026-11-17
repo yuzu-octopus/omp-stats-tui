@@ -314,14 +314,16 @@ export async function fetchFor(
 	// retained data; string messages keep the payload JSON-serializable.
 	return { data, errors };
 }
-// Deliberately absent, and each absence is load-bearing:
+// Excluded from DATA_NEEDS / first paint, but not unavailable: these paths are
+// reachable on demand through `ctx.reader.api(path, params)`, which
+// StatsReadClient forwards over the same NDJSON pipe to this isolated worker,
+// where upstream `handleApi(Request)` serves them (never on the TUI thread).
+// They stay off the first-paint path because each does heavy or blocking work:
 //   /api/stats/provider-windows — getProviderWindowStats does network I/O.
-//   /api/sync                   — starts real background ingest; 7141 ms of
-//                                  synchronous SQLite that must never run on
-//                                  the TUI thread. Task 12 owns it, in a child.
+//   /api/sync                   — starts real background ingest; synchronous
+//                                  SQLite that must never run on the TUI thread.
 //   /api/request/{id}           — getRequestDetails parses session transcripts
-//                                  off disk; it is not a load-path read.
-// If a screen ever needs one of these, it needs the sync worker, not a wrapper
-// here. Types re-exported for consumers: AggregatedStats, ModelStats,
+//                                  off disk.
+// Types re-exported for consumers: AggregatedStats, ModelStats,
 // TimeSeriesPoint, ModelTimeSeriesPoint.
 export type { AggregatedStats, ModelStats, TimeSeriesPoint, ModelTimeSeriesPoint };

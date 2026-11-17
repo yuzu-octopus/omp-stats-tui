@@ -53,15 +53,16 @@ Headless / print / RPC modes decline with `/stats-tui needs an interactive termi
 | Key | Action |
 |---|---|
 | `[` / `]` outside text entry, `Ctrl+P` / `Ctrl+N` everywhere | Previous / next screen; explicit host selector binding overrides take precedence |
-| `g` then letter | Jump to any screen: `o` overview, `m` models, `c` costs, `v` providers, `a` activity, `r` requests, `e` errors, `t` traces, `l` tools, `j` projects, `n` gain, `f` frustration. Use outside text entry; the armed prefix consumes the next letter, expires after 1200 ms |
-| `Tab` | Cycle route focus/view; focused analytics tables precede charts. Single-area routes may fall through to next-screen navigation |
+| `g` then letter | Jump to any screen: `o` overview, `m` models, `c` costs, `v` providers, `a` activity, `r` requests, `e` errors, `t` traces, `l` tools, `j` projects, `n` gain, `f` frustration. Use outside text entry; the armed prefix consumes the next key and expires after 1200 ms |
+| `g` then digit `1`–`6` | Select a range: `1` 1h, `2` 24h, `3` 7d, `4` 30d, `5` 90d, `6` all. Same 1200 ms arm window |
+| `Tab` / `Shift+Tab` | Cycle route focus/view forward/backward on analytics routes (focused analytics tables precede charts); elsewhere `Tab` advances to the next screen and `Shift+Tab` falls through to the previous screen |
 | `r` / `R` | Cycle range forward / back outside text entry |
 | `s` | Request sync from the existing live worker (not a second one-shot ingest) |
 | `q` outside text entry, `Ctrl+C` everywhere | Close and restore the transcript; literal `q` and brackets remain searchable |
 | `Esc` | Leave search/details, clear a route filter or go back; close when the route has no back action |
 | `PgUp` / `PgDn`, `Home` / `End`, mouse wheel | Scroll the body when not consumed by a route |
 
-Arrow keys select rows or inspect/pan route content where handled; otherwise left/right navigate screens and up/down scroll. Digits `1`–`9`, `0` select the first ten registry positions only when a controller does not own them (Frustration uses `1`–`4` for layers, Traces uses `0` to fit). Use `g` jumps for all twelve screens without that ambiguity.
+Arrow keys select rows or inspect/pan route content where handled; otherwise left/right navigate screens and up/down scroll. Bare digits `1`–`9`, `0` select the first ten registry positions only when a controller does not own them (Frustration uses `1`–`4` for layers, Traces uses `0` to fit); with the `g` prefix those same digits select a range. Use `g` jumps for all twelve screens without that ambiguity.
 
 ### Route controls
 
@@ -117,7 +118,7 @@ omp models -e /abs/path/to/omp-stats-tui/dist/index.js
 
 `probe-render` renders a production screen body through its `FeatureController`, using the shared fixture payload from `test/fixtures/panel.ts`. It accepts `--width N` (repeatable), `--rows N` (default 40), `--range` from the six keys and `--preset unicode|nerd|ascii`. The 40x30 review matrix from the testing guide is `--width 40 --rows 30`. Controller acceptance needs a mounted host in addition to fixture/render tests. Panel body tests built on `__testing.makePanel` exercise the same controller path: `makePanel({ data })` builds a stub reader from the fixture, so `#feature()` always resolves a real controller. Other probes: `bun run probe:data`, `bun run probe:glyphs`, `bun run probe:frame`, `bun run probe:band-heights`, `bun run probe:mouse-truth`.
 
-`bun test` currently passes **669 tests across 44 files** (see [AGENTS.md §Testing & QA](AGENTS.md#testing--qa) for the live count), and the full Typecheck (`bun run check`) passes. CI (`.github/workflows/ci.yml`) runs both, plus a build and an `omp models -e` extension-load smoke check, on every push to `main` and every PR. Because the panel's money honesty depends on a dependency patch Bun applies at install time, CI asserts `bun run verify:patch` immediately after `bun install --frozen-lockfile` — if you ever cache `node_modules`, its key must include both `bun.lock` a... [truncated 9113 chars]
+`bun test` currently passes **705 tests across 45 files** (see [AGENTS.md §Testing & QA](AGENTS.md#testing--qa) for the live count), and `bun run check` passes. CI (`.github/workflows/ci.yml`) runs locked install, `bun run verify:patch`, tests and TypeScript on every push to `main` and every PR, plus a build and `omp models -e "$PWD/dist/index.js"` extension-load smoke check; because money honesty depends on the Bun-applied dependency patch, CI verifies its markers immediately after install and any `node_modules` cache key must include both `bun.lock` and `patches/*.patch`.
 Source-mode development uses standalone Bun and installed dependencies. `StatsReadClient` resolves `scripts/data-worker.ts` relative to its source module; the production build's `__STATS_READ_WORKER__` macro instead resolves `./data-worker.js` relative to `dist/index.js`. Workers use absolute paths, inherit the host working directory for project/judge configuration, and receive the active agent directory plus `OMP_PROFILE`/`PI_PROFILE`; `PI_BUNDLED` is cleared. Launching compiled omp from another directory does not relocate the worker. Directly loading `src/index.ts` in compiled omp is not the supported distribution entry.
 
 ## Architecture

@@ -11,7 +11,16 @@ Fullscreen local usage-stats panel for [omp](https://github.com/can1357/oh-my-pi
 
 Prerequisites: [Bun](https://bun.sh) ≥ 1.4.4 and supported compiled omp **18.18.2** on `PATH`. Stats reads and live ingestion require a standalone `bun` executable even when omp itself is compiled.
 
-For the PR checkout commands, manual acceptance checklist, safety limits and troubleshooting, see the [testing guide](docs/TESTING.md).
+Marketplace install needs no build:
+
+```sh
+omp plugin marketplace add https://github.com/yuzu-octopus/omp-marketplace
+omp plugin install omp-stats-tui@yuzus-plugins
+```
+
+The catalog ships `dist/index.js` and `dist/data-worker.js`, so a clone is not needed on the target machine.
+
+Source checkout for development:
 
 ```sh
 git clone https://github.com/yuzu-octopus/omp-stats-tui.git
@@ -22,7 +31,7 @@ omp plugin link .
 ```
 
 > [!IMPORTANT]
-> Both install and build are required. The manifest loads `dist/index.js`; the build bundles locally owned stats/private modules, keeps supported host APIs external, and emits `dist/data-worker.js`. Bun applies the committed `patchedDependencies` patch for stats 18.18.2 through `bun.lock`; the corrected dependency is included in the shipped bundle, not repaired at runtime.
+> A source checkout needs `bun install` and `bun run build`; the manifest loads `dist/index.js`. `dist/` is tracked so marketplace installs work without a build, which means every release must rebuild it first. CI asserts the committed bundle matches source. The build bundles locally owned stats/private modules, keeps supported host APIs external, and applies the committed stats 18.18.2 patch through `bun.lock`; the corrected dependency is in the shipped bundle, not repaired at runtime.
 
 The runtime `pi-coding-agent` dependency supplies real standalone judging to the worker. Its judge/auth resources are opened lazily only when a judging action requests them; passive statistics do not start paid work. Keep runtime dependencies installed alongside the distribution.
 

@@ -89,6 +89,13 @@ jobs:
       - name: Typecheck
         run: bun run check
 
+      # dist/ is shipped in git so marketplace installs need no build step.
+      # A source change without a rebuilt bundle must fail CI here.
+      - name: Build and assert committed dist is current
+        run: |
+          bun run build
+          git diff --exit-code -- dist
+
   extension-load:
     name: extension loads in the pinned omp host
     runs-on: ubuntu-latest

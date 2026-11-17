@@ -27,7 +27,7 @@ bun run build
 > [!NOTE]
 > History: earlier reviews checked out `--branch omp/dashboard-terminal-parity` from the `mitnichiter/omp-stats-tui` fork. That branch predates the merged PR #1 and is not current head; use `main` above.
 
-The build must produce `dist/index.js` and `dist/data-worker.js`. Keep `node_modules` installed; the worker's real standalone judge depends on runtime packages. Bun applies the committed dependency patch during installation; do not manually edit installed packages.
+The build must produce `dist/index.js` and `dist/data-worker.js`; both are tracked so marketplace installs work without a build, and CI fails if a source change lands with a stale bundle. Keep `node_modules` installed in a source checkout; the worker's real standalone judge depends on runtime packages. Bun applies the committed dependency patch during installation; do not manually edit installed packages.
 
 Check extension loading without sending a model request:
 

@@ -1,5 +1,5 @@
 node_modules/
-/dist/
+# dist/ is tracked: marketplace installs receive the built bundle. Rebuild before releases.
 .DS_Store
 
 # Machine-local dev-loop config. Anchored to the repo root and naming the single

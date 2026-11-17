@@ -404,3 +404,83 @@ describe("004 freshness off the critical path", () => {
 		}
 	}, 45_000);
 });
+
+// --- Plan 017: worker respawn and late-subscriber replay -------------------
+/** Reads one request then exits without replying: the pending fetch rejects. */
+const DYING_CHILD = [...SCRIPT_PRELUDE,
+	'for await (const line of reader) {',
+	'  if (!line.trim()) continue;',
+	'  JSON.parse(line);',
+	'  process.exit(3);',
+	'}',
+].join("\n");
+
+/** Healthy replacement: echoes the request id as its settlement marker. */
+const REPLACEMENT_CHILD = [...SCRIPT_PRELUDE,
+	'for await (const line of reader) {',
+	'  if (!line.trim()) continue;',
+	'  const req = JSON.parse(line) as { id: number };',
+	'  send({ id: req.id, data: { data: { marker: req.id }, errors: {} } });',
+	'}',
+].join("\n");
+
+/** Pushes a live status, then settles each request. */
+const LIVE_REPLAY_CHILD = [...SCRIPT_PRELUDE,
+	'const status = { version: 11, sync: { phase: "idle", current: 0, total: 0, processed: 0, lastSyncedAt: null, error: null }, indexingHours: 0 };',
+	'for await (const line of reader) {',
+	'  if (!line.trim()) continue;',
+	'  const req = JSON.parse(line) as { id: number };',
+	'  send({ type: "live", status });',
+	'  send({ id: req.id, data: { data: { marker: req.id }, errors: {} } });',
+	'}',
+].join("\n");
+
+describe("017 worker scan lifecycle", () => {
+	test("a dead worker is replaced on the next fetch", async () => {
+		const dying = await spawnScripted(DYING_CHILD);
+		const replacement = await spawnScripted(REPLACEMENT_CHILD);
+		const spawned = [dying, replacement];
+		let spawnCount = 0;
+		const client = new StatsReadClient(() => spawned[spawnCount++].child);
+		try {
+			await expect(client.fetch(["overview"], "24h")).rejects.toThrow();
+			const data = await client.fetch(["overview"], "24h");
+			expect(settlementOf(data).data.marker).toBe(2);
+			expect(spawnCount).toBe(2);
+		} finally {
+			client.close();
+			for (const { child, file } of spawned) {
+				child.kill("SIGKILL");
+				await child.exited;
+				await rm(file, { force: true });
+			}
+		}
+	}, 30_000);
+
+	test("late subscribers receive the last live status and the stored service error", async () => {
+		const { child, file } = await spawnScripted(LIVE_REPLAY_CHILD);
+		const client = new StatsReadClient(() => child);
+		try {
+			const liveArrived = Promise.withResolvers<void>();
+			let live: unknown;
+			const unprobe = client.subscribe(status => { live = status; liveArrived.resolve(); });
+			await client.fetch(["overview"], "24h");
+			await liveArrived.promise;
+			unprobe();
+			let replayedLive: unknown;
+			client.subscribe(status => { replayedLive = status; });
+			expect(replayedLive).toBe(live);
+			expect(replayedLive).toBeDefined();
+
+			const errorBroadcast = Promise.withResolvers<Error>();
+			client.subscribe(() => {}, error => errorBroadcast.resolve(error));
+			child.kill("SIGKILL");
+			const storedError = await errorBroadcast.promise;
+			let replayedError: Error | undefined;
+			client.subscribe(() => {}, error => { replayedError = error; });
+			expect(replayedError).toBe(storedError);
+		} finally {
+			await closeScripted(client, child, file);
+		}
+	}, 30_000);
+});

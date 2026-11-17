@@ -9,7 +9,7 @@ import { openStandaloneJudge, type StandaloneJudge } from "@oh-my-pi/pi-coding-a
 import { cancelFrustrationRun, setStatsJudgeProvider } from "@oh-my-pi/omp-stats/frustration";
 // `.js` subpath: the package ships `dist/types/*.d.ts` built from UNPATCHED
 // source, so `StatsLive({ workers })` — added by patches/@oh-my-pi%2Fomp-stats
-// @18.7.0.patch — has no declaration. This subpath resolves to `src/live.ts`,
+// @18.18.2.patch — has no declaration. This subpath resolves to `src/live.ts`,
 // the code that actually runs. Verified the same resolved module as the bare
 // specifier, so this changes types only, never the runtime instance.
 import { StatsLive } from "@oh-my-pi/omp-stats/live.js";
@@ -46,6 +46,8 @@ function emit(value: unknown): Promise<void> {
 const FRESHNESS_SCAN_INTERVAL_MS = 30_000;
 let pendingSessions = 0;
 let pendingSessionsScannedAt = 0;
+let lastScanStartAt = 0;
+let scanInFlight: Promise<void> | undefined;
 
 async function scanPendingSessions(): Promise<void> {
 	const files = await listAllSessionFiles();
@@ -63,14 +65,23 @@ async function scanPendingSessions(): Promise<void> {
 	pendingSessionsScannedAt = Date.now();
 }
 
+/** Live pushes and fetches hit the same 30 s boundary: single-flight the walk
+ * and stamp the start so neither caller can launch a second concurrent scan. */
+function maybeScanPendingSessions(): void {
+	if (scanInFlight) return;
+	if (Date.now() - lastScanStartAt < FRESHNESS_SCAN_INTERVAL_MS) return;
+	lastScanStartAt = Date.now();
+	scanInFlight = scanPendingSessions()
+		.catch(error => console.error(error))
+		.finally(() => { scanInFlight = undefined; });
+}
+
 live.subscribe(status => {
 	void emit({ type: "live", status }).catch(error => {
 		console.error(error);
 		process.exit(1);
 	});
-	if (Date.now() - pendingSessionsScannedAt >= FRESHNESS_SCAN_INTERVAL_MS) {
-		void scanPendingSessions().catch(error => console.error(error));
-	}
+	maybeScanPendingSessions();
 });
 let initialized = false;
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
@@ -92,9 +103,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
 			// The next live-status emission or next fetch carries the new count.
 			payload.freshness = { records: getMessageCount(), pendingSessions, observedAt: pendingSessionsScannedAt };
 			await emit({ id: request.id, data: payload });
-			if (Date.now() - pendingSessionsScannedAt >= FRESHNESS_SCAN_INTERVAL_MS) {
-				void scanPendingSessions().catch(error => console.error(error));
-			}
+			maybeScanPendingSessions();
 			continue;
 		} else if (request.type === "sync") {
 			live.requestSync();

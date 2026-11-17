@@ -13,8 +13,6 @@
  *    proposed a hand-written `bucketToWidth` here, which was a second
  *    implementation of a solved problem.
  *  - `pivotSeries` (same module) owns the top-N + "Other (n)" ranking policy.
- *  - `buildCostSummary` (client/data/view-models) owns per-model cost totals
- *    and the cost-first ranking comparator.
  *
  * ⚠ Import ONLY from `@oh-me-pi/omp-stats/client/data/*`. Two measured reasons,
  * and the second is the one that bites first:
@@ -39,9 +37,8 @@
  */
 
 import { densify, pivotSeries } from "@oh-my-pi/omp-stats/client/data/series";
-import { buildCostSummary } from "@oh-my-pi/omp-stats/client/data/view-models";
 import type { CostTimeSeriesPoint } from "@oh-my-pi/omp-stats/shared-types";
-import type { GlyphSet, GlyphValue } from "../glyphs";
+import { glyphsFor, type GlyphSet, type GlyphValue } from "../glyphs";
 import { NO_ACTIVITY, clampCells as clamp, type BucketSpan } from "./measure";
 
 export interface BarsOptions {
@@ -81,6 +78,16 @@ export interface BarsOptions {
 	dim: (text: string) => string;
 	/** Called with clickable bucket spans (chart-relative rows). Null and clamped buckets omitted. */
 	reportBuckets?: (spans: readonly BucketSpan[]) => void;
+	/**
+	 * Paint the topmost magnitude row with a partial block instead of a full
+	 * one, carrying the fractional remainder of `value / max * rows`.
+	 *
+	 * Opt-in and default false: every existing caller keeps its whole-row
+	 * geometry until it asks for this. When on, it is honoured only for the
+	 * density ramp (unicode/nerd); ascii's ramp is a ranking ladder and is
+	 * never used as density, so ascii output stays byte-identical.
+	 */
+	densityTop?: boolean;
 }
 
 /**
@@ -106,6 +113,31 @@ function mark(glyphs: GlyphSet, role: keyof GlyphSet): string {
 }
 
 /**
+ * One column's magnitude, in the shape both render modes need.
+ *
+ * `height` is the legacy whole-row count: identical to the old `heights()`
+ * arithmetic, so every caller that has not opted into `densityTop` renders
+ * byte-for-byte as before. `fullRows`/`remainder` carry the same value for the
+ * fractional mode: `fullRows` complete rows of `barFill`, then a remainder in
+ * `[0,1)` for one partial top cell. A value under one row has `fullRows === 0`
+ * and a positive remainder, so it still draws one (partial) block — never a
+ * blank column. That is the one-row minimum, unchanged.
+ */
+interface Column {
+	height: number;
+	fullRows: number;
+	remainder: number;
+}
+
+/** A ramp rung for a fractional remainder, clamped the way `glyph()` clamps. */
+function partialGlyph(glyphs: GlyphSet, remainder: number): string {
+	const ramp: GlyphValue = glyphs.sparkRamp;
+	if (typeof ramp === "string") return ramp;
+	const level = Math.max(0, Math.min(ramp.length - 1, Math.round(remainder * (ramp.length - 1))));
+	return ramp[level] ?? ramp[0] ?? "";
+}
+
+/**
  * Column heights in rows, scaled from zero to `height`.
  *
  * SCALING IS BY COST, NEVER BY TOKEN COUNT — this is the chart's one
@@ -115,11 +147,12 @@ function mark(glyphs: GlyphSet, role: keyof GlyphSet): string {
  * is confidently, silently wrong — it would put the cheapest model at the top.
  * Cost is what the user pays, so cost is the height.
  *
- * THE 8-LEVEL RAMP IS NOT USED HERE, deliberately. `sparkRamp` encodes a value
- * within a single cell; stacking those vertically gives every bar a staircase
- * top edge and near-equal bars no shared top line. A column chart repeats ONE
- * glyph and lets ROW COUNT carry the magnitude, which is why `height` is the
- * resolution axis and why the ramp is not consulted.
+ * THE 8-LEVEL RAMP IS A TOP ROW ONLY, and only when `densityTop` is opted into
+ * with the density ramp (unicode/nerd). Stacking a partial block on EVERY row
+ * gives each bar a staircase edge and near-equal bars no shared top line; one
+ * shared baseline plus a single fractional top cell carries the remainder
+ * without spending a second row on it. With `densityTop` off — the default —
+ * the ramp is not consulted at all and ROW COUNT alone carries magnitude.
  *
  * A zero value gets ZERO filled rows, which now renders as a blank column over
  * the floor rather than as a full-height block of `░`. That is what separates
@@ -135,8 +168,8 @@ function mark(glyphs: GlyphSet, role: keyof GlyphSet): string {
  * falsy). A terminal does not have to, because the floor gives zero somewhere
  * to be drawn.
  */
-function heights(values: readonly (number | null)[], rows: number, supplied?: number): readonly number[] {
-	if (rows <= 0) return values.map(() => 0);
+function columnMagnitudes(values: readonly (number | null)[], rows: number, supplied?: number): readonly Column[] {
+	if (rows <= 0) return values.map(() => ({ height: 0, fullRows: 0, remainder: 0 }));
 	// The caller's maximum when there is one, else this series' own peak. Never
 	// the series MINIMUM: min-max stretches a quiet series to fill the ramp and
 	// renders a quiet week exactly like a busy one.
@@ -144,7 +177,7 @@ function heights(values: readonly (number | null)[], rows: number, supplied?: nu
 	// Nothing to scale against, so every column stays empty rather than dividing
 	// by zero. (Crush's guard is `if (max === 0) max = 1`; transcribing that
 	// literally into a ramp paints a non-zero value FULL.)
-	if (max <= 0) return values.map(() => 0);
+	if (max <= 0) return values.map(() => ({ height: 0, fullRows: 0, remainder: 0 }));
 	// THE ONE-ROW FLOOR, unconditionally. A value that rounds to no rows is drawn
 	// as one row anyway, because the alternative is a series that recorded
 	// something drawing nothing — and "it drew nothing" and "it recorded nothing"
@@ -158,7 +191,17 @@ function heights(values: readonly (number | null)[], rows: number, supplied?: nu
 	// therefore sizes bands by PEAK SHARE as well as passing the shared maximum:
 	// the row count carries the cross-series magnitude and the maximum keeps each
 	// band from over-filling the rows it was given.
-	return values.map((v) => (v === null || v <= 0 ? 0 : Math.max(1, Math.min(rows, Math.round((v / max) * rows)))));
+	return values.map((v) => {
+		if (v === null || v <= 0) return { height: 0, fullRows: 0, remainder: 0 };
+		const exact = (v / max) * rows;
+		const capped = Math.min(rows, exact);
+		const fullRows = Math.floor(capped);
+		return {
+			height: Math.max(1, Math.min(rows, Math.round(exact))),
+			fullRows,
+			remainder: capped - fullRows,
+		};
+	});
 }
 
 /**
@@ -207,13 +250,27 @@ function plotRows(height: number): number {
  * cannot be mistaken for a section separator, and it costs one row instead of
  * one line in the middle of the plot.
  */
-function compose(columnHeights: readonly number[], rows: number, opts: BarsOptions): readonly string[] {
+function compose(columns: readonly Column[], rows: number, opts: BarsOptions): readonly string[] {
 	const fill = mark(opts.glyphs, "barFill");
+	const ramp: GlyphValue = opts.glyphs.sparkRamp;
+	const density = opts.densityTop === true && typeof ramp !== "string" && ramp === glyphsFor("unicode").sparkRamp;
 	const out: string[] = [];
 
 	for (let r = 0; r < rows; r++) {
 		const threshold = rows - r;
-		out.push(columnHeights.map(h => (h >= threshold ? opts.accent(fill) : " ")).join(""));
+		const level = rows - 1 - r;
+		out.push(
+			columns
+				.map((col) => {
+					if (!density) return col.height >= threshold ? opts.accent(fill) : " ";
+					if (level < col.fullRows) return opts.accent(fill);
+					if (level === col.fullRows && col.remainder > 0) {
+						return opts.accent(partialGlyph(opts.glyphs, col.remainder));
+					}
+					return " ";
+				})
+				.join(""),
+		);
 	}
 	// EVERY BAND ENDS ON ITS FLOOR, always, with no exception for a one-row band.
 	//
@@ -290,16 +347,15 @@ export function renderDailyBars(values: readonly (number | null)[], opts: BarsOp
 		}
 		opts.reportBuckets(spans);
 	}
-	return compose(heights(columns, rows, opts.max), rows, { ...opts, width });
+	return compose(columnMagnitudes(columns, rows, opts.max), rows, { ...opts, width });
 }
 
 /**
  * Per-model cost bars over the cost series.
  *
  * Every ranking decision is the host's: `pivotSeries` ranks by total, keeps the
- * top `limit` and folds the rest into a trailing "Other (n)", and
- * `buildCostSummary` supplies the per-model totals and the cost-first
- * comparator. We add only the rendering.
+ * top `limit` and folds the rest into a trailing "Other (n)". We add only the
+ * rendering.
  */
 export function renderModelCostBars(
 	points: readonly CostTimeSeriesPoint[],
@@ -308,7 +364,6 @@ export function renderModelCostBars(
 	if (points.length === 0) return [opts.dim(clamp(NO_ACTIVITY, Math.max(0, Math.floor(opts.width))))];
 
 	const width = Math.max(0, Math.floor(opts.width));
-	const summary = buildCostSummary(points);
 	const buckets = [...new Set(points.map((p) => p.timestamp))].sort((a, b) => a - b);
 
 	// pivotSeries, not our own sort. It also folds everything past `limit` into
@@ -327,7 +382,6 @@ export function renderModelCostBars(
 	// points, but the type is the contract, and a null there means "no value",
 	// which for a total is zero.
 	const perModel = series.map((s) => s.values.reduce<number>((sum, v) => sum + (v ?? 0), 0));
-	void summary; // the totals belong to the caller's legend, not to the geometry
 
 	const columns =
 		perModel.length === width
@@ -338,5 +392,5 @@ export function renderModelCostBars(
 				);
 
 	const rows = plotRows(opts.height);
-	return compose(heights(columns, rows, opts.max), rows, { ...opts, width });
+	return compose(columnMagnitudes(columns, rows, opts.max), rows, { ...opts, width });
 }

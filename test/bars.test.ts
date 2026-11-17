@@ -357,3 +357,47 @@ test("colours arrive as callbacks, so the render is headless and style-agnostic"
 	expect(seen.accent).toBeGreaterThan(0);
 	expect(seen.dim).toBeGreaterThan(0);
 });
+
+// ─── Plan 015: opt-in fractional top row ─────────────────────────────────────
+
+test("densityTop paints a partial top cell on unicode and keeps full fill below it", () => {
+	const ramp = glyphsFor("unicode").sparkRamp as readonly string[];
+	const values = [4, 7, 10]; // 40%, 70%, 100% of the shared maximum
+	const dense = renderDailyBars(values, { ...opts(3, 3, "unicode"), densityTop: true });
+	const plain = renderDailyBars(values, opts(3, 3, "unicode"));
+	expect(dense).toEqual(renderDailyBars(values, { ...opts(3, 3, "nerd"), densityTop: true }));
+
+	const topCell = (col: number): string => {
+		for (const row of dense.slice(0, 2)) if (row[col] !== " ") return row[col]!;
+		throw new Error(`column ${col} has no magnitude cell`);
+	};
+	// 40% of the scale under one full row: the only magnitude cell is partial,
+	// where the default path over-read the same value as a whole row of fill.
+	expect(ramp).toContain(topCell(0));
+	expect(topCell(0)).not.toBe(fill);
+	expect(Bun.stringWidth(topCell(0))).toBe(1);
+	expect(plain[1]![0]).toBe(fill);
+
+	// 70%: one complete row under the partial top, both in data ink.
+	expect(ramp).toContain(topCell(1));
+	expect(topCell(1)).not.toBe(fill);
+	expect(dense[1]![1]).toBe(fill);
+	// The peak lands on an exact row boundary, so it stays full to the top.
+	expect(dense[0]![2]).toBe(fill);
+	// The floor is chrome — unchanged by the data-ink decision above it.
+	expect(dense[2]).toBe(plain[2]);
+});
+
+test("densityTop leaves ascii byte-identical", () => {
+	const values = [4, 7, 10, 2, 9, 1];
+	const plain = renderDailyBars(values, opts(6, 4, "ascii"));
+	const dense = renderDailyBars(values, { ...opts(6, 4, "ascii"), densityTop: true });
+	expect(dense).toEqual(plain);
+});
+
+test("densityTop at height 1 draws only the floor", () => {
+	const dense = renderDailyBars([1, 5, 3], { ...opts(3, 1, "unicode"), densityTop: true });
+	expect(dense).toEqual([axis.repeat(3)]);
+	expect(dense[0]).not.toContain(fill);
+	for (const rung of glyphsFor("unicode").sparkRamp as readonly string[]) expect(dense[0]).not.toContain(rung);
+});

@@ -85,6 +85,14 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 	const format = options.format ?? (options.percent ? value => formatPercent(value, 0) : compactTokens);
 	const active = rows.filter(row => !options.hidden?.has(row.key));
 	const colors = resolveSeries(Math.max(rows.length, ...rows.map(row => (row.colorIndex ?? 0) + 1)), ctx.theme);
+	// Colour identity belongs to the FULL row, not the filtered plot. Hiding a
+	// middle series renumbers the active rows, so re-resolving over `active` would
+	// repaint the last series with the hidden one's hue while the legend below
+	// still shows its own. One list, indexed by active position, feeds both.
+	const seriesColors = rows
+		.map((row, r) => ({ row, color: colors[row.colorIndex ?? r] }))
+		.filter(({ row }) => !options.hidden?.has(row.key))
+		.map(({ color }) => color);
 	selected = Math.max(0, Math.min(axis.length - 1, selected));
 	const date = formatBucket(axis[selected]!);
 	const lines = wrapTextWithAnsi(ctx.theme.fg("dim", `${options.unit ? options.unit + " · " : ""}${date} UTC · ${axis.length} buckets`), w);
@@ -99,6 +107,7 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 			preset,
 			theme: ctx.theme,
 			paint: (color, text) => ctx.theme.fg(color, text),
+			seriesColors,
 			// The floor is CHROME, never a series hue — the same rule the band
 			// renderer keeps. Labels are off: the legend below names the series.
 			dim: text => ctx.theme.fg("dim", text),

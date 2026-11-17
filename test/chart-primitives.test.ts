@@ -565,12 +565,23 @@ test("a null gap renders no mark, not a zero column", () => {
 		theme: THEME,
 		paint: (_color, text) => text,
 	});
-	const fill = glyphsFor("unicode").barFill as string;
+	// A column's data ink is a full `barFill` OR a partial top rung from the
+	// density ramp: plan 015's `densityTop` paints a sub-row remainder as a
+	// sparkRamp glyph, so a low column can carry ink with NO full block. Counting
+	// only barFill made such a column read as empty and pushed the real gap out
+	// of the measured span. The floor uses axisLine ("_") and the label row is
+	// filtered below, so neither is miscounted as data ink.
+	const glyphs = glyphsFor("unicode");
+	const ink = new Set<string>();
+	for (const value of [glyphs.barFill, glyphs.sparkRamp]) {
+		if (typeof value === "string") ink.add(value);
+		else for (const ch of value) ink.add(ch);
+	}
 	// The band is right-aligned in the panel, so measure the filled columns as
 	// a run and locate the gap inside it rather than assuming a column index.
 	const marks = lines.filter((row) => !stripForTest(row).trim().startsWith("A"));
 	const filled = Array.from({ length: 20 }, (_, col) =>
-		marks.filter((row) => [...stripForTest(row)][col] === fill).length,
+		marks.filter((row) => ink.has([...stripForTest(row)][col] ?? "")).length,
 	);
 	const first = filled.findIndex((count) => count > 0);
 	const last = filled.findLastIndex((count) => count > 0);

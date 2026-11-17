@@ -145,6 +145,12 @@ test("weeksForWidth is the host's continuous clamp, not a ladder", () => {
 	expect(weeksForWidth(2, 100)).toBe(49);
 	expect(weeksForWidth(2, 200)).toBe(53);
 	expect(weeksForWidth(2, 10)).toBe(4);
+	// The rendered gutter is the same two-cell budget weeksForWidth assumes:
+	// one weekday label plus one space.
+	const rows = renderHeatmap([], { ...opts(4), today: TODAY });
+	const day = rows[1]!.replace(/\x1b\[[0-9;]*m/g, "");
+	expect(day.slice(0, 2)).toBe("M ");
+	expect(rows[0]!.startsWith("  ")).toBe(true);
 });
 
 test("a heatmap is a month-label row plus exactly seven day rows", () => {

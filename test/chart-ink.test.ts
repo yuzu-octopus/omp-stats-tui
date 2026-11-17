@@ -70,6 +70,19 @@ const identity = (text: string) => text;
 const cells = (line: string): number => Bun.stringWidth(stripForTest(line));
 
 /**
+ * Data ink in a bar cell. `densityTop` is wired into the host for non-ascii
+ * presets, so a fractional top rung is a magnitude mark just like a full cell;
+ * counting only `barFill` would report a quiet band as having drawn nothing.
+ * Three call sites below need the same definition of "ink".
+ */
+const hasInk = (text: string, preset: SymbolPreset): boolean => {
+	const fill = glyph(preset, "barFill");
+	if (preset === "ascii") return text.includes(fill); // ascii keeps its whole-row ladder
+	const ramp = glyphsFor(preset).sparkRamp;
+	return [fill, ...(typeof ramp === "string" ? [] : ramp)].some(mark => text.includes(mark));
+};
+
+/**
  * Options for a column chart, at one width and height. Four primitives are
  * swept against it, so the callbacks stay in lockstep by construction.
  */
@@ -256,13 +269,12 @@ test("a quiet series draws a SHORTER band than a loud one, not an identical one"
 		],
 		{ width: 20, height: 14, preset: "unicode", theme: THEME, paint: (_c, text) => text },
 	);
-	const fill = glyph("unicode", "barFill");
 	const succeeded = rows.findIndex(row => stripForTest(row).includes("Succeeded"));
 	const failed = rows.findIndex(row => stripForTest(row).includes("Failed"));
 	// `renderSeriesChart` labels a band AFTER its marks, so a band's rows are the
 	// ones between the previous label and its own.
 	const markedRows = (from: number, to: number): number =>
-		rows.slice(from, to).filter(row => [...stripForTest(row)].includes(fill)).length;
+		rows.slice(from, to).filter(row => hasInk(stripForTest(row), "unicode")).length;
 	const loud = markedRows(0, succeeded);
 	const quiet = markedRows(succeeded + 1, failed);
 	expect(quiet).toBeGreaterThan(0);
@@ -283,13 +295,13 @@ test("a quiet series draws a SHORTER band than a loud one, not an identical one"
  * the chart is not shaped the way the caller believes, and a silently shorter
  * result would let `Math.max` over an empty set pass.
  */
-function bandInk(rows: readonly string[], labels: readonly string[], fill: string): number[] {
+function bandInk(rows: readonly string[], labels: readonly string[], preset: SymbolPreset): number[] {
 	const ink: number[] = [];
 	let start = 0;
 	for (const label of labels) {
 		const at = rows.findIndex((row, index) => index >= start && stripForTest(row).includes(label));
 		if (at < 0) throw new Error(`no band labelled ${JSON.stringify(label)}: ${JSON.stringify(rows)}`);
-		ink.push(rows.slice(start, at).filter(row => [...stripForTest(row)].includes(fill)).length);
+		ink.push(rows.slice(start, at).filter(row => hasInk(stripForTest(row), preset)).length);
 		start = at + 1;
 	}
 	return ink;
@@ -331,7 +343,6 @@ test("band height carries magnitude across two, three and four series", () => {
 	//
 	// Two series is included because it is the case that already worked: if the
 	// fix regressed THAT, it would have stopped discriminating everywhere.
-	const fill = glyph("unicode", "barFill");
 	const shapes: readonly (readonly [string, readonly number[]])[][] = [
 		[
 			["Succeeded", [44, 40, 44, 38]],
@@ -356,7 +367,7 @@ test("band height carries magnitude across two, three and four series", () => {
 			shape.map(([label, values]) => ({ label, values })),
 			{ width: 20, height: 14, preset: "unicode", theme: THEME, paint: (_color, text) => text },
 		);
-		const ink = bandInk(rows, labels, fill);
+		const ink = bandInk(rows, labels, "unicode");
 		expect(ink.length, labels.join("/")).toBe(labels.length);
 		// Every series that recorded something draws something.
 		for (const [index, count] of ink.entries()) {
@@ -380,7 +391,6 @@ test("a chart too short for BOTH names and discrimination drops the names, not t
 	//
 	// A label is CHROME and band height is DATA, so when the rows cannot pay for
 	// both, the marks win and the caller names them.
-	const fill = glyph("unicode", "barFill");
 	const shape: readonly SeriesChartSeries[] = [
 		{ label: "Input", values: [16, 8, 12] },
 		{ label: "Output", values: [8, 4, 6] },
@@ -395,7 +405,7 @@ test("a chart too short for BOTH names and discrimination drops the names, not t
 	expect(rows.length).toBe(8);
 	// Every band is a chart: ink standing on a floor, never a bare baseline.
 	const axis = glyph("unicode", "axisLine");
-	const ink = rows.filter(row => [...stripForTest(row)].includes(fill)).length;
+	const ink = rows.filter(row => hasInk(stripForTest(row), "unicode")).length;
 	const floors = rows.filter(row => stripForTest(row).trim() === axis.repeat(20)).length;
 	expect(ink, "one row of ink per band").toBe(shape.length);
 	expect(floors, "one floor per band").toBe(shape.length);
@@ -845,4 +855,59 @@ test("a time-series bucket null in every series emits no hit span", () => {
 	expect(seen.some(s => s.index === 3)).toBe(false);
 	expect(seen.some(s => s.index === 2)).toBe(true);
 	expect(seen.some(s => s.index === 4)).toBe(true);
+});
+
+test("hiding a middle series keeps each painted mark the legend's colour", () => {
+	// A theme that gives every series token its OWN escape, so the assertion
+	// reads the actual fg colour rather than a hardcoded hue. resolveSeries
+	// dedupes by getColorHex, so that must be distinct per token too.
+	const distinctHex = new Map<string, string>();
+	const hexFor = (token: string): string => {
+		let hex = distinctHex.get(token);
+		if (!hex) {
+			hex = `#${(distinctHex.size + 1).toString(16).padStart(2, "0").repeat(3)}`;
+			distinctHex.set(token, hex);
+		}
+		return hex;
+	};
+	const escapeFor = (color: ThemeColor): string => {
+		const hex = hexFor(String(color));
+		return `\x1b[38;2;${parseInt(hex.slice(1, 3), 16)};${parseInt(hex.slice(3, 5), 16)};${parseInt(hex.slice(5, 7), 16)}m`;
+	};
+	const coloredCtx = {
+		theme: {
+			getColorHex: hexFor,
+			getColorMode: () => "truecolor",
+			getSymbolPreset: () => "unicode",
+			fg: (color: ThemeColor, text: string) => `${escapeFor(color)}${text}\x1b[39m`,
+		},
+	} as unknown as FeatureContext;
+
+	const lines = renderTimeSeries(coloredCtx, SHAPE_AXIS, shapeRows(3), 80, 5, {
+		height: 5,
+		hidden: new Set(["s1"]),
+	});
+	const point = glyph("unicode", "pointHollow");
+	const key = glyph("unicode", "legendKey");
+	const colorBefore = (line: string, mark: string): string | undefined => {
+		const at = line.indexOf(mark);
+		if (at < 0) return undefined;
+		const sgr = line.slice(0, at).match(/\x1b\[[0-9;]*m/g) ?? [];
+		return sgr[sgr.length - 1];
+	};
+	const painted = new Set<string>();
+	for (const line of lines) {
+		const color = colorBefore(line, point);
+		if (color) painted.add(color);
+	}
+	const legendLine = (label: string) => lines.find(line => stripForTest(line).includes(label))!;
+	const swatch = (label: string) => colorBefore(legendLine(label), key)!;
+	const swatch0 = swatch("Series 0");
+	const swatch2 = swatch("Series 2");
+	expect(swatch0).not.toBe(swatch2);
+	expect(painted.size).toBe(2);
+	// The plot must paint exactly the two surviving legend swatches, one per
+	// series. Re-resolving over the filtered rows would paint Series 2 with the
+	// hidden Series 1's hue and fail this set equality.
+	expect([...painted].sort()).toEqual([swatch0, swatch2].sort());
 });

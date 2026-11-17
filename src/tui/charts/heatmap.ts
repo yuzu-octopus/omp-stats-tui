@@ -91,9 +91,10 @@ export function renderHeatmap(
 	const selectedWeek = Math.floor(selectedOffset / 7);
 	const selectedRow = selectedOffset % 7;
 
-	// Fixed at 2: the host's own gutter (usage-dashboard.ts:833), one label
-	// cell plus one space. Callers pass it through; anything else is clamped.
-	const labelWidth = 2;
+	// The gutter is the caller's contract, clamped to a whole number of cells and
+	// shared with `weeksForWidth`, which budgets week columns against it. The
+	// host's own gutter is 2 (one weekday label plus one space), which callers pass.
+	const labelWidth = Math.max(1, Math.floor(opts.labelWidth));
 	// One glyph plus one space per column.
 	const columnWidth = 2;
 
@@ -112,7 +113,7 @@ export function renderHeatmap(
 	const monthRow = opts.dim(truncateToWidth(monthLine, opts.innerWidth));
 
 	const body = layout.cells.map((weekRow, dayIndex) => {
-		let line = opts.dim(ROW_LABELS[dayIndex] ?? "") + " ";
+		let line = opts.dim(ROW_LABELS[dayIndex] ?? "") + " ".repeat(Math.max(1, labelWidth - 1));
 		for (let week = 0; week < weeks; week++) {
 			const cell = weekRow[week];
 			// ABSENT (a future date) — blank, and deliberately NOT the empty glyph.

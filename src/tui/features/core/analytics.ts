@@ -425,9 +425,9 @@ class AnalyticsFeature implements FeatureController {
 	dispose(): void { this.closed = true; this.generation++; }
 }
 
-/** One 12-cell inline trend. Nulls sit on the baseline without poisoning the scale (sparkline rule 3); empty series render blank, never zero. */
+/** One 12-cell inline trend. A null is a gap, not a baseline mark, and never poisons the scale (sparkline rule 3); an empty series renders blank, never zero. */
 function sparkCell(values: readonly (number | null)[]): string {
-	return renderSparkline(values.map(v => v ?? NaN), { width: 12 });
+	return renderSparkline(values, { width: 12 });
 }
 
 export function createAnalyticsFeature(id: AnalyticsId, ctx: FeatureContext): FeatureController {

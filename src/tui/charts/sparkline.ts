@@ -82,12 +82,14 @@ export interface SparklineOptions {
 }
 
 /**
- * One character per sample, magnitude on the eighth-block ramp.
+ * One character per sample, magnitude on the eighth-block ramp. A null or
+ * non-finite sample is a GAP — a blank cell, never a measured zero — and does
+ * not take part in the scale.
  *
  * `level = clamp(round(v / max * (levels - 1)), 0, levels - 1)` — ratatui's
  * linear tick model with an 8-slot ladder, implemented in integer arithmetic.
  */
-export function renderSparkline(values: readonly number[], opts: SparklineOptions): string {
+export function renderSparkline(values: readonly (number | null)[], opts: SparklineOptions): string {
 	const width = Math.max(0, Math.floor(opts.width));
 	if (width === 0) return "";
 
@@ -99,10 +101,10 @@ export function renderSparkline(values: readonly number[], opts: SparklineOption
 	const start = Math.max(0, values.length - width);
 	const padding = Math.max(0, width - values.length);
 
-	// Invalid samples sit on the baseline without poisoning the valid scale.
+	// Null/non-finite samples are gaps, never baseline marks; they never enter the scale.
 	let max = opts.max ?? 0;
 	if (opts.max === undefined) {
-		for (const value of values) if (Number.isFinite(value) && value > max) max = value;
+		for (const value of values) if (typeof value === "number" && Number.isFinite(value) && value > max) max = value;
 	}
 	const scale = Number.isFinite(max) && max > 0;
 
@@ -118,9 +120,11 @@ export function renderSparkline(values: readonly number[], opts: SparklineOption
 	let result = " ".repeat(padding);
 	for (let index = start; index < values.length; index++) {
 		const value = values[index]!;
-		const level = scale && Number.isFinite(value)
-			? Math.max(0, Math.min(7, Math.round((Math.max(0, value) / max) * 7)))
-			: 0;
+		if (value === null || !Number.isFinite(value)) {
+			result += " ";
+			continue;
+		}
+		const level = scale ? Math.max(0, Math.min(7, Math.round((Math.max(0, value) / max) * 7))) : 0;
 		const cell = typeof ramp === "string" ? ramp : ramp[level]!;
 		result += opts.accent ? opts.accent(cell, level) : cell;
 	}

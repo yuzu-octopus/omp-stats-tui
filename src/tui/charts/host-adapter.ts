@@ -236,6 +236,10 @@ export type SeriesRenderOptions = SeriesChartOptions & {
   preset: SymbolPreset;
   theme: PaletteTheme;
   paint: (color: ThemeColor, text: string) => string;
+  /** Stable colours from the caller's full series list, indexed by active position. */
+  seriesColors?: readonly ThemeColor[];
+  /** Plan 015: fractional top row, set by the host for non-ascii presets. */
+  densityTop?: boolean;
 };
 export function renderSeriesChart(
   series: readonly SeriesChartSeries[],
@@ -325,7 +329,7 @@ export function renderSeriesChart(
 
   const report = opts.reportBuckets;
   for (const [index, entry] of series.entries()) {
-    const color = colors[index] ?? colors[0]!;
+    const color = opts.seriesColors?.[index] ?? colors[index] ?? colors[0]!;
     const apply = (text: string) => opts.paint(color, text);
     const height = heights[index] ?? 0;
     if (height > 0) {
@@ -338,6 +342,7 @@ export function renderSeriesChart(
       // chart, and painting it in a data colour is what made the old track
       // fill read as measured values.
       rows.push(...renderDailyBars(entry.values, { width, height, max, glyphs, accent: apply, dim,
+        densityTop: opts.densityTop,
         reportBuckets: report ? spans => report(spans.map(span => ({ ...span, rowStart: span.rowStart + rows.length, rowEnd: span.rowEnd + rows.length }))) : undefined }));
     }
     if (labelled) {
@@ -367,6 +372,8 @@ export interface HostChartOptions {
   labels?: boolean;
   /** Called with clickable bucket spans (chart-relative rows). Null-gap and clamped buckets omitted. */
   reportBuckets?: (spans: readonly BucketSpan[]) => void;
+  /** Stable colours from the caller's full series list, indexed by active position. */
+  seriesColors?: readonly ThemeColor[];
 }
 
 /**
@@ -422,6 +429,7 @@ function renderSharedAxisPlot(
   if (!(max > 0)) return [dim(truncateToWidth(NO_ACTIVITY, width))];
 
   const colors = resolveSeries(series.length, opts.theme);
+  const colorAt = (index: number): ThemeColor => opts.seriesColors?.[index] ?? colors[index] ?? colors[0]!;
   // The left column is the spine, so it is spent only when there are two
   // columns to spend — otherwise `spine + plot` would be one cell wider than the
   // panel, and one over-wide line corrupts the whole overlay. One column per
@@ -452,7 +460,7 @@ function renderSharedAxisPlot(
         let base = 0;
         let coverage = 0;
         let dominant = 0;
-        let color = colors[0]!;
+        let color = colorAt(0);
         for (let r = 0; r < series.length; r++) {
           const value = series[r]!.values[i];
           if (value === null) continue;
@@ -460,7 +468,7 @@ function renderSharedAxisPlot(
           coverage += overlap;
           if (overlap > dominant) {
             dominant = overlap;
-            color = colors[r] ?? colors[0]!;
+            color = colorAt(r);
           }
           base += value;
         }
@@ -474,7 +482,7 @@ function renderSharedAxisPlot(
         const value = series[r]!.values[i];
         if (value === null) continue;
         const y = height - 1 - Math.max(0, Math.min(height - 1, Math.round((value / max) * (height - 1))));
-        const mark = opts.paint(colors[r] ?? colors[0]!, glyph(opts.preset, cumulative ? "pointFilled" : "pointHollow"));
+        const mark = opts.paint(colorAt(r), glyph(opts.preset, cumulative ? "pointFilled" : "pointHollow"));
         if (cumulative) for (let x = slot * cellWidth; x < (slot + 1) * cellWidth; x++) grid[y]![x] = mark;
         else grid[y]![slot * cellWidth + Math.floor((cellWidth - 1) / 2)] = mark;
       }
@@ -523,6 +531,8 @@ export function renderHostChart(spec: ChartSpec, opts: HostChartOptions): readon
       paint,
       dim: dim ?? ((text: string) => text),
       labels,
+      seriesColors: opts.seriesColors,
+      densityTop: preset !== "ascii",
     });
 
   return lines;

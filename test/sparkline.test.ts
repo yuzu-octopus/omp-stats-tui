@@ -76,6 +76,18 @@ test("a zero width returns an empty string and does not throw", () => {
 	expect(renderSparkline([], { width: 0 })).toBe("");
 });
 
+// ─── A missing sample is a gap, not a measured zero ──────────────────────────
+
+test("a null or non-finite sample is blank while a measured zero is ramp[0]", () => {
+	const width = 3;
+	const max = 10;
+	// Same width, same max, same measured zeros — only one sample differs.
+	expect(renderSparkline([0, 0, 0], { width, max })).toBe(ramp[0]!.repeat(width));
+	expect(renderSparkline([0, null, 0], { width, max })).toBe(`${ramp[0]} ${ramp[0]}`);
+	expect(renderSparkline([0, NaN, 0], { width, max })).toBe(`${ramp[0]} ${ramp[0]}`);
+	expect(visibleWidth(renderSparkline([0, null, 0], { width, max }))).toBe(width);
+});
+
 // ─── Rule 3: clip and keep the NEWEST ───────────────────────────────────────
 
 test("narrowing keeps the NEWEST samples, so today stays visible", () => {

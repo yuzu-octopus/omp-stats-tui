@@ -55,8 +55,9 @@ export function renderWaterfall(steps: readonly WaterfallStep[], opts: Waterfall
 
 	const labelWidth = Math.max(0, Math.floor(opts.labelWidth ?? 18));
 	const barWidth = Math.max(1, width - labelWidth - 1);
-	const span = Math.max(peak, 0) - Math.min(0, ...levels);
-	const cell = (v: number): number => span > 0 ? Math.max(0, Math.min(barWidth - 1, Math.round(((v - Math.min(0, ...levels)) / span) * (barWidth - 1)))) : 0;
+	const floor = Math.min(0, ...levels);
+	const span = Math.max(peak, 0) - floor;
+	const cell = (v: number): number => span > 0 ? Math.max(0, Math.min(barWidth - 1, Math.round(((v - floor) / span) * (barWidth - 1)))) : 0;
 
 	let base = 0;
 	return steps.map((step, i) => {

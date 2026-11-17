@@ -307,6 +307,28 @@ test("g then a digit jumps straight to that named range; the screen does not mov
 	expect(__testing.debugScreenId(panel)).toBe("overview");
 });
 
+test("a bracket, Ctrl+P/N or unbound key cannot leak an armed g into the next key", async () => {
+	for (const key of ["[", "]", "\x0e", "\x10", "\x1b[200~"]) {
+		const panel = makePanel({ data: dataFor() });
+		await __testing.settled(panel);
+		panel.handleInput("g");
+		expect(__testing.debugState(panel).jumpArmedAt, JSON.stringify(key)).toBeGreaterThan(0);
+		panel.handleInput(key);
+		expect(__testing.debugState(panel).jumpArmedAt, `${JSON.stringify(key)} must disarm`).toBe(0);
+		// The next key is not consumed as a jump: q still closes the panel.
+		panel.handleInput("q");
+		expect(__testing.debugClosed(panel), JSON.stringify(key)).toBe(true);
+	}
+});
+
+test("a genuine g-then-letter still jumps inside the timeout", async () => {
+	const panel = makePanel({ data: dataFor() });
+	await __testing.settled(panel);
+	panel.handleInput("g");
+	panel.handleInput("f"); // the digitless Frustration screen's jump letter
+	expect(__testing.debugScreenId(panel)).toBe("frustration");
+});
+
 test("f2 refreshes the current screen:range without changing either", async () => {
 	const asked: Range[] = [];
 	const panel = makePanel({ reads: readsWith(spyFetch(asked)), screenId: "costs", range: "30d" });
@@ -1016,6 +1038,92 @@ test("a bare minute tick does not recompose, but the chrome's relative time stil
 	);
 });
 
+
+test("a 20-row frame stays 20 rows when the sync progress line appears", async () => {
+	let status: ((value: LiveStatus) => void) | undefined;
+	const reads: PanelReads = {
+		...stubReader(),
+		subscribe: listener => { status = listener; return () => {}; },
+	};
+	const panel = __testing.makePanel({ reads, rows: 20, now: () => FIXTURE_NOW });
+	await __testing.settled(panel);
+	// Idle, the sidebar fits exactly at the 20-row boundary.
+	expect(panel.render(100).length).toBe(20);
+	status?.({
+		version: 1,
+		indexingHours: 0,
+		sync: { phase: "syncing", current: 3, total: 10, processed: 3, lastSyncedAt: null, error: null },
+	});
+	const lines = panel.render(100);
+	expect(lines.length, "the progress row must not push the bottom border off").toBe(20);
+	expect(lines.join("\n")).toContain("Syncing");
+});
+
+test("a worker error keeps the cached figures and states the retained-data warning", async () => {
+	let fail: ((error: Error) => void) | undefined;
+	const reads: PanelReads = {
+		...stubReader(),
+		fetch: async () => dataFor(),
+		subscribe: (_status, error) => { fail = error; return () => {}; },
+	};
+	const panel = __testing.makePanel({ reads, rows: 24, now: () => FIXTURE_NOW });
+	await __testing.settled(panel);
+	fail?.(new Error("worker pipe closed"));
+	panel.render(100);
+	const body = stripAnsi(__testing.debugState(panel).source.join("\n"));
+	expect(body).toContain("Stats service failed; retained cached data.");
+	expect(body).toContain("worker pipe closed");
+	// The warning sits ABOVE cached figures, not in place of them.
+	expect(body).toContain("Uncached input");
+	expect(__testing.debugPhase(panel)).toBe("ready");
+});
+
+test("a click reaches a feature hit through a notice row and a scrolled body", async () => {
+	let fail: ((error: Error) => void) | undefined;
+	const data = liveData();
+	const reads: PanelReads = {
+		fetch: async () => data,
+		api: async <T>(path: string): Promise<T> =>
+			(path.endsWith("/recent") ? [...data.recent ?? []] : []) as unknown as T,
+		subscribe: (_status, error) => { fail = error; return () => {}; },
+		requestSync: async () => ({}) as LiveStatus,
+		close: () => {},
+	};
+	const width = 100;
+	const panel = __testing.makePanel({ reads, rows: 14, now: () => FIXTURE_NOW });
+	await __testing.settled(panel);
+	fail?.(new Error("transient service failure"));
+	panel.render(width);
+	const noticeLines = stripAnsi(__testing.debugState(panel).source.join("\n"));
+	expect(noticeLines).toContain("Stats service failed; retained cached data.");
+	const hit = __testing.debugFrame(panel)!.bodyHits!.find(h => h.action.type === "selectRow");
+	expect(hit, "the composed frame must expose a request row to click").toBeDefined();
+	// Scroll so a request row sits inside the visible window; the wheel is the
+	// body-scroll path the feature cannot consume.
+	const steps = Math.ceil(Math.max(0, hit!.rowStart - 2) / 2);
+	for (let i = 0; i < steps; i++) panel.handleInput("\x1b[<65;50;6M");
+	expect(__testing.debugScroll(panel)).toBeGreaterThan(0);
+	const lines = panel.render(width);
+	const frame = __testing.debugFrame(panel)!;
+	const bodyStart = 1 + frame.topbarRows + frame.stripRows;
+	const bodyHeight = lines.length - bodyStart - 3; // divider + footer + bottom border
+	const visible = frame.bodyHits!.filter(h =>
+		h.action.type === "selectRow" &&
+		h.rowStart - frame.bodyScroll! >= 0 && h.rowStart - frame.bodyScroll! < bodyHeight);
+	expect(visible.length, "a request row must be visible after scrolling").toBeGreaterThan(0);
+	// Click through the notice + scroll transforms. One of the visible rows is
+	// not the already-selected one, so handleHit must change the painted body.
+	let changed = false;
+	for (const target of visible) {
+		const overlayRow = bodyStart + target.rowStart - frame.bodyScroll!;
+		const overlayCol = 2 + (frame.sidebarWidth > 0 ? frame.sidebarWidth + 3 : 0) + Math.max(1, target.colStart);
+		const before = panel.render(width);
+		panel.handleInput(`\x1b[<0;${overlayCol + 1};${overlayRow + 1}M`);
+		changed ||= JSON.stringify(panel.render(width)) !== JSON.stringify(before);
+		if (changed) break;
+	}
+	expect(changed, "a body hit must reach the feature's handleHit").toBe(true);
+});
 
 // ---------------------------------------------------------------------------
 // Correctness rules that are visible in the painted rows

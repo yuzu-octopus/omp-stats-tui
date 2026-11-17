@@ -89,12 +89,18 @@ export interface RangeSpan {
  * none. The prefix is measured with `visibleWidth`, not `indexOf` arithmetic,
  * because the chip ahead of the segments can carry a two-cell status mark —
  * UTF-16 offsets and terminal cells only agree up to the first wide char.
+ *
+ * The LAST occurrence is the segment, not the chip: a stale sync age spells
+ * `1h ago`, which contains the ` 1h ` cell and would otherwise steal the
+ * range's click. `computeTopbar` always appends the tray after the chip in
+ * every layout, so the trailing occurrence is the control.
  */
 export function rangeSpans(line: string): RangeSpan[] {
 	const spans: RangeSpan[] = [];
 	for (const id of RANGES) {
 		const cell = ` ${rangeMeta(id).label} `;
-		const found = line.indexOf(cell);
+		// The chip precedes the tray; its stale age must not win the hit area.
+		const found = line.lastIndexOf(cell);
 		if (found === -1) continue;
 		const start = visibleWidth(line.slice(0, found));
 		spans.push({ id, start, end: start + visibleWidth(cell) });

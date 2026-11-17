@@ -11,6 +11,8 @@ import { expect, test } from "bun:test";
 
 import { hintsFor } from "../src/tui/footer";
 import { panelAction } from "../src/tui/panel";
+import { __testing } from "../src/tui/panel";
+import type { ScreenId } from "../src/tui/screens/types";
 
 /**
  * Raw byte sequences for the `KeyName`s the footer advertises. `panelAction`
@@ -45,5 +47,30 @@ test("every footer hint names a key panelAction owns", () => {
 				expect(panelAction(raw!), `${mode}/${hint.label}: ${key} is not bound`).not.toBeNull();
 			}
 		}
+	}
+});
+
+test("the digit hint follows screen digit ownership; close stays pinned last", () => {
+	for (const mode of FOOTER_MODES) {
+		const withDigits = hintsFor(mode);
+		const without = hintsFor(mode, true);
+		expect(without, mode).toEqual(withDigits.filter(hint => hint.label !== "screens"));
+		expect(without[without.length - 1]!.label, mode).toBe("close");
+	}
+	for (const mode of ["idle", "scrollable", "syncing"] as const) {
+		expect(hintsFor(mode).some(hint => hint.label === "screens"), mode).toBe(true);
+		expect(hintsFor(mode, true).some(hint => hint.label === "screens"), mode).toBe(false);
+	}
+	// The panel derives the flag from the screen identity: Overview's digits
+	// switch screens, Frustration and Traces consume them in their controllers.
+	const footerOf = (id: ScreenId): string => {
+		const panel = __testing.makePanel({ screenId: id });
+		const lines = panel.render(200);
+		return (lines[lines.length - 2] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+	};
+	expect(footerOf("overview")).toContain(" screens");
+	for (const id of ["frustration", "traces"] as const) {
+		expect(footerOf(id), id).not.toContain(" screens");
+		expect(footerOf(id), id).toContain("close");
 	}
 });

@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import type { LiveStatus } from "@oh-my-pi/omp-stats/shared-types";
 import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme";
 import { rangeMeta } from "@oh-my-pi/omp-stats/client/data/range";
 import { NAV_GROUPS, type NavGroup } from "../src/tui/chrome";
@@ -16,7 +17,7 @@ const navRowOf = (id: string): number => {
 	}
 	throw new Error(`no nav row for ${id}`);
 };
-import { __testing } from "../src/tui/panel";
+import { __testing, type PanelReads } from "../src/tui/panel";
 import type { StatsPanel } from "../src/tui/panel";
 import type { PanelData } from "../src/data/api";
 import { RANGES } from "../src/data/ranges";
@@ -173,6 +174,49 @@ test("brand, chip and the gaps between segments hit nothing", () => {
 	expect(rangeHit(line, first.start - 1)).toBeNull();
 	expect(rangeHit(line, -1)).toBeNull();
 	expect(rangeHit(line, line.length + 10)).toBeNull();
+});
+
+test("a stale chip age cannot steal the range segment's hit cells", () => {
+	const segments = RANGES.map(id => ` ${rangeMeta(id as Range).label} `).join("");
+	// The chip is composed BEFORE the tray; a 1h-old sync reads "Live 1h ago",
+	// whose " 1h " is byte-identical to the 1h segment's own cell.
+	const line = `omp/stats  Live 1h ago   ${segments}`;
+	const chipAge = line.indexOf("1h ago");
+	expect(chipAge).toBeGreaterThan(-1);
+	const spans = rangeSpans(line);
+	expect(spans.map(span => span.id)).toEqual([...RANGES]);
+	const oneHour = spans.find(span => span.id === "1h")!;
+	expect(oneHour.start, "the segment, not the chip, owns the hit area").toBeGreaterThan(chipAge);
+	expect(rangeHit(line, chipAge + 1)).toBeNull();
+	for (let col = oneHour.start; col < oneHour.end; col++) expect(rangeHit(line, col)).toBe("1h");
+});
+
+test("a real stale Live chip precedes the tray, so its age cannot follow it", async () => {
+	let status: ((value: LiveStatus) => void) | undefined;
+	const reads: PanelReads = {
+		fetch: async () => dataFor(),
+		api: async <T>() => [] as unknown as T,
+		subscribe: listener => { status = listener; return () => {}; },
+		requestSync: async () => ({}) as LiveStatus,
+		close: () => {},
+	};
+	const panel = __testing.makePanel({ reads, rows: 24, now: () => FIXTURE_NOW });
+	await __testing.settled(panel);
+	status?.({
+		version: 1,
+		indexingHours: 0,
+		sync: { phase: "idle", current: 0, total: 0, processed: 1, lastSyncedAt: FIXTURE_NOW - 3_600_000, error: null },
+	});
+	panel.render(100);
+	const frame = __testing.debugFrame(panel)!;
+	const chipAge = frame.topbar.indexOf("1h ago");
+	expect(chipAge, "the stale age must actually be painted").toBeGreaterThan(-1);
+	const oneHour = rangeSpans(frame.topbar).find(span => span.id === "1h")!;
+	// The real topbar always appends the tray after the chip, so a trailing
+	// search cannot match a chip that follows the control — there is none.
+	expect(oneHour.start, "chip before tray").toBeGreaterThan(chipAge);
+	expect(rangeHit(frame.topbar, chipAge + 1)).toBeNull();
+	for (let col = oneHour.start; col < oneHour.end; col++) expect(rangeHit(frame.topbar, col)).toBe("1h");
 });
 
 // ---------------------------------------------------------------------------

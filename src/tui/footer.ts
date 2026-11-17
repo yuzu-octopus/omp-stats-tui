@@ -68,8 +68,13 @@ export type HintMode = "idle" | "scrollable" | "syncing" | "error";
  * through `panelAction` and fails if it returns null. A hint for an unbound key
  * is a lie the user acts on. Feature-local keys are not duplicated here: the
  * focused feature prints its own inline hint (tables, charts, traces).
+ *
+ * `ownsDigits` is true on a screen whose controller consumes `1`–`0` itself
+ * (Frustration and Traces). Advertising a screen digit there would name a key
+ * that selects a row or a trace, not a screen — a lie that moves the reader's
+ * selection instead of navigating.
  */
-export function hintsFor(mode: HintMode): readonly PanelHint[] {
+export function hintsFor(mode: HintMode, ownsDigits = false): readonly PanelHint[] {
 	const scroll: PanelHint = { keys: ["up", "down", "home", "end"], label: "scroll" };
 	// Contextual arrows and Tab belong to route controls; brackets stay global
 	// outside text entry. Search mode uses a separate Ctrl+P/Ctrl+N hint.
@@ -81,15 +86,20 @@ export function hintsFor(mode: HintMode): readonly PanelHint[] {
 	const sync: PanelHint = { keys: ["s"], label: "sync" };
 	const close: PanelHint = { keys: ["escape", "q"], label: "close" };
 
+	const list: readonly PanelHint[] = ownsDigits
+		? [screen, jump, range, refresh, sync, close]
+		: [screen, jump, digits, range, refresh, sync, close];
 	switch (mode) {
 		case "idle":
-			return [screen, jump, digits, range, refresh, sync, close];
+			return list;
 		case "scrollable":
-			return [scroll, screen, jump, digits, range, refresh, sync, close];
+			return [scroll, ...list];
 		case "syncing":
 			// No `s`: a sync is already running, so offering to start another is
 			// offering a key that does nothing.
-			return [screen, jump, digits, range, refresh, close];
+			return ownsDigits
+				? [screen, jump, range, refresh, close]
+				: [screen, jump, digits, range, refresh, close];
 		case "error":
 			// Retry, not "range": the message on screen is the thing to act on.
 			return [{ keys: ["s"], label: "retry sync" }, close];

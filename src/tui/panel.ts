@@ -35,6 +35,7 @@ import {
 import { framePolicy } from "./responsive";
 import { TAB_BAR_INDENT, buildTabs, tabBarTheme } from "./tabs";
 import { MIN_PANEL_ROWS as FRAME_MIN_PANEL_ROWS, bodyRows } from "./frame";
+import { PANEL_CHROME_ROWS } from "./panel-constants";
 import { footerHints, hintsFor, type HintMode, type PanelHint } from "./footer";
 import { hitTest, type MouseFrame } from "./mouse";
 
@@ -770,7 +771,10 @@ export class StatsPanel implements Component {
 		// A terminal shorter than the chrome keeps NO nav row at all: a row the
 		// frame cannot afford pushes the bottom border off the screen, which is
 		// the one failure a `render(width)`-only assertion never catches.
-		const column = policy.sidebar === "full" && rows >= MIN_SIDEBAR_ROWS;
+		// The progress line is chrome too: decide the nav column AFTER it is known,
+		// from the rows left below the topbar. Keeping the column on a 20-row
+		// syncing frame let the nav's own height push the bottom border off screen.
+		const column = policy.sidebar === "full" && rows - (topLines.length - 1) >= MIN_SIDEBAR_ROWS;
 		let strip: readonly string[] = NO_ROWS;
 		if (!column && rows > MIN_PANEL_ROWS) {
 			const tabs = buildTabs(preset, this.#theme, state.screenId);
@@ -884,7 +888,11 @@ export class StatsPanel implements Component {
 		this.#body.setLines(nav === null ? visible : zipSidebar(this.#theme, visible, nav.lines, frame.sidebarWidth, preset));
 		// At least as tall as the nav: `zipSidebar` may have added rows to keep the
 		// whole nav visible, and `setHeight` would clip them straight back off.
-		this.#body.setHeight(Math.max(plan.bodyRows, nav === null ? 0 : nav.lines.length));
+		// Capped at the frame's body budget so the nav floor can never spend the
+		// divider, footer or bottom border's rows.
+		const navHeight = nav === null ? 0 : nav.lines.length;
+		const bodyHeight = Math.max(1, rows - PANEL_CHROME_ROWS - (frame.headerLines.length - 1));
+		this.#body.setHeight(Math.min(Math.max(plan.bodyRows, navHeight), bodyHeight));
 		this.#footer.setLines([this.#footerLine(plan, Math.max(1, width - 4))]);
 		return this.#panel.render(width);
 	}
@@ -961,10 +969,12 @@ export class StatsPanel implements Component {
 					: state.maxScroll > 0
 						? "scrollable"
 						: "idle";
+		// The screens past the ten-key row consume digits in their controllers;
+		// advertising a digit hint there would name a key that moves a selection.
 		const hints: readonly PanelHint[] = this.#feature()?.inputMode === "text" ? [
 			{ keys: ["escape"], label: "finish / close" },
 			{ keys: ["ctrl+p", "ctrl+n"], label: "screen" },
-		] : hintsFor(mode);
+		] : hintsFor(mode, this.#indexOf(state.screenId) >= DIGITS.length);
 		const scrollPosition = state.maxScroll > 0 ? `${state.scroll + 1}–${Math.min(state.source.length, state.scroll + plan.bodyRows)}/${state.source.length}` : "";
 		// Keep the close hint usable when the viewport cannot also fit the counter.
 		const position = visibleWidth(scrollPosition) + 12 <= width ? scrollPosition : "";
@@ -989,6 +999,10 @@ export class StatsPanel implements Component {
 		// web compares timestamps on the next keypress and never clears).
 		const armed =
 			state.jumpArmedAt !== 0 && (this.#options.now?.() ?? Date.now()) - state.jumpArmedAt < JUMP_TIMEOUT_MS;
+		// Every key other than the bare `g`/`G` disarms, INCLUDING the paths that
+		// return before `panelAction`: Ctrl+P/N, brackets, feature-owned keys and
+		// unbound multi-byte input. Leaving it set swallowed the next key.
+		state.jumpArmedAt = 0;
 		const feature = this.#feature();
 		const editing = feature?.inputMode === "text";
 		let action: PanelAction | null = null;
@@ -1008,7 +1022,6 @@ export class StatsPanel implements Component {
 		}
 		action ??= panelAction(data, armed);
 		if (action === null) return;
-		state.jumpArmedAt = 0;
 		switch (action.type) {
 			case "close":
 				this.#finish();

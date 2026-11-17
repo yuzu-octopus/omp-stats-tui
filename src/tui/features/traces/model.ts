@@ -23,8 +23,12 @@ export function rowForEntry(trace: SessionTrace, file: string, entryId: string):
 	return transcriptRows(trace.tracks).find(row => row.track.file === file && row.span?.entryId === entryId);
 }
 
-export function ancestors(tracks: readonly TraceTrack[], id: string): string[] {
-	const byId = new Map(tracks.map(track => [track.id, track]));
+/** Reuse one id→track Map across a render; two-argument callers still work. */
+export function trackMap(tracks: readonly TraceTrack[]): Map<string, TraceTrack> {
+	return new Map(tracks.map(track => [track.id, track]));
+}
+
+export function ancestors(tracks: readonly TraceTrack[], id: string, byId: ReadonlyMap<string, TraceTrack> = trackMap(tracks)): string[] {
 	const result: string[] = [];
 	const seen = new Set<string>([id]);
 	let parent = byId.get(id)?.parentId;
@@ -36,14 +40,14 @@ export function ancestors(tracks: readonly TraceTrack[], id: string): string[] {
 	return result;
 }
 
-export function visibleTracks(tracks: readonly TraceTrack[], collapsed: ReadonlySet<string>): TraceTrack[] {
-	return tracks.filter(track => !ancestors(tracks, track.id).some(id => collapsed.has(id)));
+export function visibleTracks(tracks: readonly TraceTrack[], collapsed: ReadonlySet<string>, byId: ReadonlyMap<string, TraceTrack> = trackMap(tracks)): TraceTrack[] {
+	return tracks.filter(track => !ancestors(tracks, track.id, byId).some(id => collapsed.has(id)));
 }
 
 /** Concurrent calls have separate lanes instead of overwriting each other's duration. */
-export function buildLanes(tracks: readonly TraceTrack[], collapsed: ReadonlySet<string>): Lane[] {
+export function buildLanes(tracks: readonly TraceTrack[], collapsed: ReadonlySet<string>, byId: ReadonlyMap<string, TraceTrack> = trackMap(tracks)): Lane[] {
 	const lanes: Lane[] = [];
-	for (const track of visibleTracks(tracks, collapsed)) {
+	for (const track of visibleTracks(tracks, collapsed, byId)) {
 		for (const kind of KINDS) {
 			const ends: number[] = [];
 			const packed: Lane[] = [];

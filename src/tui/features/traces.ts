@@ -4,7 +4,7 @@ import { costWithUnpriced } from "../format";
 import type { SessionSummary, SessionTrace, TraceToolStat } from "@oh-my-pi/omp-stats/shared-types";
 import type { Range } from "../../data/ranges";
 import type { FeatureContext, FeatureController } from "./types";
-import { ancestors, buildScale, clampViewport, fit, localWindow, overviewViewport, remapViewport, resizeOverview, revealSpan, rowForEntry, spanCells, transcriptRows, visibleTracks, zoomViewport, type AxisMode, type TraceRow, type TraceScale, type Viewport } from "./traces/model";
+import { ancestors, buildScale, clampViewport, fit, localWindow, overviewViewport, remapViewport, resizeOverview, revealSpan, spanCells, transcriptRows, visibleTracks, zoomViewport, type AxisMode, type TraceRow, type TraceScale, type Viewport } from "./traces/model";
 import { bounded, clean, renderEntry, renderTimeline, rowLabel, sessionIdentity } from "./traces/render";
 import { dataTable, focusTabs, metricGrid, sectionHeading } from "./presentation";
 import { SPAN_COLORS } from "../palette";
@@ -35,17 +35,25 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 	let detail = false, raw = false, entry: unknown = null, entryLoading = false, entryError: string | null = null;
 	let timelinePlotWidth = 1;
 	let unmappedTarget: { file: string; id: string } | null = null;
+	let rowCache: { tracks: SessionTrace["tracks"]; rows: TraceRow[] } | null = null;
+
+	function allRows(): TraceRow[] {
+		const tracks = state?.trace?.tracks;
+		if (!tracks) return [];
+		if (rowCache?.tracks !== tracks) rowCache = { tracks, rows: transcriptRows(tracks) };
+		return rowCache.rows;
+	}
 
 	function changed(): void { if (!closed) ctx.changed(); }
 	function rows(): TraceRow[] {
 		if (!state?.trace) return [];
 		const needle = state.search.trim().toLowerCase();
-		return transcriptRows(state.trace.tracks).filter(row =>
+		return allRows().filter(row =>
 			(!needle || `${row.span?.label ?? row.marker?.label} ${row.span?.detail ?? ""} ${row.track.label}`.toLowerCase().includes(needle)) &&
 			(!state?.toolFilter || row.span?.kind === "tool" && row.span.label === state.toolFilter));
 	}
 	function selectedRow(): TraceRow | undefined {
-		return state?.trace ? transcriptRows(state.trace.tracks).find(row => row.key === state?.selected) : undefined;
+		return state?.trace ? allRows().find(row => row.key === state?.selected) : undefined;
 	}
 	function sortedSessions(): SessionSummary[] {
 		const needle = listSearch.trim().toLowerCase();
@@ -165,7 +173,8 @@ export function createTracesFeature(ctx: FeatureContext): FeatureController {
 			view.trace = trace;
 			if (firstLoad) for (const track of trace.tracks) if (track.parentId) view.collapsed.add(track.id);
 			const all = transcriptRows(trace.tracks);
-			const requested = entryId ? rowForEntry(trace, requestedFile, entryId) : undefined;
+			rowCache = { tracks: trace.tracks, rows: all };
+			const requested = entryId ? all.find(row => row.track.file === requestedFile && row.span?.entryId === entryId) : undefined;
 			const retained = all.find(row => row.key === view.selected);
 			if (requested) select(requested, true);
 			else if (!retained) {

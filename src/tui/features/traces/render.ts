@@ -2,7 +2,7 @@ import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { formatDurationMs, formatInteger, formatEstimatedCost } from "@oh-my-pi/omp-stats/client/data/formatters";
 import type { SessionTrace, TraceTrack } from "@oh-my-pi/omp-stats/shared-types";
-import { ancestors, buildLanes, KINDS, localWindow, MARKS, spanCells, visibleTracks, type Lane, type TraceRow, type TraceScale, type Viewport } from "./model";
+import { ancestors, buildLanes, KINDS, localWindow, MARKS, spanCells, trackMap, visibleTracks, type Lane, type TraceRow, type TraceScale, type Viewport } from "./model";
 
 import { SPAN_COLORS, SELECTION_BG } from "../../palette";
 import { glyph } from "../../glyphs";
@@ -71,18 +71,24 @@ export function renderTimeline(options: {
 	}
 	ruler[Math.min(plotWidth - 1, Math.floor(cursor * (plotWidth - 1)))] = theme.fg("accent", glyph(preset, "playhead"));
 	lines.push(`${"Cursor".padEnd(labelWidth)} ${ruler.join("")}`);
-	const lanes = buildLanes(tracks, collapsed), timelineRows: TimelineRow[] = [];
-	for (const track of visibleTracks(tracks, collapsed)) {
+	const byId = trackMap(tracks), lanes = buildLanes(tracks, collapsed, byId), timelineRows: TimelineRow[] = [];
+	const lanesByTrack = new Map<string, Lane[]>();
+	for (const lane of lanes) {
+		const group = lanesByTrack.get(lane.track.id);
+		if (group) group.push(lane);
+		else lanesByTrack.set(lane.track.id, [lane]);
+	}
+	for (const track of visibleTracks(tracks, collapsed, byId)) {
 		timelineRows.push({ track });
 		if (track.markers.length) timelineRows.push({ track, markers: true });
-		for (const lane of lanes.filter(lane => lane.track.id === track.id)) timelineRows.push({ track, lane });
+		for (const lane of lanesByTrack.get(track.id) ?? []) timelineRows.push({ track, lane });
 	}
 	const selectedIndex = timelineRows.findIndex(row => row.lane?.spans.some(span => span.id === selected) || row.markers && row.track.markers.some((_marker, index) => selected === `${row.track.id}:marker:${index}`));
 	const visible = localWindow(timelineRows, Math.max(0, selectedIndex), Math.max(3, options.height - lines.length - 2));
 	const needle = search.trim().toLowerCase();
 	for (const row of visible.rows) {
 		if (!row.lane && !row.markers) {
-			const depth = ancestors(tracks, row.track.id).length;
+			const depth = ancestors(tracks, row.track.id, byId).length;
 			const children = tracks.filter(track => track.parentId === row.track.id).length;
 			lines.push(theme.fg("muted", `${"  ".repeat(depth)}${collapsed.has(row.track.id) ? "+" : "−"} ${clean(row.track.label)} [${row.track.id}]${children ? ` · ${children} children` : ""}${!row.track.spans.length && !row.track.markers.length ? " · no recorded events" : ""}`));
 			continue;

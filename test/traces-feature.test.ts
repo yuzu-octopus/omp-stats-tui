@@ -1,4 +1,5 @@
 import { expect, jest, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { stripTerminalSequences, visibleWidth } from "@oh-my-pi/pi-tui";
 import { ensureThemeSync, theme, type Theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionSummary, SessionTrace, TraceSpan, TraceTrack } from "@oh-my-pi/omp-stats/shared-types";
@@ -48,6 +49,46 @@ function childTrace(file: string): SessionTrace {
 	const root = nestedTrace();
 	const source = root.tracks.find(item => item.file === file)!;
 	return { ...root, file, title: source.label, tracks: [{ ...source, id: "main", parentId: null, spans: source.spans.map(item => ({ ...item, id: `main:${item.entryId ?? item.id}` })) }] };
+}
+
+/** Six nested tracks with two marker tracks: baseline fixture for the render characterization lock. */
+function deepTrace(): SessionTrace {
+	const tracks = [
+		track("t0", null, ROOT, [
+			span("t0:turn", "turn", 0, 0, "root prompt", { entryId: "p0" }),
+			span("t0:model", "model", 100, 900, "root model", { entryId: "m0" }),
+			span("t0:spawn", "subagent", 1000, 1500, "spawn t1", { childTrackId: "t1" }),
+			span("t0:bash", "tool", 2000, 2100, "bash", { entryId: "bash0" }),
+		]),
+		track("t1", "t0", CHILD, [
+			span("t1:model", "model", 1100, 1400, "t1 model", { entryId: "m1" }),
+			span("t1:spawn", "subagent", 3000, 4000, "spawn t2", { childTrackId: "t2" }),
+		]),
+		track("t2", "t1", CHILD, [
+			span("t2:model", "model", 3100, 3800, "t2 model", { entryId: "m2" }),
+			span("t2:spawn", "subagent", 5000, 6000, "spawn t3", { childTrackId: "t3" }),
+		]),
+		track("t3", "t2", CHILD, [
+			span("t3:tool", "tool", 5100, 5500, "t3 tool", { entryId: "tool3" }),
+			span("t3:model", "model", 7000, 7600, "t3 model", { entryId: "m3" }),
+		]),
+		track("t4", "t3", CHILD, [
+			span("t4:model", "model", 7100, 7400, "t4 model", { entryId: "m4" }),
+			span("t4:spawn", "subagent", 8000, 9000, "spawn t5", { childTrackId: "t5" }),
+		]),
+		track("t5", "t4", CHILD, [
+			span("t5:model", "model", 8100, 8800, "t5 model", { entryId: "m5" }),
+		]),
+	];
+	tracks[1]!.markers.push({ time: START + 3500, kind: "compaction", label: "t1 compaction" });
+	tracks[5]!.markers.push({ time: START + 8500, kind: "compaction", label: "t5 compaction" });
+	return {
+		file: ROOT, title: "Deep nested trace", cwd: "/isolated/project", startedAt: START, endedAt: START + 10_000,
+		mtimeMs: START + 10_000, etag: "fixture", tracks,
+		summary: { wallMs: 10_000, modelMs: 3000, toolMs: 500, idleMs: 6500, turns: 1, requests: 6,
+			toolCalls: 2, subagents: 4, totalTokens: 600, costTotal: 0.012, unpricedRequests: 0,
+			toolStats: [{ tool: "bash", calls: 2, errors: 0, totalMs: 500, maxMs: 400 }] },
+	};
 }
 function context(entryReader?: (file: string, id: string) => Promise<unknown>): FeatureContext {
 	return {
@@ -476,6 +517,27 @@ test("native trace marks match the legend and retain selected backgrounds under 
 			expect(renderTimeline({ ...options, selected: "main:marker:0", width }).every(line => visibleWidth(line) <= width)).toBe(true);
 		}
 	}
+});
+
+test("deep nested timeline render is byte-for-byte stable: lane order, selection and transcript order", () => {
+	const deep = deepTrace(), scale = buildScale(deep.tracks, "time", false), viewport = fit(scale);
+	// Fixed ANSI output so the rendered bytes are identical regardless of the host theme.
+	const exactTheme = {
+		getSymbolPreset: () => "ascii",
+		fg: (_token: string, text: string) => `\x1b[36m${text}\x1b[39m`,
+		bg: (_token: string, text: string) => `\x1b[44m${text}\x1b[49m`,
+		bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+	} as unknown as Theme;
+	const rendered = renderTimeline({ trace: deep, scale, viewport, collapsed: new Set<string>(), selected: "t5:model", cursor: 0.5, width: 120, height: 80, search: "", theme: exactTheme, overviewCursor: 0.25, overviewAnchor: null });
+	// Exact rendered lines (ANSI included), captured before the O(T²) refactor.
+	expect(createHash("sha256").update(JSON.stringify(rendered)).digest("hex")).toBe("20350bf32f0558d12d1bb433bf5534e4106707f72f2bd5e8985ba042f40c1f95");
+	const plain = rendered.map(stripTerminalSequences);
+	expect(plain.filter(line => /^\s*[−+] t\d/.test(line)).map(line => line.trim().split(" ")[1])).toEqual(["t0", "t1", "t2", "t3", "t4", "t5"]);
+	expect(plain.some(line => line.startsWith("> t5 model"))).toBe(true);
+	expect(transcriptRows(deep.tracks).map(row => row.key)).toEqual([
+		"t0:turn", "t0:model", "t0:spawn", "t1:model", "t0:bash", "t1:spawn", "t2:model", "t1:marker:0",
+		"t2:spawn", "t3:tool", "t3:model", "t4:model", "t4:spawn", "t5:model", "t5:marker:0",
+	]);
 });
 
 /** Every route answers `{}` — the shape a never-initialised aggregator returns. */

@@ -45,9 +45,10 @@ export class ListState<T> {
 		});
 	}
 	current(rows: readonly T[]): T | undefined {
-		const current = rows.find(row => this.key(row) === this.selected) ?? rows[0];
-		if (this.selected === null && current) this.selected = this.key(current);
-		return current;
+		const found = rows.find(row => this.key(row) === this.selected);
+		const chosen = found ?? rows[0];
+		if (!found && chosen) this.selected = this.key(chosen);
+		return chosen;
 	}
 	move(rows: readonly T[], delta: number): void {
 		if (!rows.length) return;
@@ -78,29 +79,30 @@ export class ListState<T> {
 	}
 	render(rows: readonly T[], width: number, height: number, columns: readonly ListColumn<T>[], ctx: FeatureContext, title: string): string[] {
 		const search = this.editing ? [`Search: ${this.search || "—"}  · Enter/Esc finish · Ctrl-U clear`] : this.search ? [`Search: ${this.search}`] : [];
+		const searchLines = wrap(search, width);
 		if (!rows.length) {
 			this.lastHits = [];
-			return [sectionHeading(ctx, width, title), ...wrap(search, width),
+			return [sectionHeading(ctx, width, title), ...searchLines,
 				...wrap([ctx.theme.fg("dim", this.search ? "No matches. Esc clears search." : "No visible records. Change range or filters.")], width)];
 		}
 		const current = this.current(rows)!;
 		const index = rows.indexOf(current);
 		this.reveal = Math.max(this.reveal, index + 1);
-		const count = Math.max(1, Math.min(Math.max(1, height - 3 - search.length), this.reveal, rows.length));
+		const count = Math.max(1, Math.min(Math.max(1, height - 3 - searchLines.length), this.reveal, rows.length));
 		const start = Math.max(0, Math.min(index - Math.floor(count / 2), Math.min(rows.length, this.reveal) - count));
 		const visible = rows.slice(start, start + count);
 		const records = visible.map(row => Object.fromEntries(columns.map(column => [column.key, column.value(row)])));
 		// The table is `sectionHeading` + search lines + header + one line per
-		// record, so record `i` sits at `2 + search.length + i` in this output.
+		// record, so record `i` sits at `2 + searchLines.length + i` in this output.
 		this.lastHits = visible.map((row, line) => ({
-			rowStart: 2 + search.length + line,
-			rowEnd: 3 + search.length + line,
+			rowStart: 2 + searchLines.length + line,
+			rowEnd: 3 + searchLines.length + line,
 			colStart: 0,
 			colEnd: width,
 			action: { type: "selectRow", key: this.key(row) },
 		}));
 		return [sectionHeading(ctx, width, title, `${start + 1}–${start + count}/${rows.length} · ${this.sort} ${this.descending ? "↓" : "↑"}`),
-			...wrap(search, width), ...dataTable(ctx, width, "", columns, records, index - start),
+			...searchLines, ...dataTable(ctx, width, "", columns, records, index - start),
 			...wrap([ctx.theme.fg("dim", "/ search · j/k select · Enter inspect · o/O sort · +/a reveal")], width)];
 	}
 }

@@ -55,8 +55,8 @@
  * number a screen is about (css-tokens.md:104), not on a prefix we never draw.
  */
 
-import type { SymbolPreset, Tab, TabBarTheme, Theme } from "@oh-my-pi/pi-tui";
-import { SCREENS, type ScreenId } from "./screens/types";
+import { visibleWidth, type SymbolPreset, type Tab, type TabBarTheme, type Theme } from "@oh-my-pi/pi-tui";
+import { SCREENS, screenById, type ScreenId } from "./screens/types";
 import { STATS_ICONS, statsIcon, type IconRole } from "./icons";
 import { SELECTION_BG, TAB_INK } from "./palette";
 
@@ -184,3 +184,73 @@ export function buildTabs(preset: SymbolPreset, theme: Theme, activeId: ScreenId
  * rather than guessed: the tab row must not collide with the panel border.
  */
 export const TAB_BAR_INDENT = 1;
+
+/**
+ * The route widget is the toolbar's `< Label >` run: the brackets are the two
+ * neighbours of the active screen, and the label is the active screen itself.
+ * Unlike the retired twelve-glyph strip it costs NO row — it is measured over
+ * the one toolbar row the topbar already paints.
+ *
+ * Spans are derived from the PAINTED row, not from a second copy of the markup:
+ * `routeSpans` reads the stripped topbar and the registry order, so a relabelled
+ * screen or a changed marker moves its own hit area with it.
+ */
+export interface RouteSpan {
+	id: ScreenId;
+	/** Content-row cell offsets, half-open. */
+	start: number;
+	end: number;
+	part: "prev" | "label" | "next";
+}
+
+export function routeSpans(line: string, activeId: ScreenId): readonly RouteSpan[] {
+	if (!SCREENS.some(screen => screen.id === activeId)) return [];
+	// The bare label on the wide band is NOT a route widget: only the bracketed
+	// form is clickable, because only it carries the neighbour controls.
+	if (!line.startsWith("< ")) return [];
+	const index = SCREENS.findIndex(screen => screen.id === activeId);
+	const previous = SCREENS[(index - 1 + SCREENS.length) % SCREENS.length]!.id;
+	const next = SCREENS[(index + 1) % SCREENS.length]!.id;
+	const labelStart = visibleWidth("< ");
+	const labelEnd = labelStart + visibleWidth(screenById(activeId).label);
+	const nextStart = labelEnd + 1; // the painted space before the closing bracket
+	const painted = visibleWidth(line);
+	const spans: RouteSpan[] = [];
+	if (painted >= 1) spans.push({ id: previous, start: 0, end: 1, part: "prev" });
+	if (painted > labelStart) {
+		spans.push({ id: activeId, start: labelStart, end: Math.min(painted, labelEnd), part: "label" });
+	}
+	if (painted > nextStart) spans.push({ id: next, start: nextStart, end: nextStart + 1, part: "next" });
+	return spans;
+}
+
+/** The raw prefix of `line` covering `cells` terminal cells (ANSI kept intact). */
+function rawPrefix(line: string, cells: number): string {
+	let index = 0;
+	let width = 0;
+	while (index < line.length && width < cells) {
+		if (line.charCodeAt(index) === 27) {
+			const end = line.indexOf("m", index + 1);
+			if (end === -1) break;
+			index = end + 1;
+			continue;
+		}
+		const char = String.fromCodePoint(line.codePointAt(index)!);
+		width += visibleWidth(char);
+		index += char.length;
+	}
+	return line.slice(0, index);
+}
+
+/**
+ * Paint the route widget's hover with the same `selectedBg` thumb the host's
+ * `TabBar` uses for a hovered tab. Only the widget's own cells are wrapped, so
+ * the status chip, freshness, progress and range tray keep their own ink.
+ */
+export function paintRouteHover(theme: Theme, line: string, activeId: ScreenId): string {
+	const spans = routeSpans(line.replace(/\x1b\[[0-9;]*m/g, ""), activeId);
+	if (spans.length === 0) return line;
+	const end = Math.max(...spans.map(span => span.end));
+	const prefix = rawPrefix(line, end);
+	return theme.bg(SELECTION_BG.band, prefix) + line.slice(prefix.length);
+}

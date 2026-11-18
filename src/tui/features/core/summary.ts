@@ -11,9 +11,9 @@ import { renderHeatmap, weeksForWidth } from "../../charts/heatmap";
 import { calendarLayout } from "../../charts/calendar";
 import { glyphsFor } from "../../glyphs";
 import { heatRamp, SELECTION_BG } from "../../palette";
-import { ChartState, ListState, fields, wrap, type CoreSeries, type ListColumn, type Sorters } from "./shared";
+import { ChartState, ListState, fields, paneHeading, panePrefix, wrap, type CoreSeries, type ListColumn, type Sorters } from "./shared";
 import { RequestDetails } from "./requests";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "../presentation";
+import { dataTable, focusTabs, metricGrid, metricRail, sectionHeading, sideBySide } from "../presentation";
 
 type SummaryId = "overview" | "projects" | "activity";
 /** The overview series can carry a per-bucket unpriced count; the live route does not. */
@@ -88,18 +88,18 @@ class SummaryFeature implements FeatureController {
 						}),
 					),
 				]);
-				const settlement = fetched as { data?: Partial<PanelData>; errors?: Partial<Record<string, string>> };
-				const overviewData: PanelData = settlement.data !== undefined ? { ...(settlement.data as PanelData) } : (fetched as PanelData);
-				const fetchFailures: string[] = settlement.errors !== undefined ? Object.values(settlement.errors).filter((message): message is string => typeof message === "string") : [];
+				const overviewData: PanelData = { ...(fetched.data as PanelData) };
+				const fetchFailures: string[] = Object.values(fetched.errors)
+					.filter((message): message is string => typeof message === "string" && message.length > 0);
 				const badRecent = recent.value !== null && !Array.isArray(recent.value);
 				data = badRecent ? { ...overviewData, recent: [] } : { ...overviewData, ...(recent.value === null ? {} : { recent: recent.value }) };
 				const failures = [...fetchFailures, ...(recent.error === null ? [] : [recent.error]), ...(badRecent ? ["Recent requests payload is not an array"] : [])];
 				if (failures.length > 0) scopedError = failures.join("; ");
 			} else {
-				const fetched = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);
-				const onlySettlement = fetched as { data?: Partial<PanelData>; errors?: Partial<Record<string, string>> };
-				data = onlySettlement.data !== undefined ? { ...(onlySettlement.data as PanelData) } : (fetched as PanelData);
-				const failures = onlySettlement.errors !== undefined ? Object.values(onlySettlement.errors).filter((message): message is string => typeof message === "string") : [];
+				const only = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);
+				data = { ...(only.data as PanelData) };
+				const failures: string[] = Object.values(only.errors)
+					.filter((message): message is string => typeof message === "string" && message.length > 0);
 				if (failures.length > 0) scopedError = failures.join("; ");
 			}
 			if (this.closed || generation !== this.generation) return;
@@ -152,7 +152,7 @@ class SummaryFeature implements FeatureController {
 		const detail = this.details.render(width);
 		if (detail) return detail;
 		if (this.expanded) return wrap([this.ctx.theme.bold(this.id === "projects" ? "Project details" : "Day details"), "b/Esc back · all narrow-table columns below", ...fields(this.expanded)], width);
-		const prefix = [sectionHeading(this.ctx, width, this.id[0].toUpperCase() + this.id.slice(1), this.id === "activity" ? "371 local days" : this.range, true),
+		const prefix = [sectionHeading(this.ctx, width, `${panePrefix(true)}${this.id[0].toUpperCase() + this.id.slice(1)}`, this.id === "activity" ? "371 local days" : this.range, true),
 			...(this.loading ? [this.data ? "Refreshing… existing observations are stale." : "Loading… no observations yet."] : []),
 			...(this.error ? [this.ctx.theme.fg("error", `Read failed: ${this.error}${this.data ? " · showing stale observations" : ""}`)] : [])];
 		if (!this.data) return wrap(prefix, width);
@@ -176,14 +176,14 @@ class SummaryFeature implements FeatureController {
 			const mix = [["Uncached input", overall.totalInputTokens], ["Cache read", overall.totalCacheReadTokens], ["Cache write", overall.totalCacheWriteTokens], ["Output", overall.totalOutputTokens]] as const;
 			const agents = buildAgentTokenShare(payload.byAgentType);
 			const prefixLines = wrap(prefix, width);
-			const metrics = metricGrid(this.ctx, width, [
+			const metrics = metricRail(this.ctx, width, [
 				{ label: "Requests", value: formatCompact(overall.totalRequests), hint: `${formatCompact(overall.successfulRequests)} succeeded`, emphasis: "primary" },
 				{ label: "API cost", value: formatEstimatedCost(overall.totalCost, overall.unpricedRequests), hint: `${overall.unpricedRequests} unpriced` },
 				{ label: "Tokens", value: formatCompact(total), hint: `${formatCompact(overall.totalPremiumRequests)} premium req` },
 				{ label: "Cache hit", value: formatPercent(overall.cacheRate), hint: cacheSavingsNote(overall.cacheSavings) },
 				{ label: "Latency", value: formatDurationMs(overall.avgDuration), hint: `${formatDurationMs(overall.avgTtft)} TTFT` },
 				{ label: "Failures", value: formatCompact(overall.failedRequests), hint: `${formatPercent(overall.errorRate)} error rate` },
-			]);
+			], { maxRows: 2 });
 			const tabs = focusTabs(this.ctx, width, ["Requests", "Chart"], this.focus);
 			const tokenMix = dataTable(this.ctx, width, "Token mix", [
 				{ key: "label", header: "Category", align: "left" },
@@ -196,20 +196,27 @@ class SummaryFeature implements FeatureController {
 				{ key: "share", header: "Share", align: "right", priority: 1 },
 				{ key: "requests", header: "Req", align: "right", priority: 2 },
 			], agents.segments.map(agent => ({ agent: agent.agentType, tokens: formatCompact(agent.tokens), share: formatPercent(agent.share), requests: String(agent.requests) })));
-			// The log and the chart are the only flexible regions; everything else
-			// on the screen is fixed, so the frame's remainder is split between them.
-			const fixed = prefixLines.length + metrics.length + 1 + tabs.length
-				+ 1 + tokenMix.length + 1 + agentShares.length;
-			const available = Math.max(1, height - fixed);
 			const notice = chart.mode === "cost" && overall.unpricedRequests > 0
 				? wrap([this.ctx.theme.fg("dim", `Known-priced cost only · ${overall.unpricedRequests} unpriced requests; per-bucket unknown counts unavailable.`)], width) : [];
-			const chartOverhead = 4 + notice.length + chart.series.length;
-			const listHeight = Math.max(6, Math.round(available * 0.5));
-			const chartHeight = Math.max(5, available - listHeight - chartOverhead);
-			const list = this.requests.render(rows, width, listHeight, columns, this.ctx, "Latest requests · A opens all");
-			const graph = [sectionHeading(this.ctx, width, "Activity", chart.mode, this.focus === 1),
+			const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0
+				? this.requests.editing || this.requests.search
+					? "Keys: search · Enter/Esc finish · Ctrl-U clear · Tab pane"
+					: "Keys: / search · j/k select · Enter details · o/O sort · A all · Tab pane"
+				: "Keys: m mode · n legend · v visibility · ,/. point · Tab pane")], width);
+			const base = prefixLines.length + metrics.length + 1 + tabs.length + cue.length + 1;
+			const primaryBudget = Math.max(12, Math.min(18, height - base));
+			const chartOverhead = 3 + notice.length + chart.series.length;
+			const wide = width >= 80;
+			const leftWidth = Math.floor((width - 2) / 2);
+			const rightWidth = width - 2 - leftWidth;
+			const listWidth = wide ? (this.focus === 0 ? leftWidth : rightWidth) : width;
+			const graphWidth = wide ? (this.focus === 0 ? rightWidth : leftWidth) : width;
+			const listHeight = wide ? primaryBudget : Math.max(6, Math.min(8, primaryBudget - 1 - 5 - chartOverhead));
+			const chartHeight = Math.max(5, (wide ? primaryBudget : primaryBudget - 1 - listHeight) - chartOverhead);
+			const list = this.requests.render(rows, listWidth, listHeight, columns, this.ctx, `${panePrefix(this.focus === 0)}Latest requests · A opens all`, { showHint: false });
+			const graph = [paneHeading(this.ctx, graphWidth, "Activity", chart.mode, this.focus === 1),
 				...notice,
-				...this.chart.render(this.ctx, width, chart.buckets, chart.series, {
+				...this.chart.render(this.ctx, graphWidth, chart.buckets, chart.series, {
 					height: chartHeight, unit: chart.mode === "cost" ? "API-equivalent USD / bucket" : chart.mode === "tokens" ? "tokens / bucket" : "requests / bucket",
 					stacked: true, format: chart.mode === "cost" ? formatCost : formatCompact,
 					formatValue: chart.mode === "cost" ? (key, value, point) => {
@@ -218,15 +225,24 @@ class SummaryFeature implements FeatureController {
 						const unknown = unpriced > 0 ? unpriced : !chart.carriesUnpriced && (chart.requests[point] ?? 0) > 0 ? 1 : 0;
 						return formatEstimatedCost(value ?? 0, unknown);
 					} : undefined,
+					showHint: false,
 				})];
-			const listOffset = prefixLines.length + metrics.length + 1 + tabs.length
-				+ (this.focus === 0 ? 0 : graph.length + 1);
+			let pair: string[];
+			let listOffset = base;
+			let colShift = 0;
+			if (wide) {
+				const listFirst = this.focus === 0;
+				if (!listFirst) colShift = leftWidth + 2;
+				pair = [...sideBySide(this.ctx, width, listFirst ? list : graph, listFirst ? graph : list)];
+			} else {
+				pair = this.focus === 0 ? [...list, "", ...graph] : [...graph, "", ...list];
+				listOffset += this.focus === 0 ? 0 : graph.length + 1;
+			}
 			this.ctx.reportHits?.(this.requests.lastHits.map(hit => ({
 				...hit, rowStart: hit.rowStart + listOffset, rowEnd: hit.rowEnd + listOffset,
+				colStart: hit.colStart + colShift, colEnd: hit.colEnd + colShift,
 			})));
-			return [...prefixLines, ...metrics, "", ...tabs,
-				...(this.focus === 0 ? list : graph), "", ...(this.focus === 0 ? graph : list), "",
-				...tokenMix, "", ...agentShares];
+			return [...prefixLines, ...metrics, "", ...tabs, ...cue, "", ...pair, "", ...tokenMix, "", ...agentShares];
 		}
 		if (this.id === "projects") {
 			const { view, scoped, matching } = this.projectRows();
@@ -252,13 +268,15 @@ class SummaryFeature implements FeatureController {
 		]);
 		const dimLine = wrap([this.ctx.theme.fg("dim", `Totals include all projects · t ${this.hideTemporary ? "show" : "hide"} temporary projects${this.hideTemporary && view.temporaryCount ? ` (${view.temporaryCount} hidden)` : ""}`)], width);
 		const tabs = focusTabs(this.ctx, width, ["Projects", "By cost", "By requests"], this.focus);
-		const used = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length;
-		const list = lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - used), columns, this.ctx, titles[this.focus]);
-		const listOffset = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length;
+		const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0 && (this.projects.editing || this.projects.search)
+			? "Keys: search · Enter/Esc finish · Ctrl-U clear · Tab pane"
+			: "Keys: j/k select · Enter details/filter · o/O sort · t temporary · / search · Tab pane")], width);
+		const listOffset = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length + cue.length + 1;
+		const list = lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - listOffset), columns, this.ctx, `${panePrefix(true)}${titles[this.focus]}`, { showHint: false });
 		this.ctx.reportHits?.(lists[this.focus].lastHits.map(hit => ({
 			...hit, rowStart: hit.rowStart + listOffset, rowEnd: hit.rowEnd + listOffset,
 		})));
-		return [...prefixLines, ...metrics, ...dimLine, "", ...tabs, ...list];
+		return [...prefixLines, ...metrics, ...dimLine, "", ...tabs, ...cue, "", ...list];
 		}
 		const points = (this.data.dailyActivity ?? []) as ActivityPoint[];
 		const weeks = weeksForWidth(2, width);
@@ -276,7 +294,7 @@ class SummaryFeature implements FeatureController {
 		const windowUnpriced = points.filter(point => point.day >= localDay(layout.start) && point.day <= localDay(today)).reduce((sum, point) => sum + (point.unpricedRequests ?? 0), 0);
 		const needle = this.days.search.trim().toLowerCase();
 		const rows = this.days.rows(points.filter(point => !needle || point.day.includes(needle)), DAY_SORT);
-		const calendar = [sectionHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
+		const calendar = [paneHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
 			...renderHeatmap(points, { innerWidth: width, labelWidth: 2, weeks, glyphs: glyphsFor(this.ctx.theme.getSymbolPreset()), ramp: [0, 1, 2, 3].map(level => heatRamp(this.ctx.theme, level)), dim: text => this.ctx.theme.fg("dim", text), today, selectedDay: selected.day, selected: text => this.ctx.theme.bg(SELECTION_BG.band, this.ctx.theme.fg("accent", text)) }),
 			...wrap([this.ctx.theme.fg("dim", `${localDay(layout.start)}–${localDay(today)} · ${layout.totalRequests} requests · ${formatEstimatedCost(layout.totalCost, windowUnpriced)}`),
 				this.ctx.theme.fg("dim", "j/k day · h/l week · t today · Enter details")], width)];
@@ -287,21 +305,25 @@ class SummaryFeature implements FeatureController {
 			{ label: "Day tokens", value: formatCompact(selected.totalTokens), hint: `${points.length} recorded days` },
 		]);
 		const tabs = focusTabs(this.ctx, width, ["Recorded days", "Calendar"], this.focus);
+		const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0
+			? this.days.editing || this.days.search
+				? "Keys: search · Enter/Esc finish · Ctrl-U clear · Tab pane"
+				: "Keys: j/k select · Enter details · o/O sort · / search · Tab pane"
+			: "Keys: j/k day · h/l week · t today · Enter details · Tab pane")], width);
 		const tail = wrap([this.ctx.theme.fg("dim", "Latest 371 local days · independent of the range selector; quiet selected days are zero.")], width);
 		// The calendar is fixed; the day list absorbs every row the frame has left.
-		const used = prefixLines.length + metrics.length + 1 + tabs.length + calendar.length + 1 + tail.length;
+		const beforePane = prefixLines.length + metrics.length + 1 + tabs.length + cue.length + 1;
+		const used = beforePane + calendar.length + 1 + tail.length;
 		const list = this.days.render(rows, width, Math.max(5, height - used), [
 			{ key: "day", header: "Day", align: "left", value: point => point.day },
 			{ key: "requests", header: "Req", align: "right", priority: 0, value: point => formatCompact(point.requests) },
 			{ key: "cost", header: "API cost", align: "right", priority: 1, value: point => formatEstimatedCost(point.cost, point.unpricedRequests ?? 0) },
 			{ key: "tokens", header: "Tokens", align: "right", priority: 2, value: point => formatCompact(point.totalTokens) },
-		], this.ctx, "Recorded days");
+		], this.ctx, `${panePrefix(this.focus === 0)}Recorded days`, { showHint: false });
 		const leading = this.focus === 0 ? list : calendar;
 		const trailing = this.focus === 0 ? calendar : list;
-		const calendarOffset = prefixLines.length + metrics.length + 1 + tabs.length
-			+ (this.focus === 0 ? list.length + 1 : 0);
-		const listOffset = prefixLines.length + metrics.length + 1 + tabs.length
-			+ (this.focus === 0 ? 0 : calendar.length + 1);
+		const calendarOffset = beforePane + (this.focus === 0 ? list.length + 1 : 0);
+		const listOffset = beforePane + (this.focus === 0 ? 0 : calendar.length + 1);
 		this.ctx.reportHits?.(this.days.lastHits.map(hit => ({
 			...hit, rowStart: hit.rowStart + listOffset, rowEnd: hit.rowEnd + listOffset,
 		})));
@@ -323,7 +345,7 @@ class SummaryFeature implements FeatureController {
 			}
 		}
 		this.ctx.reportHits?.(hits);
-		return [...prefixLines, ...metrics, "", ...tabs, ...leading, "", ...trailing, ...tail];
+		return [...prefixLines, ...metrics, "", ...tabs, ...cue, "", ...leading, "", ...trailing, ...tail];
 	}
 	get inputMode(): "text" | "navigation" {
 		return (this.id === "overview" ? this.requests.editing : this.id === "projects" ? this.projects.editing : this.days.editing)

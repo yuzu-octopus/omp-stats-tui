@@ -4,8 +4,8 @@ import { modelKey } from "@oh-my-pi/omp-stats/client/data/colors";
 import { formatCompact, formatCost, formatDurationMs, formatEstimatedCost, formatInteger, formatMessageCost, formatTimestamp, formatTokensPerSecond } from "@oh-my-pi/omp-stats/client/data/formatters";
 import type { Range } from "../../../data/ranges";
 import type { FeatureContext, FeatureController } from "../types";
-import { ListState, fields, wrap, type ListColumn } from "./shared";
-import { dataTable, focusTabs, metricGrid, sectionHeading } from "../presentation";
+import { ListState, fields, paneHeading, panePrefix, wrap, type ListColumn } from "./shared";
+import { dataTable, focusTabs, metricGrid, metricRail } from "../presentation";
 interface JsonSection { title: string; data: unknown; }
 interface AffectedModel { key: string; model: string; provider: string; count: number; }
 
@@ -47,7 +47,7 @@ export class RequestDetails {
 	}
 	render(width: number): string[] | null {
 		if (!this.active) return null;
-		const lines = [sectionHeading(this.ctx, width, `Request #${this.row?.id ?? "–"}`)];
+		const lines = [paneHeading(this.ctx, width, `Request #${this.row?.id ?? "–"}`, "", true)];
 		if (this.notice) lines.push(this.notice);
 		if (!this.payload) return wrap([...lines, this.error ? `Error: ${this.error}${this.row?.id === undefined ? "" : " · e retry"}` : "Loading request details…",
 			this.ctx.theme.fg("dim", "b/Esc back"),
@@ -55,7 +55,7 @@ export class RequestDetails {
 		const d = this.payload;
 		const sections = this.sections(d);
 		const selected = sections[this.section % sections.length];
-		lines.push(sectionHeading(this.ctx, width, `${d.model} · ${d.provider}`, requestStatus(d)),
+		lines.push(paneHeading(this.ctx, width, `${d.model} · ${d.provider}`, requestStatus(d), true),
 			...(d.errorMessage ? [this.ctx.theme.fg("error", `${requestStatus(d) === "aborted" ? "Aborted" : "Error"}: ${d.errorMessage}`)] : []),
 			...metricGrid(this.ctx, width, [
 				{ label: "API estimate", value: formatMessageCost(d, 4), emphasis: "primary", hint: `unpriced requests: ${Number(d.costUnpriced ?? false)}` },
@@ -65,12 +65,12 @@ export class RequestDetails {
 			]),
 			...dataTable(this.ctx, width, "Tokens", [{ key: "bucket", header: "Bucket", align: "left" }, { key: "tokens", header: "Tokens", align: "right" }],
 				Object.entries({ "Uncached input": d.usage.input, "Cache read": d.usage.cacheRead, "Cache write": d.usage.cacheWrite, Output: d.usage.output, Total: d.usage.totalTokens, "Premium requests": d.usage.premiumRequests ?? 0 }).map(([bucket, value]) => ({ bucket, tokens: Number.isInteger(value) ? formatInteger(value) : String(value) }))),
-			sectionHeading(this.ctx, width, "Billing components"),
+			paneHeading(this.ctx, width, "Billing components", "", false),
 			...Object.entries(d.usage.cost).map(([component, value]) => `${component}: ${d.costUnpriced ? "unpriced request; component estimate unavailable" : formatCost(value)}`),
-			sectionHeading(this.ctx, width, "Identity"), ...fields({ requestId: d.id, entryId: d.entryId, stopReason: d.stopReason, api: d.api, project: d.folder, sessionFile: d.sessionFile }),
+			paneHeading(this.ctx, width, "Identity", "", false), ...fields({ requestId: d.id, entryId: d.entryId, stopReason: d.stopReason, api: d.api, project: d.folder, sessionFile: d.sessionFile }),
 			...focusTabs(this.ctx, width, sections.map(section => section.title), this.section % sections.length),
 			this.ctx.theme.fg("dim", `n section · v ${this.collapsed.has(selected.title) ? "expand" : "collapse"} · c/C copy · t trace · b/Esc back`),
-			...sections.flatMap(section => [sectionHeading(this.ctx, width, section.title, this.collapsed.has(section.title) ? "collapsed" : ""), ...(this.collapsed.has(section.title) ? [] : [JSON.stringify(section.data, null, 2) ?? "null"])]));
+			...sections.flatMap(section => [paneHeading(this.ctx, width, section.title, this.collapsed.has(section.title) ? "collapsed" : "", section === selected), ...(this.collapsed.has(section.title) ? [] : [JSON.stringify(section.data, null, 2) ?? "null"])]));
 		return wrap(lines, width);
 	}
 	private sections(d: Payload): JsonSection[] {
@@ -179,7 +179,7 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 		get inputMode() { return list.editing ? "text" as const : "navigation" as const; },
 		render(width, height) {
 			const detail = details.render(width); if (detail) return detail;
-			if (!hasData) return wrap([sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
+			if (!hasData) return wrap([paneHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range, true),
 				ctx.theme.fg(error ? "error" : "dim", error ? `${error} · l retry` : loading ? "Loading observations…" : "No observations loaded yet."),
 				...(list.editing || list.search ? [`Search: ${list.search || "—"} · Enter/Esc finish · Ctrl-U clear`] : [])], width);
 			const grouped = groups(); const allModels = modelRows();
@@ -198,21 +198,23 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 			// a complete load names its own total; a capped load states the
 			// loaded count with the total unavailable (no second fetch buys it).
 			const scope = complete ? `${formatInteger(rows.length)} of ${formatInteger(rows.length)} in ${range}` : `${formatInteger(rows.length)} loaded (total unavailable)`;
-			const lines = [sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
-				...metricGrid(ctx, width, [
+			const lines = [paneHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range, true),
+				...metricRail(ctx, width, [
 					{ label: id === "errors" ? "Loaded failures" : "Loaded requests", value: formatInteger(rows.length), emphasis: "primary", hint: `${counts.ok} ok` },
 					{ label: "Matching", value: formatInteger(filtered.length), hint: id === "errors" ? `${gs.length} signatures` : `${counts.failed} failed` },
 					{ label: "API estimate", value: formatEstimatedCost(summary.cost, summary.unpriced), hint: `${formatInteger(summary.unpriced)} unpriced` },
 					{ label: "Tokens", value: formatCompact(summary.tokens), hint: `${counts.aborted} aborted` },
 					{ label: "Median latency", value: hasTiming ? formatDurationMs(summary.medianDuration) : "—" },
 					{ label: "p95 latency", value: hasTiming ? formatDurationMs(summary.p95Duration) : "—" },
-				])];
+				], { maxRows: 2 })];
 			if (loading) lines.push(ctx.theme.fg("dim", "Loading… previous rows retained")); if (error) lines.push(ctx.theme.fg("error", `${error} · showing retained rows · l retry`));
 			lines.push(ctx.theme.fg("dim", `${scope} · ${formatInteger(summary.unpriced)} unpriced`));
 			lines.push(...focusTabs(ctx, width, id === "errors" ? ["Signatures", "Models", "Failures"] : ["Request log"], focus));
-			lines.push(ctx.theme.fg("dim", id === "requests" ? `f status: ${statuses[status]} · / search · o/O sort · Enter details · l load more` : "Tab pane · / search · o/O sort · Enter select/open · u latest · f/x/X clear"));
+			lines.push(...wrap([ctx.theme.fg("dim", id === "requests"
+				? `Keys: f status ${statuses[status]} · / search · o/O sort · Enter details · l more`
+				: "Keys: Tab pane · j/k select · Enter filter/open · / search · o/O sort · u latest · f/x/X clear")], width));
 			const panelHeight = Math.max(5, height - lines.length);
-			const failurePanel = id === "requests" || focus === 2 ? list.render(filtered, width, panelHeight, id === "errors" ? errorColumns : requestColumns, ctx, id === "errors" ? "Failures" : "Request log") : [];
+			const failurePanel = id === "requests" || focus === 2 ? list.render(filtered, width, panelHeight, id === "errors" ? errorColumns : requestColumns, ctx, `${panePrefix(id === "requests" || focus === 2)}${id === "errors" ? "Failures" : "Request log"}`, { showHint: false }) : [];
 			if (id === "requests") {
 				lines.push(...failurePanel);
 			} else {
@@ -223,16 +225,16 @@ export function createRequestsFeature(id: "requests" | "errors", ctx: FeatureCon
 						{ key: "count", header: "Failures", align: "right", value: g => formatInteger(g.count) },
 						{ key: "models", header: "Models", align: "right", priority: 2, value: g => formatInteger(g.models.length) },
 						{ key: "last", header: "Latest", align: "left", priority: 3, value: g => formatTimestamp(g.lastSeen) },
-					], ctx, "Error signatures")
+					], ctx, `${panePrefix(focus === 0)}Error signatures`, { showHint: false })
 					: focus === 1 ? models.render(ms, width, panelHeight, [
 						{ key: "identity", header: "Model / provider", align: "left", value: m => `${m.model} · ${m.provider}` },
 						{ key: "count", header: "Failures", align: "right", value: m => formatInteger(m.count) },
-					], ctx, "Affected models")
+					], ctx, `${panePrefix(focus === 1)}Affected models`, { showHint: false })
 					: failurePanel;
 				lines.push(...panel);
 				const expanded = gs.find(group => group.signature === signature);
 				if (expanded) {
-					lines.push(sectionHeading(ctx, width, "Expanded signature", `${expanded.count} members`), expanded.signature,
+					lines.push(paneHeading(ctx, width, "Expanded signature", `${expanded.count} members`, false), expanded.signature,
 						`First ${formatTimestamp(expanded.firstSeen)} · latest ${formatTimestamp(expanded.lastSeen)}`,
 						`Latest error: ${expanded.latest.errorMessage ?? "—"}`,
 						...expanded.models.map(member => `${member.model} · ${member.provider}: ${member.count} failures`));

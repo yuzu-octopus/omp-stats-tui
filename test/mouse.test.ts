@@ -23,6 +23,7 @@ import type { PanelData } from "../src/data/api";
 import { RANGES } from "../src/data/ranges";
 import type { Range } from "../src/data/ranges";
 import { hitTest, rangeHit, rangeSpans, sidebarHit, type MouseFrame } from "../src/tui/mouse";
+import { routeSpans } from "../src/tui/tabs";
 
 /**
  * Mouse support: clicks, wheel, hover. Hit areas are pure geometry over the
@@ -226,11 +227,12 @@ test("a real stale Live chip precedes the tray, so its age cannot follow it", as
 function syntheticFrame(over: Partial<MouseFrame> = {}): MouseFrame {
 	return {
 		topbarRows: 1,
-		stripRows: 1,
+		stripRows: 0,
 		sidebarWidth: 0,
 		sidebarRows: 0,
+		bodyRows: 10,
 		topbar: syntheticTopbar(),
-		tabAt: () => undefined,
+		routeSpans: [],
 		...over,
 	};
 }
@@ -243,20 +245,28 @@ test("the top border row and negative coordinates hit nothing", () => {
 	expect(hitTest(frame, 1, 1)).toEqual({ type: "none" });
 });
 
-test("a progress row under the topbar is not the topbar", () => {
-	const frame = syntheticFrame({ topbarRows: 2, stripRows: 0 });
+test("only the painted toolbar row routes; the body budget starts below it", () => {
+	const action = { type: "selectDay", day: "2026-01-10" } as const;
+	const frame = syntheticFrame({
+		bodyRows: 3,
+		bodyHits: [{ rowStart: 0, rowEnd: 10, colStart: 0, colEnd: 40, action }],
+	});
+	// Overlay row 1 is content row 0: the topbar still owns its range segment.
 	const span = rangeSpans(frame.topbar)[0]!;
-	// Overlay row 1 is the topbar: its segment still routes.
 	expect(hitTest(frame, 1, span.start + 2)).toEqual({ type: "range", id: span.id });
-	// Overlay row 2 is the progress line: the same columns route nowhere.
-	expect(hitTest(frame, 2, span.start + 2)).toEqual({ type: "none" });
+	// Overlay row 5 is body row 3, past the painted body: inert even though a
+	// document row under that offset carries a feature hit.
+	expect(hitTest(frame, 5, 6)).toEqual({ type: "none" });
 });
 
-test("strip rows route through tabAt; misses and missing cols are inert", () => {
-	const frame = syntheticFrame({ tabAt: (line, col) => (line === 0 && col >= 4 && col < 12 ? "models" : undefined) });
-	expect(hitTest(frame, 2, 6)).toEqual({ type: "screen", id: "models", via: "strip" });
-	expect(hitTest(frame, 2, 3)).toEqual({ type: "none" });
-	expect(hitTest(syntheticFrame(), 2, 6)).toEqual({ type: "none" });
+test("route-widget spans switch screens; misses and bare labels are inert", () => {
+	const span = { id: "models", start: 4, end: 12, part: "next" } as const;
+	const frame = syntheticFrame({ routeSpans: [span] });
+	// Overlay row 1 is the toolbar's content row 0.
+	expect(hitTest(frame, 1, 6)).toEqual({ type: "screen", id: "models", via: "route" });
+	expect(hitTest(frame, 1, 3)).toEqual({ type: "none" });
+	expect(hitTest(frame, 1, span.end + 2)).toEqual({ type: "none" });
+	expect(hitTest(syntheticFrame(), 1, 6)).toEqual({ type: "none" });
 });
 
 test("sidebar rows route only inside the sidebar width; body cols are inert", () => {
@@ -331,25 +341,21 @@ test("clicking a sidebar row switches screens; headings do nothing", async () =>
 	expect(__testing.debugScreenId(panel)).toBe("tools");
 });
 
-test("clicking a tab-strip tab switches screens", async () => {
+test("clicking the toolbar route widget's next bracket switches screens", async () => {
 	const panel = await settledPanel();
 	const width = 60;
-	plain(panel, width);
+	const rendered = plain(panel, width);
 	const frame = __testing.debugFrame(panel)!;
-	expect(frame.stripRows).toBeGreaterThan(0);
+	expect(frame.stripRows).toBe(0);
 	expect(frame.sidebarRows).toBe(0);
-	const stripStart = 1 + frame.topbarRows;
-	// Scan the TabBar's own zones for the `models` tab: the strip collapses to
-	// one-cell shorts at this width, so full labels are not on screen.
-	let hit: { row: number; col: number } | null = null;
-	for (let line = 0; line < frame.stripRows && hit === null; line++) {
-		for (let col = 0; col < 60 && hit === null; col++) {
-			if (frame.tabAt(line, col) === "models") hit = { row: stripStart + line, col: col + 2 };
-		}
-	}
-	expect(hit).not.toBeNull();
-	panel.handleInput(sgr(CLICK, hit!.col + 1, hit!.row + 1));
-	expect(__testing.debugScreenId(panel)).toBe("models");
+	// The bracketed label is the only nav at this width, and its spans were
+	// measured from the painted toolbar row rather than a tab bar's zones.
+	const span = frame.routeSpans.find(candidate => candidate.id === "activity" && candidate.part === "next");
+	expect(span).toBeDefined();
+	expect(rendered[1]!.slice(span!.start + 2, span!.end + 2)).toBe(">");
+	expect(routeSpans(rendered[1]!.replace(/^[^<]*/, ""), "overview")).toEqual(frame.routeSpans);
+	panel.handleInput(sgr(CLICK, span!.start + 2 + 1, 1 + 1));
+	expect(__testing.debugScreenId(panel)).toBe("activity");
 });
 
 test("clicking a topbar range segment changes the range; clicking body does nothing", async () => {
@@ -362,6 +368,7 @@ test("clicking a topbar range segment changes the range; clicking body does noth
 	panel.handleInput(sgr(CLICK, col + 2 + 1, 1 + 1));
 	await __testing.settled(panel);
 	expect(__testing.debugRange(panel)).toBe("7d");
+	expect(frame.bodyRows, "the test needs a painted body below the toolbar").toBeGreaterThan(12);
 	const before = __testing.debugScreenId(panel);
 	const overlayRow = 1 + frame.topbarRows + frame.stripRows + 12 + 1;
 	panel.handleInput(sgr(CLICK, 60, overlayRow));
@@ -412,9 +419,10 @@ test("range hit areas survive the topbar's move to the right edge, at every widt
 	}
 });
 
-test("the brand and the spacer are not clickable: only the segments own the topbar row", async () => {
-	// The wordmark and the painted spacer between it and the action cluster are
-	// chrome, not targets. A click there must not select a screen or a range.
+test("the route label and the spacer are not clickable: only the segments own the toolbar", async () => {
+	// On the wide band the bare label is a name, not a control, and the painted
+	// spacer between it and the action cluster is chrome. A click on either
+	// must not select a screen or a range.
 	//
 	// The inert columns are DERIVED from the frame rather than hardcoded: the
 	// spacer is bounded by the cluster's own width (chrome.ts's cap), so at
@@ -426,6 +434,7 @@ test("the brand and the spacer are not clickable: only the segments own the topb
 	const width = 150;
 	plain(panel, width);
 	const frame = __testing.debugFrame(panel)!;
+	expect(frame.routeSpans, "the wide band owns the sidebar, not the route widget").toEqual([]);
 	const spans = rangeSpans(frame.topbar);
 	const firstControl = Math.min(...spans.map(span => span.start));
 	expect(firstControl, "the test needs at least one segment to bound the inert region").toBeGreaterThan(0);
@@ -494,31 +503,24 @@ test("the wheel scrolls the body through handleInput", async () => {
 	expect(__testing.debugScroll(panel)).toBe(0);
 });
 
-test("hover over a strip tab arms the host hover style; leaving clears it", async () => {
+test("hover over the route widget arms the host hover thumb; leaving clears it", async () => {
 	const panel = await settledPanel();
 	const width = 60;
 	plain(panel, width);
 	const frame = __testing.debugFrame(panel)!;
-	const stripStart = 1 + frame.topbarRows;
-	let hit: { row: number; col: number } | null = null;
-	for (let line = 0; line < frame.stripRows && hit === null; line++) {
-		for (let col = 0; col < 60 && hit === null; col++) {
-			if (frame.tabAt(line, col) === "models") hit = { row: stripStart + line, col: col + 2 };
-		}
-	}
-	expect(hit).not.toBeNull();
-	const before = panel.render(width)[stripStart]!;
-	panel.handleInput(sgr(MOTION, hit!.col + 1, hit!.row + 1));
-	expect(__testing.debugHoverTab(panel)).toBe("models");
-	const hovered = panel.render(width)[stripStart]!;
-	// The paint is the host's own `hoverTab` token (selectedBg + text), never
-	// an invented style — so the row must differ by ESCAPES, not by cells.
+	const span = frame.routeSpans.find(candidate => candidate.id === "activity" && candidate.part === "next")!;
+	const before = panel.render(width)[1]!;
+	panel.handleInput(sgr(MOTION, span.start + 2 + 1, 1 + 1));
+	expect(__testing.debugHoverTab(panel)).toBe("activity");
+	const hovered = panel.render(width)[1]!;
+	// The paint is the host's `selectedBg` thumb, never an invented style, so
+	// the row must differ by ESCAPES, not by cells.
 	expect(hovered).not.toBe(before);
 	expect(hovered.replace(ANSI, "")).toBe(before.replace(ANSI, ""));
-	// The pointer over the body clears the tab hover and restores the row.
-	panel.handleInput(sgr(MOTION, 40, stripStart + frame.stripRows + 3 + 1));
+	// The pointer over the body clears the route hover and restores the row.
+	panel.handleInput(sgr(MOTION, 40, 1 + frame.topbarRows + 3 + 1));
 	expect(__testing.debugHoverTab(panel)).toBeNull();
-	expect(panel.render(width)[stripStart]).toBe(before);
+	expect(panel.render(width)[1]).toBe(before);
 });
 
 test("hover over a sidebar row paints the 4th-arg hover band; leaving clears it", async () => {

@@ -88,7 +88,8 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 	// Colour identity belongs to the FULL row, not the filtered plot. Hiding a
 	// middle series renumbers the active rows, so re-resolving over `active` would
 	// repaint the last series with the hidden one's hue while the legend below
-	// still shows its own. One list, indexed by active position, feeds both.
+	// still shows its own. One list, indexed by active position, feeds the plot
+	// once the planner says which of those rows survived its sparse-series gate.
 	const seriesColors = rows
 		.map((row, r) => ({ row, color: colors[row.colorIndex ?? r] }))
 		.filter(({ row }) => !options.hidden?.has(row.key))
@@ -107,7 +108,10 @@ export function renderTimeSeries(ctx: FeatureContext, axis: readonly number[], r
 			preset,
 			theme: ctx.theme,
 			paint: (color, text) => ctx.theme.fg(color, text),
-			seriesColors,
+			seriesColors: spec.series.map((_entry, index) => {
+				const row = spec.rowIndexes?.[index] ?? index;
+				return seriesColors[row] ?? seriesColors[0];
+			}),
 			// The floor is CHROME, never a series hue — the same rule the band
 			// renderer keeps. Labels are off: the legend below names the series.
 			dim: text => ctx.theme.fg("dim", text),

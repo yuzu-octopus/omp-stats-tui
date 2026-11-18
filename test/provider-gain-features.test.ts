@@ -19,7 +19,7 @@ function deferred<T>() {
 }
 async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
 function context(api: FeatureReader["api"]): FeatureContext {
-	return { reader: { api, fetch: async () => ({}) }, theme, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {}, now: () => now };
+	return { reader: { api, fetch: async () => ({ data: {}, errors: {} }) }, theme, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {}, now: () => now };
 }
 function insight(provider: string, windowKey: string, consumed = 1): ProviderWindowInsight {
 	return { provider, windowKey, windowLabel: windowKey, accounts: 1, cycles: 0, fractionConsumed: consumed, estTokensPerWindow: 100, peakConcurrentFraction: 0.5, idealAccounts: 1, exhaustedEvents: 0 };

@@ -30,6 +30,7 @@ Planned at: commits `b147593` (001–007), `7acf0ad` (008–012) and `49b2624` (
 | 018 | Feature payload guards and bounded render work | P1 | M | — | DONE |
 | 019 | Trace render complexity | P2 | M | — | DONE |
 | 020 | Docs, pins and tooling | P2 | S | — | DONE |
+| 021 | Dashboard refactor design: compact rail, side-by-side panes, unified toolbar | P1 | L | correctness wave | DONE (verified 735 pass) — `docs/plans/2026-11-18-dashboard-refactor.md` |
 
 ## Dependency notes
 

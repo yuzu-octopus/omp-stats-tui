@@ -607,3 +607,30 @@ export function blankData(): PanelData {
 		rollupStatus: { dirtyHours: 0, dirtySessions: 0 },
 	};
 }
+
+/**
+ * The canonical routes the fixture answers, mapped to their `PanelData` key.
+ * A path that is not a route (or carries no fixture key) reads as an empty
+ * list, exactly as the unseeded test seam did.
+ */
+const ROUTE_TO_FIXTURE_KEY: Record<string, string> = {
+	"/api/stats/overview": "overview",
+	"/api/stats/model-dashboard": "modelDashboard",
+	"/api/stats/costs": "costs",
+	"/api/stats/folders": "folders",
+	"/api/stats/recent": "recent",
+	"/api/stats/errors": "errors",
+	"/api/stats/tools": "tools",
+	"/api/stats/providers": "providers",
+	"/api/stats/gain": "gain",
+	"/api/stats/frustration": "frustration",
+	"/api/stats/provider-windows": "providerWindows",
+};
+
+/** One fixture reader for both the panel seam and any route-driven feature. */
+export function fixtureReader(data: PanelData | undefined) {
+	return async (path: string, _params: Record<string, string> = {}): Promise<unknown> => {
+		const key = ROUTE_TO_FIXTURE_KEY[path] ?? path.split("/").pop() ?? "";
+		return (data as unknown as Record<string, unknown> | undefined)?.[key] ?? [];
+	};
+}

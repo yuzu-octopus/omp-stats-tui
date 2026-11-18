@@ -511,7 +511,7 @@ test("chart clicks alias the legend-selected series", async () => {
 test("model rows carry an inline trend sparkline at wide widths, dropped when narrow", async () => {
 	const feature = createAnalyticsFeature("models", context(MODELS));
 	await feature.load("all");
-	const wide = feature.render(180, 60).map(stripForTest).join("\n");
+	const wide = feature.render(260, 60).map(stripForTest).join("\n");
 	expect(wide).toContain("Trend");
 	// The sparkline is shape ink, not a number: the row carries block glyphs.
 	const row = wide.split("\n").find(line => line.includes("same-model · provider-a") && line.includes("tok/s")) ?? "";
@@ -520,4 +520,91 @@ test("model rows carry an inline trend sparkline at wide widths, dropped when na
 	expect(narrow).not.toContain("Trend");
 	// Numbers survive narrowing even when the shape is dropped.
 	expect(narrow).toContain("same-model · provider-a");
+});
+
+test("Models stay populated and within the viewport at 40 and 100 columns", async () => {
+	const feature = createAnalyticsFeature("models", context(CLICK_MODELS));
+	await feature.load("all");
+	for (const width of [40, 100]) {
+		const lines = feature.render(width, 48).map(stripForTest);
+		expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+		const text = lines.join("\n");
+		expect(text).toContain("> Models");
+		expect(text).toContain("> Chart");
+		expect(text).toContain("same-model · provider-a");
+		expect(text).toContain("579");
+		expect(text).not.toContain("No visible records");
+	}
+});
+
+test("Tab moves the visible focus marker and puts the active pane first when stacked", async () => {
+	const feature = createAnalyticsFeature("models", context(CLICK_MODELS));
+	await feature.load("all");
+	const initial = feature.render(100, 48).map(stripForTest).join("\n");
+	expect(initial).toContain("> Chart  Request share");
+	feature.handleInput("\t");
+	for (const width of [40, 100]) {
+		const lines = feature.render(width, 48).map(stripForTest);
+		const activeTable = lines.findIndex(line => line.includes("> All models") && line.includes("totalRequests"));
+		const chartHeader = lines.findIndex(line => line.includes("8 buckets"));
+		expect(activeTable).toBeGreaterThan(-1);
+		expect(chartHeader).toBeGreaterThan(activeTable);
+		expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+	}
+	feature.handleInput("\t");
+	expect(feature.render(100, 48).map(stripForTest).join("\n")).toContain("> Chart  Request share");
+});
+
+test("cost and tool caveats remain explicit in the replacement rail", async () => {
+	const costs = createAnalyticsFeature("costs", context({ costSeries: COST_POINTS }));
+	await costs.load("all");
+	const tools = createAnalyticsFeature("tools", context(TOOLS));
+	await tools.load("all");
+	for (const [feature, note] of [[costs, /API estimate excludes\s+unpriced usage, not free/], [tools, /Attribution: invoking-turn tokens\/cost split across tool calls\./]] as const) {
+		for (const width of [40, 100]) {
+			const lines = feature.render(width, 48).map(stripForTest);
+			expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+			expect(lines.join("\n").replace(/\s+/g, " ")).toMatch(note);
+		}
+	}
+	const costText = costs.render(40, 48).map(stripForTest).join("\n").replace(/\s+/g, " ");
+	expect(costText).toMatch(/7\s+unpriced/);
+});
+
+test("chart hit rows follow the rendered plot after Tab at both widths", async () => {
+	for (const width of [40, 100]) {
+		const { ctx, hits } = hitContext(CLICK_MODELS);
+		const feature = createAnalyticsFeature("models", ctx);
+		await feature.load("all");
+		feature.handleInput("\t");
+		hits.length = 0;
+		const lines = feature.render(width, 60).map(stripForTest);
+		const buckets = hits.filter(hit => hit.action.type === "selectBucket" && hit.action.index >= 0);
+		expect(buckets.length).toBeGreaterThan(0);
+		const chartTitle = lines.findIndex(line => line.includes("Chart") && line.includes("Request share"));
+		const axis = lines.findIndex(line => line.includes("→") && line.includes("UTC"));
+		expect(chartTitle).toBeGreaterThan(-1);
+		expect(axis).toBeGreaterThan(chartTitle);
+		for (const hit of buckets) {
+			expect(hit.rowStart).toBeGreaterThan(chartTitle);
+			expect(hit.rowEnd).toBeLessThanOrEqual(axis);
+			expect(lines.slice(hit.rowStart, hit.rowEnd).join("\n")).toMatch(/[▁▂▃▄▅▆▇█]/);
+			if (width === 100) expect(hit.colStart).toBeGreaterThanOrEqual(50);
+		}
+		const target = buckets.find(hit => hit.action.type === "selectBucket" && hit.action.index === 0) ?? buckets[0]!;
+		feature.handleHit!(target.action);
+		expect(feature.render(width, 60).map(stripForTest).join("\n")).toContain("09-14 00:00 UTC · 8 buckets");
+	}
+});
+
+test("a failed first Models load reports the error without an empty table", async () => {
+	const ctx = context(null);
+	ctx.reader.api = async () => { throw new Error("stats service unavailable"); };
+	const feature = createAnalyticsFeature("models", ctx);
+	await feature.load("all");
+	for (const width of [40, 100]) {
+		const text = feature.render(width, 40).map(stripForTest).join("\n");
+		expect(text).toContain("stats service unavailable");
+		expect(text).not.toContain("No visible records");
+	}
 });

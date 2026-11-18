@@ -779,6 +779,43 @@ test("renderModelCostBars loses the track without losing the cost invariant", ()
  */
 const seriesCtx = { theme: { ...THEME, fg: (_color: ThemeColor, text: string) => text } } as unknown as FeatureContext;
 
+/**
+ * A theme that gives every series token its OWN escape, so colour assertions
+ * read the actual fg colour rather than a hardcoded hue. resolveSeries
+ * dedupes by getColorHex, so that must be distinct per token too.
+ */
+const coloredCtx = (() => {
+	const distinctHex = new Map<string, string>();
+	const hexFor = (token: string): string => {
+		let hex = distinctHex.get(token);
+		if (!hex) {
+			hex = `#${(distinctHex.size + 1).toString(16).padStart(2, "0").repeat(3)}`;
+			distinctHex.set(token, hex);
+		}
+		return hex;
+	};
+	const escapeFor = (color: ThemeColor): string => {
+		const hex = hexFor(String(color));
+		return `\x1b[38;2;${parseInt(hex.slice(1, 3), 16)};${parseInt(hex.slice(3, 5), 16)};${parseInt(hex.slice(5, 7), 16)}m`;
+	};
+	return {
+		theme: {
+			getColorHex: hexFor,
+			getColorMode: () => "truecolor",
+			getSymbolPreset: () => "unicode",
+			fg: (color: ThemeColor, text: string) => `${escapeFor(color)}${text}\x1b[39m`,
+		},
+	} as unknown as FeatureContext;
+})();
+
+/** The fg SGR preceding `mark` on `line`, if the line carries it. */
+const colorBefore = (line: string, mark: string): string | undefined => {
+	const at = line.indexOf(mark);
+	if (at < 0) return undefined;
+	const sgr = line.slice(0, at).match(/\x1b\[[0-9;]*m/g) ?? [];
+	return sgr[sgr.length - 1];
+};
+
 test("renderTimeSeries delegates to host pipeline", () => {
 	// Four buckets, not the plan's three: `worthCharting` needs at least four
 	// categories, so three would take the empty-state branch and prove nothing
@@ -858,43 +895,12 @@ test("a time-series bucket null in every series emits no hit span", () => {
 });
 
 test("hiding a middle series keeps each painted mark the legend's colour", () => {
-	// A theme that gives every series token its OWN escape, so the assertion
-	// reads the actual fg colour rather than a hardcoded hue. resolveSeries
-	// dedupes by getColorHex, so that must be distinct per token too.
-	const distinctHex = new Map<string, string>();
-	const hexFor = (token: string): string => {
-		let hex = distinctHex.get(token);
-		if (!hex) {
-			hex = `#${(distinctHex.size + 1).toString(16).padStart(2, "0").repeat(3)}`;
-			distinctHex.set(token, hex);
-		}
-		return hex;
-	};
-	const escapeFor = (color: ThemeColor): string => {
-		const hex = hexFor(String(color));
-		return `\x1b[38;2;${parseInt(hex.slice(1, 3), 16)};${parseInt(hex.slice(3, 5), 16)};${parseInt(hex.slice(5, 7), 16)}m`;
-	};
-	const coloredCtx = {
-		theme: {
-			getColorHex: hexFor,
-			getColorMode: () => "truecolor",
-			getSymbolPreset: () => "unicode",
-			fg: (color: ThemeColor, text: string) => `${escapeFor(color)}${text}\x1b[39m`,
-		},
-	} as unknown as FeatureContext;
-
 	const lines = renderTimeSeries(coloredCtx, SHAPE_AXIS, shapeRows(3), 80, 5, {
 		height: 5,
 		hidden: new Set(["s1"]),
 	});
 	const point = glyph("unicode", "pointHollow");
 	const key = glyph("unicode", "legendKey");
-	const colorBefore = (line: string, mark: string): string | undefined => {
-		const at = line.indexOf(mark);
-		if (at < 0) return undefined;
-		const sgr = line.slice(0, at).match(/\x1b\[[0-9;]*m/g) ?? [];
-		return sgr[sgr.length - 1];
-	};
 	const painted = new Set<string>();
 	for (const line of lines) {
 		const color = colorBefore(line, point);
@@ -909,5 +915,34 @@ test("hiding a middle series keeps each painted mark the legend's colour", () =>
 	// The plot must paint exactly the two surviving legend swatches, one per
 	// series. Re-resolving over the filtered rows would paint Series 2 with the
 	// hidden Series 1's hue and fail this set equality.
+	expect([...painted].sort()).toEqual([swatch0, swatch2].sort());
+});
+
+test("a sparse series dropped from the spec keeps the surviving ink on its own legend colour", () => {
+	// buildChart drops series with fewer than two points. A one-point middle
+	// series therefore leaves a two-series plot: the third must still wear the
+	// third legend's hue, not the dropped middle one's.
+	const rows = [
+		{ key: "a", label: "Series 0", values: SHAPE_AXIS.map((_, i) => (i + 1) * 2) },
+		{ key: "b", label: "Series 1", values: SHAPE_AXIS.map((_, i) => (i === 5 ? 9 : null)) },
+		{ key: "c", label: "Series 2", values: SHAPE_AXIS.map((_, i) => (i + 1) * 3 + 7) },
+	];
+	const lines = renderTimeSeries(coloredCtx, SHAPE_AXIS, rows, 80, 5, { height: 5 });
+	const point = glyph("unicode", "pointHollow");
+	const key = glyph("unicode", "legendKey");
+	const painted = new Set<string>();
+	for (const line of lines) {
+		const color = colorBefore(line, point);
+		if (color) painted.add(color);
+	}
+	const legendLine = (label: string) => lines.find(line => stripForTest(line).includes(label))!;
+	const swatch = (label: string) => colorBefore(legendLine(label), key)!;
+	const swatch0 = swatch("Series 0");
+	const swatch1 = swatch("Series 1");
+	const swatch2 = swatch("Series 2");
+	expect(new Set([swatch0, swatch1, swatch2]).size).toBe(3);
+	expect(painted.size).toBe(2);
+	// The dropped role's hue is absent; the third series keeps its own.
+	expect(painted.has(swatch1)).toBe(false);
 	expect([...painted].sort()).toEqual([swatch0, swatch2].sort());
 });

@@ -37,7 +37,8 @@ import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
 // ─── Spec ────────────────────────────────────────────────────────────────────
 
 /**
- * A host `ChartSpec` from a timeline, plus the two modes the host does not model.
+ * A host `ChartSpec` from a timeline, plus the two modes the host does not model
+ * and the row map the host's sparse-series filter makes necessary.
  *
  * `stacked`/`cumulative` are APPLIED in the shared-axis plot
  * ({@link renderSharedAxisPlot}), which a `line` spec takes — a single series
@@ -45,11 +46,17 @@ import { truncateToWidth, type ThemeColor } from "@oh-my-pi/pi-tui";
  * dropping a hollow point (the gain screen's cumulative view passes exactly
  * that shape). `stacked` with one series is the series itself: the flag is a
  * no-op there, not an ignored request.
+ *
+ * `rowIndexes` says which input row each surviving spec series came from.
+ * `buildChart` drops series holding fewer than two points, so the spec can
+ * name fewer series than the caller passed; hues belong to the row, not to
+ * the plot's renumbered position.
  */
 
 export type TimelineChartSpec = ChartSpec & {
   readonly stacked?: boolean;
   readonly cumulative?: boolean;
+  readonly rowIndexes?: readonly number[];
 };
 
 /**
@@ -166,8 +173,18 @@ export function planTimeline(
   const built = buildChart(table, plan);
   if (!built || !worthCharting(built)) return undefined;
   const spec = bypassLineCap(table, plan, built);
+  // The host drops series with fewer than two points. Walk the surviving
+  // series and the input rows in order, so a dropped middle series cannot
+  // renumber the hues of the rows that made it into the plot.
+  let from = 0;
+  const rowIndexes = spec.series.map(entry => {
+    const found = rows.findIndex((row, index) => index >= from && row.label === entry.name);
+    const at = found >= 0 ? found : Math.min(from, rows.length - 1);
+    from = found >= 0 ? found + 1 : at + 1;
+    return at;
+  });
 
-  return { ...spec, stacked: options.stacked, cumulative: options.cumulative };
+  return { ...spec, stacked: options.stacked, cumulative: options.cumulative, rowIndexes };
 }
 
 /**

@@ -191,10 +191,10 @@ export const LABEL_WIDTH = 12;
 export const VALUE_WIDTH = 12;
 
 /**
- * `planLayout` is PURE in `(width, rows, preset)` and the panel calls it on every
- * render, so it memoizes. The returned plan is SHARED and must be treated as
- * read-only: the panel spreads it before overriding `bodyRows`, and nothing
- * writes into it.
+ * `planLayout` is PURE in `(width, rows, bodyRows, preset)`. The panel calls it
+ * on every render with the body row count from `budgetFrame`, so the layout no
+ * longer subtracts chrome a second time. The returned plan is SHARED and must
+ * be treated as read-only: nothing writes into it.
  *
  * Bounded because a resize drag walks every width: past the limit the map is
  * cleared rather than growing for the life of the process. Clearing is safe —
@@ -203,18 +203,23 @@ export const VALUE_WIDTH = 12;
 const PLAN_CACHE = new Map<string, LayoutPlan>();
 const PLAN_CACHE_LIMIT = 512;
 
-export function planLayout(width: number, rows: number, preset: SymbolPreset): LayoutPlan {
-	const key = `${width}\u0000${rows}\u0000${preset}`;
+export function planLayout(
+	width: number,
+	rows: number,
+	preset: SymbolPreset,
+	bodyRows: number,
+): LayoutPlan {
+	const key = `${width}\u0000${rows}\u0000${preset}\u0000${bodyRows}`;
 	const hit = PLAN_CACHE.get(key);
 	if (hit !== undefined) return hit;
-	const plan = computePlanLayout(width, rows);
+	const plan = computePlanLayout(width, rows, bodyRows);
 	if (PLAN_CACHE.size >= PLAN_CACHE_LIMIT) PLAN_CACHE.clear();
 	PLAN_CACHE.set(key, plan);
 	return plan;
 }
 
 /** The memoized body of {@link planLayout}; see the note there on sharing. */
-function computePlanLayout(width: number, rows: number): LayoutPlan {
+function computePlanLayout(width: number, rows: number, bodyRowsArg: number): LayoutPlan {
 	// Terminal numbers are external input and the panel calls this once per
 	// frame, so non-finite and negative values are normalised rather than trusted.
 	const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
@@ -223,9 +228,9 @@ function computePlanLayout(width: number, rows: number): LayoutPlan {
 	// Mirrors OverlayPanel's `│ … │`: two columns of inset per side.
 	const innerWidth = Math.max(0, safeWidth - HORIZONTAL_INSET);
 
-	// A deliberately sub-terminal terminal still gets a body of one row, because
-	// zero would leave every screen with nothing to render and no way to say so.
-	const bodyRows = Math.max(1, safeRows - PANEL_CHROME_ROWS);
+	// The body is spent already: `budgetFrame` owns the only row arithmetic and
+	// this plan consumes its answer. Clamp only against hostile terminal input.
+	const bodyRows = Number.isFinite(bodyRowsArg) ? Math.max(1, Math.trunc(bodyRowsArg)) : 1;
 	// How far short of a renderable panel we are: a terminal too short for its own
 	// chrome plus a one-row body. Zero means everything asked for is available.
 	// Reported rather than hidden, because a silently squashed body looks like a

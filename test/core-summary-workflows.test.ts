@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
-import type { PanelData } from "../src/data/api";
-import type { FeatureContext } from "../src/tui/features/types";
+import type { FetchSettlement, PanelData } from "../src/data/api";
+import type { FeatureContext, FeatureHit } from "../src/tui/features/types";
 import { createSummaryFeature } from "../src/tui/features/core/summary";
 import { ChartState, ListState } from "../src/tui/features/core/shared";
 import { stripForTest } from "../src/tui/palette";
@@ -14,8 +14,8 @@ function fixture(initial: PanelData): Fixture {
 	let data = initial;
 	const screens: string[] = [], detailIds: string[] = [];
 	return { screens, detailIds, set(next) { data = next; }, ctx: {
-		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen(id) { screens.push(id); },
-		reader: { fetch: async () => data, async api<T>(path: string): Promise<T> {
+		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen(id: string) { screens.push(id); },
+		reader: { fetch: async () => ({ data, errors: {} }), async api<T>(path: string): Promise<T> {
 			if (path === "/api/stats/recent") return (data.recent ?? []) as T;
 			detailIds.push(path);
 			const id = Number(path.split("/").at(-1));
@@ -136,22 +136,22 @@ test("initial chart focus uses a recorded bucket and refresh retains an explicit
 
 test("summary newer range wins and disposed late payload cannot publish", async () => {
 	const f = fixture(liveData());
-	const pending: Array<(data: PanelData) => void> = [];
+	const pending: Array<(settlement: FetchSettlement) => void> = [];
 	f.ctx.reader.fetch = () => {
-		const { promise, resolve } = Promise.withResolvers<PanelData>();
+		const { promise, resolve } = Promise.withResolvers<FetchSettlement>();
 		pending.push(resolve);
 		return promise;
 	};
 	const feature = createSummaryFeature("projects", f.ctx);
 	const old = feature.load("24h"), newer = feature.load("7d");
-	pending[1](liveData({ folders: [{ ...AGGREGATE, folder: "newer-range" }] }));
+	pending[1]({ data: liveData({ folders: [{ ...AGGREGATE, folder: "newer-range" }] }), errors: {} });
 	await newer;
-	pending[0](liveData({ folders: [{ ...AGGREGATE, folder: "old-range" }] }));
+	pending[0]({ data: liveData({ folders: [{ ...AGGREGATE, folder: "old-range" }] }), errors: {} });
 	await old;
 	expect(stripForTest(feature.render(100, 24).join("\n"))).toContain("newer-range");
 	expect(stripForTest(feature.render(100, 24).join("\n"))).not.toContain("old-range");
 	const late = feature.load("30d"); feature.dispose();
-	pending[2](liveData({ folders: [{ ...AGGREGATE, folder: "closed-range" }] }));
+	pending[2]({ data: liveData({ folders: [{ ...AGGREGATE, folder: "closed-range" }] }), errors: {} });
 	await late;
 	expect(stripForTest(feature.render(100, 24).join("\n"))).not.toContain("closed-range");
 });
@@ -223,7 +223,7 @@ test("a malformed recent payload leaves Overview in a defined error state instea
 	const feature = createSummaryFeature("overview", {
 		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
 		reader: {
-			fetch: async () => overview,
+			fetch: async () => ({ data: overview, errors: {} }),
 			async api<T>(path: string): Promise<T> {
 				if (path === "/api/stats/recent") return { unexpected: "shape" } as T;
 				throw new Error(`unexpected api read ${path}`);
@@ -235,4 +235,99 @@ test("a malformed recent payload leaves Overview in a defined error state instea
 	expect(() => { text = stripForTest(feature.render(100, 30).join("\n")); }).not.toThrow();
 	expect(text).toContain("Recent requests payload is not an array");
 	feature.dispose();
+});
+
+test("an overview settlement error is rendered as the actual read failure", async () => {
+	const overview = liveData();
+	delete overview.recent;
+	const feature = createSummaryFeature("overview", {
+		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
+		reader: {
+			fetch: async () => ({
+				data: overview,
+				errors: { overview: "overview read failed: db offline" },
+			}),
+			async api<T>(path: string): Promise<T> {
+				if (path === "/api/stats/recent") return [] as T;
+				throw new Error(`unexpected api read ${path}`);
+			},
+		},
+	});
+	await feature.load("24h");
+	const text = stripForTest(feature.render(100, 30).join("\n"));
+	expect(text).toContain("Read failed: overview read failed: db offline");
+	expect(text).not.toContain("Overview payload unavailable.");
+	feature.dispose();
+});
+
+test("overview rail and side-by-side panes keep active order and hit spans aligned", async () => {
+	const f = fixture(liveData({ recent: [messageRow({ id: 1 })] }));
+	let hits: readonly FeatureHit[] = [];
+	f.ctx.reportHits = (spans: readonly FeatureHit[]) => { hits = spans; };
+	const feature = createSummaryFeature("overview", f.ctx);
+	await feature.load("24h");
+	const lines = feature.render(100, 40);
+	const text = stripForTest(lines.join("\n"));
+	expect(text).toContain("> Latest requests · A opens all");
+	expect(text).toContain("  Activity");
+	expect(text.match(/Keys:/g)?.length).toBe(1);
+	expect(text).not.toContain("/ search · j/k select · Enter inspect, o/O sort · +/a reveal");
+	expect(lines.some(line => {
+		const plain = stripForTest(line);
+		return plain.includes("Latest requests") && plain.includes("Activity");
+	})).toBe(true);
+	expect(hits.length).toBe(1);
+	expect(hits[0].colStart).toBe(0);
+	expect(hits[0].colEnd).toBe(49);
+	expect(stripForTest(lines[hits[0].rowStart])).toContain("gpt-5.6-terra");
+	feature.handleInput("\t");
+	const flipped = feature.render(100, 40);
+	const flippedText = stripForTest(flipped.join("\n"));
+	expect(flippedText.indexOf("Activity")).toBeLessThan(flippedText.indexOf("Latest requests"));
+	expect(hits[0].colStart).toBe(51);
+	expect(flippedText).toContain("> Activity");
+	expect(flippedText).toContain("  Latest requests");
+	expect(stripForTest(flipped[hits[0].rowStart])).toContain("gpt-5.6-terra");
+	feature.dispose();
+});
+
+test("narrow overview stacks the active pane first without a duplicated hint", async () => {
+	const f = fixture(liveData({ recent: [messageRow({ id: 1 })] }));
+	const feature = createSummaryFeature("overview", f.ctx);
+	await feature.load("24h");
+	const plain = stripForTest(feature.render(40, 30).join("\n"));
+	expect(plain.indexOf("> Latest requests")).toBeLessThan(plain.indexOf("Activity"));
+	expect(plain.match(/Keys:/g)?.length).toBe(1);
+	expect(plain).not.toContain("/ search · j/k select · Enter inspect, o/O sort · +/a reveal");
+	feature.handleInput("\t");
+	const chartFirst = stripForTest(feature.render(40, 30).join("\n"));
+	expect(chartFirst.indexOf("Activity")).toBeLessThan(chartFirst.indexOf("Latest requests"));
+	feature.dispose();
+});
+
+test("projects and activity mark their active panes and emit one cue", async () => {
+	for (const id of ["projects", "activity"] as const) {
+		const f = fixture(liveData());
+		const feature = createSummaryFeature(id, f.ctx);
+		await feature.load("24h");
+		const plain = stripForTest(feature.render(80, 30).join("\n"));
+		expect(plain).toContain(`> ${id[0].toUpperCase()}${id.slice(1)}`);
+		expect(plain.match(/Keys:/g)?.length).toBe(1);
+		expect(plain).not.toContain("/ search · j/k select · Enter inspect, o/O sort · +/a reveal");
+		feature.dispose();
+	}
+});
+
+test("list hint is opt-in without moving row hit spans", () => {
+	const f = fixture(liveData());
+	const rows = [{ id: 1 }, { id: 2 }];
+	const list = new ListState<{ id: number }>(row => String(row.id), "id");
+	const columns = [{ key: "id", header: "ID", align: "left" as const, value: (row: { id: number }) => String(row.id) }];
+	const withHint = list.render(rows, 40, 12, columns, f.ctx, "Records");
+	const originalHits = list.lastHits;
+	const withoutHint = list.render(rows, 40, 12, columns, f.ctx, "Records", { showHint: false });
+	expect(stripForTest(withHint.join(" "))).toContain("/ search · j/k select · Enter inspect, o/O sort · +/a reveal");
+	expect(stripForTest(withoutHint.join(" "))).not.toContain("/ search · j/k select · Enter inspect, o/O sort · +/a reveal");
+	expect(withHint.length - withoutHint.length).toBe(stripForTest(withHint.join("\n")).split("\n").filter(line => line.includes("/ search") || line.includes("o/O sort")).length);
+	expect(list.lastHits).toEqual(originalHits);
 });

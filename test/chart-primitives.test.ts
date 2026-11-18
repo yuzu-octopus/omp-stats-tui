@@ -372,7 +372,8 @@ test("renderSeriesChart of ONE series is exactly renderDailyBars", () => {
 	const s: SeriesChartSeries = { label: "Succeeded", values: [12, 30, 8, 20, 0, 5] };
 	const width = 20;
 	const height = 6;
-	const glyphs = glyphsFor("unicode");
+	const preset = "unicode" as SymbolPreset;
+	const glyphs = glyphsFor(preset);
 	const max = bandMax([s]);
 
 	const expected = renderDailyBars(s.values, {
@@ -382,15 +383,17 @@ test("renderSeriesChart of ONE series is exactly renderDailyBars", () => {
 		glyphs,
 		accent: paint,
 		dim: (text) => text,
+		densityTop: preset !== "ascii",
 	});
 
 	const actual = renderSeriesChart([s], {
 		width,
 		height,
-		preset: "unicode",
+		preset,
 		theme: THEME,
 		paint: (_color, text) => text,
 		labels: false,
+		densityTop: preset !== "ascii",
 	});
 
 	expect(actual).toEqual(expected);
@@ -403,7 +406,8 @@ test("renderSeriesChart is renderDailyBars called once per series, band by band"
 	];
 	const width = 20;
 	const height = 8;
-	const glyphs = glyphsFor("unicode");
+	const preset = "unicode" as SymbolPreset;
+	const glyphs = glyphsFor(preset);
 	const max = bandMax(series);
 	const perBand = series.map((entry) =>
 		entry.values.reduce<number>((peak, value) => (value !== null && value > peak ? value : peak), 0),
@@ -418,16 +422,18 @@ test("renderSeriesChart is renderDailyBars called once per series, band by band"
 			glyphs,
 			accent: paint,
 			dim: (text) => text,
+			densityTop: preset !== "ascii",
 		}),
 	);
 
 	const actual = renderSeriesChart(series, {
 		width,
 		height,
-		preset: "unicode",
+		preset,
 		theme: THEME,
 		paint: (_color, text) => text,
 		labels: false,
+		densityTop: preset !== "ascii",
 	});
 
 	expect(actual).toEqual(expected);
@@ -457,6 +463,7 @@ test("composition holds at every preset and every width", () => {
 						glyphs,
 						accent: paint,
 						dim: (text) => text,
+						densityTop: preset !== "ascii",
 					}),
 				);
 				const actual = renderSeriesChart(series, {
@@ -466,6 +473,7 @@ test("composition holds at every preset and every width", () => {
 					theme: THEME,
 					paint: (_color, text) => text,
 					labels: false,
+					densityTop: preset !== "ascii",
 				});
 				expect(actual).toEqual(expected);
 			}

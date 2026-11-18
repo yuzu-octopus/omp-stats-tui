@@ -3,9 +3,9 @@
 import { VERSION } from "@oh-my-pi/pi-coding-agent";
 
 // src/tui/panel.ts
-import { getKeybindings, matchesKey as matchesKey2, routeSgrMouseInput, TabBar } from "@oh-my-pi/pi-tui";
+import { getKeybindings, matchesKey as matchesKey2, routeSgrMouseInput } from "@oh-my-pi/pi-tui";
 import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome";
-import { stripTerminalSequences as stripTerminalSequences2, visibleWidth as visibleWidth12, wrapTextWithAnsi as wrapTextWithAnsi9 } from "@oh-my-pi/pi-tui";
+import { stripTerminalSequences as stripTerminalSequences2, visibleWidth as visibleWidth13, wrapTextWithAnsi as wrapTextWithAnsi9 } from "@oh-my-pi/pi-tui";
 import { ensureThemeSync, theme as activeTheme } from "@oh-my-pi/pi-tui/theme";
 
 // src/data/client.ts
@@ -74,9 +74,12 @@ class StatsReadClient {
     if (this.#closed)
       return Promise.reject(new Error("Stats panel closed"));
     try {
-      if (!this.#child) {
-        const child = this.#spawn();
+      let child = this.#child;
+      if (!child) {
+        child = this.#spawn();
         this.#child = child;
+        this.#live = undefined;
+        this.#serviceError = undefined;
         this.#stderr = "";
         this.#malformedLines = 0;
         this.#writeError = undefined;
@@ -85,7 +88,7 @@ class StatsReadClient {
       const id = ++this.#sequence;
       const result = Promise.withResolvers();
       this.#pending.set(id, { resolve: result.resolve, reject: result.reject, stage });
-      this.#write(this.#child, { ...input, id });
+      this.#write(child, { ...input, id });
       return result.promise;
     } catch (error) {
       return Promise.reject(error);
@@ -1127,7 +1130,14 @@ function planTimeline(axis, rows, options) {
   if (!built || !worthCharting(built))
     return;
   const spec = bypassLineCap(table, plan, built);
-  return { ...spec, stacked: options.stacked, cumulative: options.cumulative };
+  let from = 0;
+  const rowIndexes = spec.series.map((entry) => {
+    const found = rows.findIndex((row, index) => index >= from && row.label === entry.name);
+    const at = found >= 0 ? found : Math.min(from, rows.length - 1);
+    from = found >= 0 ? found + 1 : at + 1;
+    return at;
+  });
+  return { ...spec, stacked: options.stacked, cumulative: options.cumulative, rowIndexes };
 }
 function bypassLineCap(table, plan, spec) {
   const measures = table.measures.map((column) => column.index);
@@ -1353,7 +1363,10 @@ function renderTimeSeries(ctx, axis, rows, width, selected, options = {}) {
         preset,
         theme: ctx.theme,
         paint: (color, text) => ctx.theme.fg(color, text),
-        seriesColors,
+        seriesColors: spec.series.map((_entry, index) => {
+          const row = spec.rowIndexes?.[index] ?? index;
+          return seriesColors[row] ?? seriesColors[0];
+        }),
         dim: (text) => ctx.theme.fg("dim", text),
         labels: false,
         reportBuckets: options.reportBuckets ? (spans) => options.reportBuckets(spans.map((span) => ({ ...span, rowStart: span.rowStart + plotStart, rowEnd: span.rowEnd + plotStart }))) : undefined
@@ -1640,21 +1653,173 @@ function options(ctx, width) {
     labelWidth: 14,
     valueWidth: 12,
     identityWidth: Math.max(8, Math.floor(width * 0.42)),
-    sparkline: (values, columns) => renderSparkline(values, { width: columns, preset, accent: (cell) => ctx.theme.fg("accent", cell) }),
+    sparkline: (values, columns) => renderSparkline(values, { width: columns, preset, accent: (cell) => ctx.theme.fg(PALETTE.primary, cell) }),
     selected: (text) => ctx.theme.bg(SELECTION_BG.band, text + " ".repeat(Math.max(0, width - visibleWidth5(text))))
   };
+}
+var RAIL_GAP = 2;
+var SIDE_GAP = 2;
+var CAVEAT = /unpriced|no price|not priced/i;
+function caveatParts(tile) {
+  const parts = [];
+  if (CAVEAT.test(tile.label))
+    parts.push(tile.label);
+  if (CAVEAT.test(tile.value))
+    parts.push(tile.value);
+  if (tile.hint && CAVEAT.test(tile.hint))
+    parts.push(`(${tile.hint})`);
+  return parts.join(" ");
+}
+function buildRailTile(ctx, tile) {
+  const label = ctx.theme.fg(PALETTE.muted, tile.label);
+  const value = tile.emphasis === "primary" ? ctx.theme.bold(ctx.theme.fg(PALETTE.primary, tile.value)) : ctx.theme.fg(PALETTE.label, tile.value);
+  const hint = tile.hint ? ctx.theme.fg(PALETTE.dim, ` (${tile.hint})`) : "";
+  const caveat = caveatParts(tile);
+  const caveatLabel = CAVEAT.test(tile.label) ? ctx.theme.fg(PALETTE.muted, tile.label) : "";
+  const caveatValue = CAVEAT.test(tile.value) ? ctx.theme.fg(PALETTE.label, tile.value) : "";
+  const caveatHint = tile.hint && CAVEAT.test(tile.hint) ? ctx.theme.fg(PALETTE.dim, `(${tile.hint})`) : "";
+  return {
+    full: `${label} ${value}${hint}`,
+    plain: `${label} ${value}`,
+    minimal: [caveatLabel, caveatValue, caveatHint].filter(Boolean).join(" "),
+    caveat: caveat !== ""
+  };
+}
+function fitRailCell(text, width, minimal) {
+  const cell = Math.max(0, width);
+  if (cell === 0)
+    return "";
+  let candidate = text;
+  if (visibleWidth5(candidate) > cell && minimal !== "" && visibleWidth5(minimal) <= cell)
+    candidate = minimal;
+  if (visibleWidth5(candidate) > cell)
+    candidate = truncateToWidth6(candidate, cell, "");
+  const padding = cell - visibleWidth5(candidate);
+  return padding > 0 ? candidate + " ".repeat(padding) : candidate;
+}
+function railRow(built, available) {
+  const count = built.length;
+  if (count === 0)
+    return "";
+  const gap = Math.min(RAIL_GAP, Math.max(0, Math.floor((available - count) / Math.max(1, count - 1))));
+  const budget = Math.max(0, available - gap * (count - 1));
+  const caveats = built.map((tile, index) => tile.caveat ? index : -1).filter((index) => index >= 0);
+  let texts = built.map((tile) => tile.full);
+  let widths = texts.map((text) => visibleWidth5(text));
+  let used = widths.reduce((sum, width) => sum + width, 0);
+  if (used > budget) {
+    texts = built.map((tile, index) => tile.caveat ? texts[index] : tile.plain);
+    widths = texts.map((text) => visibleWidth5(text));
+    used = widths.reduce((sum, width) => sum + width, 0);
+  }
+  const caveatWidth = () => caveats.reduce((sum, index) => sum + visibleWidth5(texts[index]), 0);
+  if (used > budget && caveatWidth() > Math.max(0, budget - (count - caveats.length))) {
+    for (const index of caveats)
+      texts[index] = built[index].minimal || texts[index];
+    widths = texts.map((text) => visibleWidth5(text));
+    used = widths.reduce((sum, width) => sum + width, 0);
+  }
+  if (used > budget) {
+    const others = built.map((_, index) => index).filter((index) => !built[index].caveat);
+    const share = Math.max(others.length, budget - caveatWidth());
+    const natural = others.reduce((sum, index) => sum + visibleWidth5(texts[index]), 0) || 1;
+    for (const index of others) {
+      widths[index] = Math.max(1, Math.floor(share * visibleWidth5(texts[index]) / natural));
+    }
+    let total = widths.reduce((sum, width) => sum + width, 0);
+    for (let index = 0;total < budget && others.length > 0; index = (index + 1) % others.length) {
+      widths[others[index]]++;
+      total++;
+    }
+    while (total > budget) {
+      const shrink = others.find((index) => widths[index] > 1);
+      if (shrink === undefined)
+        break;
+      widths[shrink]--;
+      total--;
+    }
+  }
+  return built.map((tile, index) => fitRailCell(texts[index], widths[index], tile.minimal)).join(" ".repeat(gap));
+}
+function railMarker(ctx, dropped, width) {
+  if (dropped.length === 0)
+    return "";
+  let marker = ` +${dropped.length}`;
+  for (const tile of dropped) {
+    let excerpt = "";
+    for (const text of [tile.label, tile.value, tile.hint ?? ""]) {
+      if (!CAVEAT.test(text))
+        continue;
+      excerpt = text.match(/\d[\d,]*\s+unpriced|no price[^,;]*|not priced|unpriced/i)?.[0]?.trim() ?? text;
+      break;
+    }
+    if (excerpt === "")
+      continue;
+    const candidate = `${marker} \xB7 ${excerpt}`;
+    if (visibleWidth5(candidate) <= width)
+      marker = candidate;
+    else
+      break;
+  }
+  if (visibleWidth5(marker) > width)
+    marker = truncateToWidth6(marker, width, "");
+  return ctx.theme.fg(PALETTE.dim, marker);
+}
+function sideCell(line, width) {
+  const text = line ?? "";
+  const fitted = visibleWidth5(text) > width ? truncateToWidth6(text, width, "") : text;
+  const padding = width - visibleWidth5(fitted);
+  return padding > 0 ? fitted + " ".repeat(padding) : fitted;
 }
 function metricGrid(ctx, width, tiles) {
   return [...renderBands([{ kind: "statRow", stats: tiles }], options(ctx, width))];
 }
+function metricRail(ctx, width, tiles, options = {}) {
+  if (tiles.length === 0)
+    return [];
+  const columns = width >= 80 ? 3 : 2;
+  const requested = options.maxRows ?? 2;
+  const rows = Number.isFinite(requested) ? Math.max(1, Math.min(2, Math.floor(requested))) : 2;
+  const visible = tiles.slice(0, columns * rows);
+  const marker = railMarker(ctx, tiles.slice(columns * rows), width);
+  const built = visible.map((tile) => buildRailTile(ctx, tile));
+  const lines = [];
+  for (let start = 0;start < built.length; start += columns) {
+    const row = built.slice(start, start + columns);
+    const last = start + columns >= built.length;
+    const available = Math.max(0, width - (last ? visibleWidth5(marker) : 0));
+    lines.push(railRow(row, available) + (last ? marker : ""));
+  }
+  return lines;
+}
 function dataTable(ctx, width, title, columns, rows, selectedRow) {
   return [...renderBands([{ kind: "table", title, columns, rows: { kind: "inline", rows }, selectedRow }], options(ctx, width))];
 }
+function sideBySide(ctx, width, left, right, options = {}) {
+  if (width < 80) {
+    const rows = left.map((line) => sideCell(line, width));
+    if (rows.length > 0 && right.length > 0)
+      rows.push("");
+    for (const line of right)
+      rows.push(sideCell(line, width));
+    return rows;
+  }
+  const available = Math.max(SIDE_GAP + 2, width - SIDE_GAP);
+  const requested = options.leftRatio ?? 0.5;
+  const ratio = Number.isFinite(requested) ? Math.max(0, Math.min(1, requested)) : 0.5;
+  const leftWidth = Math.max(1, Math.min(available - 1, Math.floor(available * ratio)));
+  const rightWidth = available - leftWidth;
+  const lines = [];
+  for (let index = 0;index < Math.max(left.length, right.length); index++) {
+    lines.push(sideCell(left[index], leftWidth) + " ".repeat(SIDE_GAP) + sideCell(right[index], rightWidth));
+  }
+  return lines;
+}
 function sectionHeading(ctx, width, title, meta = "", active = false) {
-  return truncateToWidth6(ctx.theme.bold(ctx.theme.fg(active ? "accent" : "muted", title)) + (meta ? ctx.theme.fg("dim", `  ${meta}`) : ""), Math.max(1, width));
+  return truncateToWidth6(ctx.theme.bold(ctx.theme.fg(active ? PALETTE.primary : PALETTE.muted, title)) + (meta ? ctx.theme.fg(PALETTE.dim, `  ${meta}`) : ""), Math.max(1, width));
 }
 function focusTabs(ctx, width, labels, selected) {
-  const line = labels.map((label, index) => index === selected ? ctx.theme.bg(SELECTION_BG.band, ctx.theme.bold(ctx.theme.fg("accent", ` ${label} `))) : ctx.theme.fg("dim", ` ${label} `)).join("  ");
+  const line = labels.map((label, index) => index === selected ? ctx.theme.bg(SELECTION_BG.band, ctx.theme.bold(ctx.theme.fg(PALETTE.primary, `> ${label} `))) : ctx.theme.fg(PALETTE.dim, ` ${label} `)).join("  ");
   return wrapTextWithAnsi2(line, Math.max(1, width));
 }
 
@@ -1669,6 +1834,12 @@ function fields(value, prefix = "") {
   if (typeof value !== "object")
     return [`${prefix || "Value"}: ${String(value)}`];
   return Object.entries(value).flatMap(([key, item]) => fields(item, prefix ? `${prefix}.${key}` : key));
+}
+function panePrefix(active) {
+  return active ? "> " : "  ";
+}
+function paneHeading(ctx, width, title, meta = "", active = false) {
+  return sectionHeading(ctx, width, `${panePrefix(active)}${title}`, meta, active);
 }
 
 class ListState {
@@ -1755,7 +1926,7 @@ class ListState {
     }
     return false;
   }
-  render(rows, width, height, columns, ctx, title) {
+  render(rows, width, height, columns, ctx, title, options = {}) {
     const search = this.editing ? [`Search: ${this.search || "\u2014"}  \xB7 Enter/Esc finish \xB7 Ctrl-U clear`] : this.search ? [`Search: ${this.search}`] : [];
     const searchLines = wrap(search, width);
     if (!rows.length) {
@@ -1784,7 +1955,7 @@ class ListState {
       sectionHeading(ctx, width, title, `${start + 1}\u2013${start + count}/${rows.length} \xB7 ${this.sort} ${this.descending ? "\u2193" : "\u2191"}`),
       ...searchLines,
       ...dataTable(ctx, width, "", columns, records, index - start),
-      ...wrap([ctx.theme.fg("dim", "/ search \xB7 j/k select \xB7 Enter inspect \xB7 o/O sort \xB7 +/a reveal")], width)
+      ...options.showHint === false ? [] : wrap([ctx.theme.fg("dim", "/ search \xB7 j/k select \xB7 Enter inspect, o/O sort \xB7 +/a reveal")], width)
     ];
   }
 }
@@ -1857,11 +2028,12 @@ class ChartState {
   }
   render(ctx, width, buckets, series, options = {}) {
     this.reconcile(buckets, series.map((row) => row.key));
+    const { showHint = true, ...chartOptions } = options;
     return [...renderTimeSeries(ctx, buckets, series, width, this.point, {
-      ...options,
+      ...chartOptions,
       hidden: this.hidden,
       selectedKey: series[this.seriesIndex]?.key
-    }), ...wrap([ctx.theme.fg("dim", "m mode \xB7 n legend \xB7 v visibility \xB7 ,/. point")], width)];
+    }), ...showHint ? wrap([ctx.theme.fg("dim", "m mode \xB7 n legend \xB7 v visibility \xB7 ,/. point")], width) : []];
   }
 }
 
@@ -1914,7 +2086,7 @@ class RequestDetails {
   render(width) {
     if (!this.active)
       return null;
-    const lines = [sectionHeading(this.ctx, width, `Request #${this.row?.id ?? "\u2013"}`)];
+    const lines = [paneHeading(this.ctx, width, `Request #${this.row?.id ?? "\u2013"}`, "", true)];
     if (this.notice)
       lines.push(this.notice);
     if (!this.payload)
@@ -1927,12 +2099,12 @@ class RequestDetails {
     const d = this.payload;
     const sections = this.sections(d);
     const selected = sections[this.section % sections.length];
-    lines.push(sectionHeading(this.ctx, width, `${d.model} \xB7 ${d.provider}`, requestStatus(d)), ...d.errorMessage ? [this.ctx.theme.fg("error", `${requestStatus(d) === "aborted" ? "Aborted" : "Error"}: ${d.errorMessage}`)] : [], ...metricGrid(this.ctx, width, [
+    lines.push(paneHeading(this.ctx, width, `${d.model} \xB7 ${d.provider}`, requestStatus(d), true), ...d.errorMessage ? [this.ctx.theme.fg("error", `${requestStatus(d) === "aborted" ? "Aborted" : "Error"}: ${d.errorMessage}`)] : [], ...metricGrid(this.ctx, width, [
       { label: "API estimate", value: formatMessageCost(d, 4), emphasis: "primary", hint: `unpriced requests: ${Number(d.costUnpriced ?? false)}` },
       { label: "Duration", value: formatDurationMs(d.duration), hint: formatTimestamp(d.timestamp) },
       { label: "TTFT", value: formatDurationMs(d.ttft) },
       { label: "Throughput", value: `${formatTokensPerSecond(d.duration !== null && d.duration > 0 && d.usage.output > 0 ? d.usage.output * 1000 / d.duration : null)} tok/s` }
-    ]), ...dataTable(this.ctx, width, "Tokens", [{ key: "bucket", header: "Bucket", align: "left" }, { key: "tokens", header: "Tokens", align: "right" }], Object.entries({ "Uncached input": d.usage.input, "Cache read": d.usage.cacheRead, "Cache write": d.usage.cacheWrite, Output: d.usage.output, Total: d.usage.totalTokens, "Premium requests": d.usage.premiumRequests ?? 0 }).map(([bucket, value]) => ({ bucket, tokens: Number.isInteger(value) ? formatInteger(value) : String(value) }))), sectionHeading(this.ctx, width, "Billing components"), ...Object.entries(d.usage.cost).map(([component, value]) => `${component}: ${d.costUnpriced ? "unpriced request; component estimate unavailable" : formatCost(value)}`), sectionHeading(this.ctx, width, "Identity"), ...fields({ requestId: d.id, entryId: d.entryId, stopReason: d.stopReason, api: d.api, project: d.folder, sessionFile: d.sessionFile }), ...focusTabs(this.ctx, width, sections.map((section) => section.title), this.section % sections.length), this.ctx.theme.fg("dim", `n section \xB7 v ${this.collapsed.has(selected.title) ? "expand" : "collapse"} \xB7 c/C copy \xB7 t trace \xB7 b/Esc back`), ...sections.flatMap((section) => [sectionHeading(this.ctx, width, section.title, this.collapsed.has(section.title) ? "collapsed" : ""), ...this.collapsed.has(section.title) ? [] : [JSON.stringify(section.data, null, 2) ?? "null"]]));
+    ]), ...dataTable(this.ctx, width, "Tokens", [{ key: "bucket", header: "Bucket", align: "left" }, { key: "tokens", header: "Tokens", align: "right" }], Object.entries({ "Uncached input": d.usage.input, "Cache read": d.usage.cacheRead, "Cache write": d.usage.cacheWrite, Output: d.usage.output, Total: d.usage.totalTokens, "Premium requests": d.usage.premiumRequests ?? 0 }).map(([bucket, value]) => ({ bucket, tokens: Number.isInteger(value) ? formatInteger(value) : String(value) }))), paneHeading(this.ctx, width, "Billing components", "", false), ...Object.entries(d.usage.cost).map(([component, value]) => `${component}: ${d.costUnpriced ? "unpriced request; component estimate unavailable" : formatCost(value)}`), paneHeading(this.ctx, width, "Identity", "", false), ...fields({ requestId: d.id, entryId: d.entryId, stopReason: d.stopReason, api: d.api, project: d.folder, sessionFile: d.sessionFile }), ...focusTabs(this.ctx, width, sections.map((section) => section.title), this.section % sections.length), this.ctx.theme.fg("dim", `n section \xB7 v ${this.collapsed.has(selected.title) ? "expand" : "collapse"} \xB7 c/C copy \xB7 t trace \xB7 b/Esc back`), ...sections.flatMap((section) => [paneHeading(this.ctx, width, section.title, this.collapsed.has(section.title) ? "collapsed" : "", section === selected), ...this.collapsed.has(section.title) ? [] : [JSON.stringify(section.data, null, 2) ?? "null"]]));
     return wrap(lines, width);
   }
   sections(d) {
@@ -2113,7 +2285,7 @@ function createRequestsFeature(id, ctx) {
         return detail;
       if (!hasData)
         return wrap([
-          sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
+          paneHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range, true),
           ctx.theme.fg(error ? "error" : "dim", error ? `${error} \xB7 l retry` : loading ? "Loading observations\u2026" : "No observations loaded yet."),
           ...list.editing || list.search ? [`Search: ${list.search || "\u2014"} \xB7 Enter/Esc finish \xB7 Ctrl-U clear`] : []
         ], width);
@@ -2132,15 +2304,15 @@ function createRequestsFeature(id, ctx) {
       const ms = allModels;
       const scope = complete ? `${formatInteger(rows.length)} of ${formatInteger(rows.length)} in ${range}` : `${formatInteger(rows.length)} loaded (total unavailable)`;
       const lines = [
-        sectionHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range),
-        ...metricGrid(ctx, width, [
+        paneHeading(ctx, width, id === "requests" ? "Requests" : "Errors", range, true),
+        ...metricRail(ctx, width, [
           { label: id === "errors" ? "Loaded failures" : "Loaded requests", value: formatInteger(rows.length), emphasis: "primary", hint: `${counts.ok} ok` },
           { label: "Matching", value: formatInteger(filtered.length), hint: id === "errors" ? `${gs.length} signatures` : `${counts.failed} failed` },
           { label: "API estimate", value: formatEstimatedCost(summary.cost, summary.unpriced), hint: `${formatInteger(summary.unpriced)} unpriced` },
           { label: "Tokens", value: formatCompact(summary.tokens), hint: `${counts.aborted} aborted` },
           { label: "Median latency", value: hasTiming ? formatDurationMs(summary.medianDuration) : "\u2014" },
           { label: "p95 latency", value: hasTiming ? formatDurationMs(summary.p95Duration) : "\u2014" }
-        ])
+        ], { maxRows: 2 })
       ];
       if (loading)
         lines.push(ctx.theme.fg("dim", "Loading\u2026 previous rows retained"));
@@ -2148,9 +2320,9 @@ function createRequestsFeature(id, ctx) {
         lines.push(ctx.theme.fg("error", `${error} \xB7 showing retained rows \xB7 l retry`));
       lines.push(ctx.theme.fg("dim", `${scope} \xB7 ${formatInteger(summary.unpriced)} unpriced`));
       lines.push(...focusTabs(ctx, width, id === "errors" ? ["Signatures", "Models", "Failures"] : ["Request log"], focus));
-      lines.push(ctx.theme.fg("dim", id === "requests" ? `f status: ${statuses[status]} \xB7 / search \xB7 o/O sort \xB7 Enter details \xB7 l load more` : "Tab pane \xB7 / search \xB7 o/O sort \xB7 Enter select/open \xB7 u latest \xB7 f/x/X clear"));
+      lines.push(...wrap([ctx.theme.fg("dim", id === "requests" ? `Keys: f status ${statuses[status]} \xB7 / search \xB7 o/O sort \xB7 Enter details \xB7 l more` : "Keys: Tab pane \xB7 j/k select \xB7 Enter filter/open \xB7 / search \xB7 o/O sort \xB7 u latest \xB7 f/x/X clear")], width));
       const panelHeight = Math.max(5, height - lines.length);
-      const failurePanel = id === "requests" || focus === 2 ? list.render(filtered, width, panelHeight, id === "errors" ? errorColumns : requestColumns, ctx, id === "errors" ? "Failures" : "Request log") : [];
+      const failurePanel = id === "requests" || focus === 2 ? list.render(filtered, width, panelHeight, id === "errors" ? errorColumns : requestColumns, ctx, `${panePrefix(id === "requests" || focus === 2)}${id === "errors" ? "Failures" : "Request log"}`, { showHint: false }) : [];
       if (id === "requests") {
         lines.push(...failurePanel);
       } else {
@@ -2160,14 +2332,14 @@ function createRequestsFeature(id, ctx) {
           { key: "count", header: "Failures", align: "right", value: (g) => formatInteger(g.count) },
           { key: "models", header: "Models", align: "right", priority: 2, value: (g) => formatInteger(g.models.length) },
           { key: "last", header: "Latest", align: "left", priority: 3, value: (g) => formatTimestamp(g.lastSeen) }
-        ], ctx, "Error signatures") : focus === 1 ? models.render(ms, width, panelHeight, [
+        ], ctx, `${panePrefix(focus === 0)}Error signatures`, { showHint: false }) : focus === 1 ? models.render(ms, width, panelHeight, [
           { key: "identity", header: "Model / provider", align: "left", value: (m) => `${m.model} \xB7 ${m.provider}` },
           { key: "count", header: "Failures", align: "right", value: (m) => formatInteger(m.count) }
-        ], ctx, "Affected models") : failurePanel;
+        ], ctx, `${panePrefix(focus === 1)}Affected models`, { showHint: false }) : failurePanel;
         lines.push(...panel);
         const expanded = gs.find((group) => group.signature === signature);
         if (expanded) {
-          lines.push(sectionHeading(ctx, width, "Expanded signature", `${expanded.count} members`), expanded.signature, `First ${formatTimestamp(expanded.firstSeen)} \xB7 latest ${formatTimestamp(expanded.lastSeen)}`, `Latest error: ${expanded.latest.errorMessage ?? "\u2014"}`, ...expanded.models.map((member) => `${member.model} \xB7 ${member.provider}: ${member.count} failures`));
+          lines.push(paneHeading(ctx, width, "Expanded signature", `${expanded.count} members`, false), expanded.signature, `First ${formatTimestamp(expanded.firstSeen)} \xB7 latest ${formatTimestamp(expanded.lastSeen)}`, `Latest error: ${expanded.latest.errorMessage ?? "\u2014"}`, ...expanded.models.map((member) => `${member.model} \xB7 ${member.provider}: ${member.count} failures`));
         }
       }
       return wrap(lines, width);
@@ -2335,6 +2507,22 @@ var sorters2 = (rows) => {
 var denseSeries = (series) => series.map((s) => ({ key: s.key, label: s.label, values: s.values.map((v) => v ?? 0) }));
 var shares = (series, totals) => series.map((s) => ({ ...s, values: s.values.map((v, i) => totals[i] > 0 && v !== null ? v / totals[i] : null) }));
 var identity = (model, provider) => `${model || "(unknown)"} \xB7 ${provider}`;
+function reportBucketHits(ctx, lines, groups) {
+  for (const group of groups) {
+    const heading = lines.findIndex((line) => line.includes(group.marker));
+    if (heading < 0)
+      continue;
+    const rowOffset = heading + group.chartStart;
+    const colShift = group.colShift ?? 0;
+    ctx.reportHits?.(group.spans.map((span) => ({
+      rowStart: span.rowStart + rowOffset,
+      rowEnd: span.rowEnd + rowOffset,
+      colStart: span.colStart + colShift,
+      colEnd: span.colEnd + colShift,
+      action: { type: "selectBucket", series: group.series, index: span.index }
+    })));
+  }
+}
 
 class AnalyticsFeature {
   id;
@@ -2521,7 +2709,7 @@ class AnalyticsFeature {
     return this.modes[this.chart.mode % Math.max(1, this.modes.length)];
   }
   render(width, height) {
-    const lines = [sectionHeading(this.ctx, width, this.id[0].toUpperCase() + this.id.slice(1), this.range)];
+    const lines = [paneHeading(this.ctx, width, this.id[0].toUpperCase() + this.id.slice(1), this.range, true)];
     const filter = this.toolFilter !== null && this.toolNames.includes(this.toolFilter) ? this.toolFilter : null;
     if (this.loading)
       lines.push(this.ctx.theme.fg("dim", "Loading\u2026 Previous observations remain visible."));
@@ -2530,93 +2718,119 @@ class AnalyticsFeature {
     if (this.expanded) {
       const selected = this.rows(this.expanded.table).find((r) => r.key === this.expanded?.key);
       if (selected) {
-        lines.push(`Details: ${selected.label}`);
+        const pending = [];
+        lines.push(paneHeading(this.ctx, width, `Details: ${selected.label}`, "", true));
         if (this.id === "models" && this.detailMode === "performance")
-          lines.push(...this.renderPerformance(selected.key, width), "m requests trend");
+          lines.push(...this.renderPerformance(selected.key, width, pending), "m requests trend");
         else if (this.id === "models" || this.id === "tools") {
           const trend = this.trends.get(this.id === "tools" ? selected.tool ?? selected.key : selected.key);
-          lines.push(this.id === "tools" ? "Tool call trend (all models)" : "Model request trend");
-          const trendStart = lines.length;
+          const trendHeading = this.id === "tools" ? "Tool call trend (all models)" : "Model request trend";
+          lines.push(trendHeading);
           const trendKey = this.trendChart.selectedKey ?? (trend ? trend.key : "") ?? "";
           lines.push(...this.trendChart.render(this.ctx, width, this.buckets, trend ? [trend] : [], {
             height: 5,
             unit: this.id === "tools" ? "calls" : "requests",
             format: formatInteger,
-            reportBuckets: (spans) => this.ctx.reportHits?.(spans.map((span) => ({
-              rowStart: span.rowStart + trendStart,
-              rowEnd: span.rowEnd + trendStart,
-              colStart: span.colStart,
-              colEnd: span.colEnd,
-              action: { type: "selectBucket", series: trendKey, index: span.index }
-            })))
+            showHint: false,
+            reportBuckets: (spans) => pending.push({ spans: [...spans], marker: trendHeading, chartStart: 1, series: trendKey })
           }), ...this.id === "models" ? ["m performance chart"] : []);
         }
         lines.push(...fields(selected.display));
         lines.push("b/Esc back \xB7 Tab focus \xB7 q close");
-        return wrap(lines, width);
+        const finalLines = wrap(lines, width);
+        reportBucketHits(this.ctx, finalLines, pending);
+        return finalLines;
       }
     }
-    lines.push(...metricGrid(this.ctx, width, this.metrics));
+    const metrics = metricRail(this.ctx, width, this.metrics, { maxRows: 2 });
+    const prefix = [...lines, ...metrics];
     if (this.id === "costs")
-      lines.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced.reduce((total, count) => total + count, 0))} unpriced \xB7 API estimate excludes unpriced usage, not free`));
+      prefix.push(...wrap([this.ctx.theme.fg("dim", `${formatInteger(this.unpriced.reduce((total, count) => total + count, 0))} unpriced \xB7 API estimate excludes unpriced usage, not free`)], width));
     if (this.id === "tools")
-      lines.push(this.ctx.theme.fg("dim", "Attribution: invoking-turn tokens/cost split across tool calls."));
-    lines.push(...focusTabs(this.ctx, width, ["Chart", ...this.tables.map((table) => table.title)], this.focus));
+      prefix.push(...wrap([this.ctx.theme.fg("dim", "Attribution: invoking-turn tokens/cost split across tool calls.")], width));
+    const tabs = focusTabs(this.ctx, width, ["Chart", ...this.tables.map((table) => table.title)], this.focus);
+    const active = this.focus > 0 ? this.tables[this.focus - 1] : null;
+    const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0 ? "m mode \xB7 n legend \xB7 v visibility \xB7 ,/. point \xB7 Tab pane" : active?.state.editing || active?.state.search ? "Keys: search \xB7 Enter/Esc finish \xB7 Ctrl-U clear \xB7 Tab pane" : this.id === "tools" ? "/ search \xB7 j/k select \xB7 Enter filter \xB7 d details \xB7 f/x tool \xB7 o/O sort \xB7 Tab pane" : `/ search \xB7 j/k select \xB7 Enter details \xB7 o/O sort \xB7 Tab pane`)], width);
+    const base = [...prefix, "", ...tabs, ...cue, ""];
     const mode = this.mode();
+    const hasRows = this.tables.some((table) => table.rows.length > 0);
+    const showTable = Boolean(mode) || hasRows;
     const tableIndexes = [];
     for (let i = 0;i < this.tables.length; i++) {
       if (this.tables.every((table) => table.rows.length === 0) && (this.focus > 0 || i > 0))
         continue;
       tableIndexes.push(i);
     }
-    const available = Math.max(1, height - lines.length - 1);
+    const available = Math.max(8, height - base.length - 1);
     const chartOverhead = mode ? 4 + mode.series.length : 0;
     const chartPlot = mode ? Math.max(4, Math.round(available * (tableIndexes.length ? 0.45 : 1)) - chartOverhead) : 0;
+    const wide = width >= 80 && Boolean(mode) && showTable;
+    const leftWidth = Math.floor((width - 2) / 2);
+    const rightWidth = width - 2 - leftWidth;
+    const chartWidth = wide ? this.focus === 0 ? leftWidth : rightWidth : width;
+    const tableWidth = wide ? this.focus === 0 ? rightWidth : leftWidth : width;
+    const pending = [];
     let chartBlock = [];
     if (mode) {
       this.chart.reconcile(this.buckets, mode.series.map((series) => series.key));
-      chartBlock = [mode.label];
+      const chartHeading = paneHeading(this.ctx, chartWidth, "Chart", mode.label, this.focus === 0);
+      chartBlock = [chartHeading];
       const unknown = this.unpriced.reduce((total, count) => total + count, 0);
       if (this.id === "costs" && unknown > 0 && mode.series.every((s) => s.values.every((value) => value === 0)))
-        chartBlock.push(`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`);
-      const blockStart = lines.length + chartBlock.length;
+        chartBlock.push(...wrap([`No priced cost / unknown ${formatInteger(unknown)} requests. Unpriced usage is not zero spend.`], chartWidth));
+      const chartStart = chartBlock.length;
       const seriesKey = this.chart.selectedKey ?? mode.series[0]?.key ?? "";
-      chartBlock.push(...this.chart.render(this.ctx, width, this.buckets, mode.series, {
+      const colShift = wide && this.focus !== 0 ? leftWidth + 2 : 0;
+      chartBlock.push(...this.chart.render(this.ctx, chartWidth, this.buckets, mode.series, {
         unit: mode.unit === "USD" ? "known-priced USD / day" : mode.unit,
         percent: mode.unit === "share",
         stacked: true,
         format: mode.unit === "USD" ? formatCost : mode.unit === "share" ? formatPercent : formatCompact,
         height: chartPlot,
+        showHint: false,
         formatValue: mode.unit === "USD" ? (key, value, point) => value === null || value === undefined ? "\u2014" : formatEstimatedCost(value, this.chart.mode % 2 === 0 ? this.costSeriesUnknown.get(key)?.[point] ?? 0 : this.unpriced[point] ?? 0) : undefined,
-        reportBuckets: (spans) => this.ctx.reportHits?.(spans.map((span) => ({
-          rowStart: span.rowStart + blockStart,
-          rowEnd: span.rowEnd + blockStart,
-          colStart: span.colStart,
-          colEnd: span.colEnd,
-          action: { type: "selectBucket", series: seriesKey, index: span.index }
-        })))
+        reportBuckets: (spans) => pending.push({ spans: [...spans], marker: chartHeading, chartStart, series: seriesKey, colShift })
       }));
       this.chart.point = Math.min(this.chart.point, Math.max(0, this.buckets.length - 1));
       const point = this.chart.point;
       if (this.id === "costs" && this.buckets.length) {
         const timestamp = this.buckets[point];
-        chartBlock.push(this.ctx.theme.fg("dim", `${formatInteger(this.unpriced[point] ?? 0)} unpriced in selected UTC day`));
+        chartBlock.push(...wrap([this.ctx.theme.fg("dim", `${formatInteger(this.unpriced[point] ?? 0)} unpriced in selected UTC day`)], chartWidth));
         for (const p of this.costs?.costSeries ?? [])
           if (p.timestamp === timestamp && p.unpricedRequests > 0)
-            chartBlock.push(`${identity(p.model, p.provider)} \xB7 ${formatEstimatedCost(p.cost, p.unpricedRequests)} \xB7 ${formatInteger(p.unpricedRequests)} unpriced`);
+            chartBlock.push(...wrap([`${identity(p.model, p.provider)} \xB7 ${formatEstimatedCost(p.cost, p.unpricedRequests)} \xB7 ${formatInteger(p.unpricedRequests)} unpriced`], chartWidth));
       }
     }
     const tableHeight = Math.max(5, Math.floor((available - chartBlock.length) / Math.max(1, tableIndexes.length)));
-    if (this.focus > 0)
-      lines.push(...this.renderTable(this.focus - 1, width, tableHeight, filter));
-    lines.push(...chartBlock);
+    const focusIndex = this.focus > 0 ? this.focus - 1 : Math.min(0, this.tables.length - 1);
+    const focusedTable = showTable ? this.renderTable(focusIndex, tableWidth, tableHeight, filter, this.focus > 0) : [];
+    const pair = [];
+    if (wide) {
+      const chartFirst = this.focus === 0;
+      pair.push(...sideBySide(this.ctx, width, chartFirst ? chartBlock : focusedTable, chartFirst ? focusedTable : chartBlock));
+    } else {
+      const first = this.focus === 0 ? chartBlock : focusedTable;
+      const second = this.focus === 0 ? focusedTable : chartBlock;
+      if (first.length)
+        pair.push(...first);
+      if (second.length) {
+        if (pair.length)
+          pair.push("");
+        pair.push(...second);
+      }
+    }
+    const trailing = [];
     for (const index of tableIndexes)
-      if (index !== this.focus - 1)
-        lines.push(...this.renderTable(index, width, tableHeight, filter));
-    lines.push(this.ctx.theme.fg("dim", this.focus === 0 ? "Tab pane \xB7 m mode \xB7 n/v legend \xB7 ,/. point" : `Tab pane \xB7 / search \xB7 o/O sort \xB7 Enter ${this.id === "tools" ? "filter \xB7 d details \xB7 f/x tool" : "details"} \xB7 Esc clear`));
-    return wrap(lines, width);
+      if (index !== focusIndex) {
+        if (trailing.length)
+          trailing.push("");
+        trailing.push(...this.renderTable(index, width, tableHeight, filter, false));
+      }
+    const finalLines = wrap([...base, ...pair, ...trailing.length ? ["", ...trailing] : []], width);
+    reportBucketHits(this.ctx, finalLines, pending);
+    return finalLines;
   }
-  renderTable(index, width, height, filter) {
+  renderTable(index, width, height, filter, active = false) {
     const table = this.tables[index];
     const numeric = (key, header, priority = 0) => ({
       key,
@@ -2638,9 +2852,9 @@ class AnalyticsFeature {
     else
       columns.push(numeric("calls", "Calls"), numeric("errors", "Errors", 2), numeric("costShare", "Estimate", 1), numeric("totalTokensShare", "Tokens", 3), numeric("errorRate", "Error %", 4));
     const title = table.title + (this.id === "tools" && index === 1 ? ` \xB7 Tool filter: ${filter ?? "All tools"}` : "");
-    return [...table.state.render(this.rows(index), width, Math.max(1, height), columns, this.ctx, title)];
+    return [...table.state.render(this.rows(index), width, Math.max(1, height), columns, this.ctx, `${panePrefix(active)}${title}`, { showHint: false })];
   }
-  renderPerformance(key, width) {
+  renderPerformance(key, width, pending) {
     const points = this.performance.get(key) ?? [];
     this.performancePoints = points.length;
     if (!points.length)
@@ -2648,29 +2862,25 @@ class AnalyticsFeature {
     this.performanceChart.reconcile(points.map((point) => point.timestamp), ["tps", "ttft"]);
     const p = points[this.performanceChart.point];
     const series = [{ key: "tps", label: "Throughput (tok/s)", values: points.map((p) => p.avgTokensPerSecond) }, { key: "ttft", label: "TTFT (seconds)", values: points.map((p) => p.avgTtftSeconds) }];
-    const lines = [...metricGrid(this.ctx, width, [
+    const legend = series.map((s, i) => `${i === this.performanceChart.seriesIndex % series.length ? ">" : " "} ${this.performanceChart.hidden.has(s.key) ? "off" : "on"} ${s.label}`);
+    const lines = [...metricRail(this.ctx, width, [
       { label: "Throughput", value: `${formatTokensPerSecond(p.avgTokensPerSecond)} tok/s`, emphasis: "primary" },
       { label: "TTFT", value: p.avgTtftSeconds === null ? "\u2014" : formatDurationMs(p.avgTtftSeconds * 1000) },
       { label: "Requests", value: formatInteger(p.requests), hint: new Date(p.timestamp).toISOString() }
-    ]), ...series.map((s, i) => `${i === this.performanceChart.seriesIndex % series.length ? ">" : " "} ${this.performanceChart.hidden.has(s.key) ? "off" : "on"} ${s.label}`)];
-    for (const s of series)
-      if (!this.performanceChart.hidden.has(s.key)) {
-        const perfStart = lines.length;
-        const skey = s.key;
-        lines.push(...renderTimeSeries(this.ctx, points.map((point) => point.timestamp), [s], width, this.performanceChart.point, {
-          height: 4,
-          unit: s.key === "tps" ? "tok/s" : "s",
-          format: (value) => s.key === "tps" ? formatTokensPerSecond(value) : formatDurationMs(value * 1000),
-          legend: false,
-          reportBuckets: (spans) => this.ctx.reportHits?.(spans.map((span) => ({
-            rowStart: span.rowStart + perfStart,
-            rowEnd: span.rowEnd + perfStart,
-            colStart: span.colStart,
-            colEnd: span.colEnd,
-            action: { type: "selectBucket", series: skey, index: span.index }
-          })))
-        }));
-      }
+    ], { maxRows: 2 }), ...legend];
+    for (let i = 0;i < series.length; i++) {
+      const s = series[i];
+      if (this.performanceChart.hidden.has(s.key))
+        continue;
+      const marker = legend[i];
+      lines.push(...renderTimeSeries(this.ctx, points.map((point) => point.timestamp), [s], width, this.performanceChart.point, {
+        height: 4,
+        unit: s.key === "tps" ? "tok/s" : "s",
+        format: (value) => s.key === "tps" ? formatTokensPerSecond(value) : formatDurationMs(value * 1000),
+        legend: false,
+        reportBuckets: (spans) => pending.push({ spans: [...spans], marker, chartStart: 1, series: s.key })
+      }));
+    }
     lines.push("n/v series \xB7 ,/. point");
     return lines;
   }
@@ -3010,19 +3220,17 @@ class SummaryFeature {
             error: cause instanceof Error ? cause.message : String(cause)
           }))
         ]);
-        const settlement = fetched;
-        const overviewData = settlement.data !== undefined ? { ...settlement.data } : fetched;
-        const fetchFailures = settlement.errors !== undefined ? Object.values(settlement.errors).filter((message) => typeof message === "string") : [];
+        const overviewData = { ...fetched.data };
+        const fetchFailures = Object.values(fetched.errors).filter((message) => typeof message === "string" && message.length > 0);
         const badRecent = recent.value !== null && !Array.isArray(recent.value);
         data = badRecent ? { ...overviewData, recent: [] } : { ...overviewData, ...recent.value === null ? {} : { recent: recent.value } };
         const failures = [...fetchFailures, ...recent.error === null ? [] : [recent.error], ...badRecent ? ["Recent requests payload is not an array"] : []];
         if (failures.length > 0)
           scopedError = failures.join("; ");
       } else {
-        const fetched = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);
-        const onlySettlement = fetched;
-        data = onlySettlement.data !== undefined ? { ...onlySettlement.data } : fetched;
-        const failures = onlySettlement.errors !== undefined ? Object.values(onlySettlement.errors).filter((message) => typeof message === "string") : [];
+        const only = await this.ctx.reader.fetch([this.id === "projects" ? "folders" : "dailyActivity"], range);
+        data = { ...only.data };
+        const failures = Object.values(only.errors).filter((message) => typeof message === "string" && message.length > 0);
         if (failures.length > 0)
           scopedError = failures.join("; ");
       }
@@ -3085,7 +3293,7 @@ class SummaryFeature {
     if (this.expanded)
       return wrap([this.ctx.theme.bold(this.id === "projects" ? "Project details" : "Day details"), "b/Esc back \xB7 all narrow-table columns below", ...fields(this.expanded)], width);
     const prefix = [
-      sectionHeading(this.ctx, width, this.id[0].toUpperCase() + this.id.slice(1), this.id === "activity" ? "371 local days" : this.range, true),
+      sectionHeading(this.ctx, width, `${panePrefix(true)}${this.id[0].toUpperCase() + this.id.slice(1)}`, this.id === "activity" ? "371 local days" : this.range, true),
       ...this.loading ? [this.data ? "Refreshing\u2026 existing observations are stale." : "Loading\u2026 no observations yet."] : [],
       ...this.error ? [this.ctx.theme.fg("error", `Read failed: ${this.error}${this.data ? " \xB7 showing stale observations" : ""}`)] : []
     ];
@@ -3112,14 +3320,14 @@ class SummaryFeature {
       const mix = [["Uncached input", overall.totalInputTokens], ["Cache read", overall.totalCacheReadTokens], ["Cache write", overall.totalCacheWriteTokens], ["Output", overall.totalOutputTokens]];
       const agents = buildAgentTokenShare(payload.byAgentType);
       const prefixLines = wrap(prefix, width);
-      const metrics = metricGrid(this.ctx, width, [
+      const metrics = metricRail(this.ctx, width, [
         { label: "Requests", value: formatCompact(overall.totalRequests), hint: `${formatCompact(overall.successfulRequests)} succeeded`, emphasis: "primary" },
         { label: "API cost", value: formatEstimatedCost(overall.totalCost, overall.unpricedRequests), hint: `${overall.unpricedRequests} unpriced` },
         { label: "Tokens", value: formatCompact(total), hint: `${formatCompact(overall.totalPremiumRequests)} premium req` },
         { label: "Cache hit", value: formatPercent(overall.cacheRate), hint: cacheSavingsNote(overall.cacheSavings) },
         { label: "Latency", value: formatDurationMs(overall.avgDuration), hint: `${formatDurationMs(overall.avgTtft)} TTFT` },
         { label: "Failures", value: formatCompact(overall.failedRequests), hint: `${formatPercent(overall.errorRate)} error rate` }
-      ]);
+      ], { maxRows: 2 });
       const tabs = focusTabs(this.ctx, width, ["Requests", "Chart"], this.focus);
       const tokenMix = dataTable(this.ctx, width, "Token mix", [
         { key: "label", header: "Category", align: "left" },
@@ -3132,17 +3340,23 @@ class SummaryFeature {
         { key: "share", header: "Share", align: "right", priority: 1 },
         { key: "requests", header: "Req", align: "right", priority: 2 }
       ], agents.segments.map((agent) => ({ agent: agent.agentType, tokens: formatCompact(agent.tokens), share: formatPercent(agent.share), requests: String(agent.requests) })));
-      const fixed = prefixLines.length + metrics.length + 1 + tabs.length + 1 + tokenMix.length + 1 + agentShares.length;
-      const available = Math.max(1, height - fixed);
       const notice = chart.mode === "cost" && overall.unpricedRequests > 0 ? wrap([this.ctx.theme.fg("dim", `Known-priced cost only \xB7 ${overall.unpricedRequests} unpriced requests; per-bucket unknown counts unavailable.`)], width) : [];
-      const chartOverhead = 4 + notice.length + chart.series.length;
-      const listHeight = Math.max(6, Math.round(available * 0.5));
-      const chartHeight = Math.max(5, available - listHeight - chartOverhead);
-      const list = this.requests.render(rows, width, listHeight, columns, this.ctx, "Latest requests \xB7 A opens all");
+      const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0 ? this.requests.editing || this.requests.search ? "Keys: search \xB7 Enter/Esc finish \xB7 Ctrl-U clear \xB7 Tab pane" : "Keys: / search \xB7 j/k select \xB7 Enter details \xB7 o/O sort \xB7 A all \xB7 Tab pane" : "Keys: m mode \xB7 n legend \xB7 v visibility \xB7 ,/. point \xB7 Tab pane")], width);
+      const base = prefixLines.length + metrics.length + 1 + tabs.length + cue.length + 1;
+      const primaryBudget = Math.max(12, Math.min(18, height - base));
+      const chartOverhead = 3 + notice.length + chart.series.length;
+      const wide = width >= 80;
+      const leftWidth = Math.floor((width - 2) / 2);
+      const rightWidth = width - 2 - leftWidth;
+      const listWidth = wide ? this.focus === 0 ? leftWidth : rightWidth : width;
+      const graphWidth = wide ? this.focus === 0 ? rightWidth : leftWidth : width;
+      const listHeight = wide ? primaryBudget : Math.max(6, Math.min(8, primaryBudget - 1 - 5 - chartOverhead));
+      const chartHeight = Math.max(5, (wide ? primaryBudget : primaryBudget - 1 - listHeight) - chartOverhead);
+      const list = this.requests.render(rows, listWidth, listHeight, columns, this.ctx, `${panePrefix(this.focus === 0)}Latest requests \xB7 A opens all`, { showHint: false });
       const graph = [
-        sectionHeading(this.ctx, width, "Activity", chart.mode, this.focus === 1),
+        paneHeading(this.ctx, graphWidth, "Activity", chart.mode, this.focus === 1),
         ...notice,
-        ...this.chart.render(this.ctx, width, chart.buckets, chart.series, {
+        ...this.chart.render(this.ctx, graphWidth, chart.buckets, chart.series, {
           height: chartHeight,
           unit: chart.mode === "cost" ? "API-equivalent USD / bucket" : chart.mode === "tokens" ? "tokens / bucket" : "requests / bucket",
           stacked: true,
@@ -3151,28 +3365,30 @@ class SummaryFeature {
             const unpriced = chart.unpriced[point] ?? 0;
             const unknown = unpriced > 0 ? unpriced : !chart.carriesUnpriced && (chart.requests[point] ?? 0) > 0 ? 1 : 0;
             return formatEstimatedCost(value ?? 0, unknown);
-          } : undefined
+          } : undefined,
+          showHint: false
         })
       ];
-      const listOffset = prefixLines.length + metrics.length + 1 + tabs.length + (this.focus === 0 ? 0 : graph.length + 1);
+      let pair;
+      let listOffset = base;
+      let colShift = 0;
+      if (wide) {
+        const listFirst = this.focus === 0;
+        if (!listFirst)
+          colShift = leftWidth + 2;
+        pair = [...sideBySide(this.ctx, width, listFirst ? list : graph, listFirst ? graph : list)];
+      } else {
+        pair = this.focus === 0 ? [...list, "", ...graph] : [...graph, "", ...list];
+        listOffset += this.focus === 0 ? 0 : graph.length + 1;
+      }
       this.ctx.reportHits?.(this.requests.lastHits.map((hit) => ({
         ...hit,
         rowStart: hit.rowStart + listOffset,
-        rowEnd: hit.rowEnd + listOffset
+        rowEnd: hit.rowEnd + listOffset,
+        colStart: hit.colStart + colShift,
+        colEnd: hit.colEnd + colShift
       })));
-      return [
-        ...prefixLines,
-        ...metrics,
-        "",
-        ...tabs,
-        ...this.focus === 0 ? list : graph,
-        "",
-        ...this.focus === 0 ? graph : list,
-        "",
-        ...tokenMix,
-        "",
-        ...agentShares
-      ];
+      return [...prefixLines, ...metrics, "", ...tabs, ...cue, "", ...pair, "", ...tokenMix, "", ...agentShares];
     }
     if (this.id === "projects") {
       const { view, scoped, matching } = this.projectRows();
@@ -3198,15 +3414,15 @@ class SummaryFeature {
       ]);
       const dimLine = wrap([this.ctx.theme.fg("dim", `Totals include all projects \xB7 t ${this.hideTemporary ? "show" : "hide"} temporary projects${this.hideTemporary && view.temporaryCount ? ` (${view.temporaryCount} hidden)` : ""}`)], width);
       const tabs = focusTabs(this.ctx, width, ["Projects", "By cost", "By requests"], this.focus);
-      const used = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length;
-      const list = lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - used), columns, this.ctx, titles[this.focus]);
-      const listOffset = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length;
+      const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0 && (this.projects.editing || this.projects.search) ? "Keys: search \xB7 Enter/Esc finish \xB7 Ctrl-U clear \xB7 Tab pane" : "Keys: j/k select \xB7 Enter details/filter \xB7 o/O sort \xB7 t temporary \xB7 / search \xB7 Tab pane")], width);
+      const listOffset = prefixLines.length + metrics.length + dimLine.length + 1 + tabs.length + cue.length + 1;
+      const list = lists[this.focus].render(rowSets[this.focus], width, Math.max(5, height - listOffset), columns, this.ctx, `${panePrefix(true)}${titles[this.focus]}`, { showHint: false });
       this.ctx.reportHits?.(lists[this.focus].lastHits.map((hit) => ({
         ...hit,
         rowStart: hit.rowStart + listOffset,
         rowEnd: hit.rowEnd + listOffset
       })));
-      return [...prefixLines, ...metrics, ...dimLine, "", ...tabs, ...list];
+      return [...prefixLines, ...metrics, ...dimLine, "", ...tabs, ...cue, "", ...list];
     }
     const points = this.data.dailyActivity ?? [];
     const weeks = weeksForWidth(2, width);
@@ -3225,7 +3441,7 @@ class SummaryFeature {
     const needle = this.days.search.trim().toLowerCase();
     const rows = this.days.rows(points.filter((point) => !needle || point.day.includes(needle)), DAY_SORT);
     const calendar = [
-      sectionHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
+      paneHeading(this.ctx, width, "Activity calendar", `${weeks} weeks`, this.focus === 1),
       ...renderHeatmap(points, { innerWidth: width, labelWidth: 2, weeks, glyphs: glyphsFor(this.ctx.theme.getSymbolPreset()), ramp: [0, 1, 2, 3].map((level) => heatRamp(this.ctx.theme, level)), dim: (text) => this.ctx.theme.fg("dim", text), today, selectedDay: selected.day, selected: (text) => this.ctx.theme.bg(SELECTION_BG.band, this.ctx.theme.fg("accent", text)) }),
       ...wrap([
         this.ctx.theme.fg("dim", `${localDay2(layout.start)}\u2013${localDay2(today)} \xB7 ${layout.totalRequests} requests \xB7 ${formatEstimatedCost(layout.totalCost, windowUnpriced)}`),
@@ -3239,18 +3455,20 @@ class SummaryFeature {
       { label: "Day tokens", value: formatCompact(selected.totalTokens), hint: `${points.length} recorded days` }
     ]);
     const tabs = focusTabs(this.ctx, width, ["Recorded days", "Calendar"], this.focus);
+    const cue = wrap([this.ctx.theme.fg("dim", this.focus === 0 ? this.days.editing || this.days.search ? "Keys: search \xB7 Enter/Esc finish \xB7 Ctrl-U clear \xB7 Tab pane" : "Keys: j/k select \xB7 Enter details \xB7 o/O sort \xB7 / search \xB7 Tab pane" : "Keys: j/k day \xB7 h/l week \xB7 t today \xB7 Enter details \xB7 Tab pane")], width);
     const tail = wrap([this.ctx.theme.fg("dim", "Latest 371 local days \xB7 independent of the range selector; quiet selected days are zero.")], width);
-    const used = prefixLines.length + metrics.length + 1 + tabs.length + calendar.length + 1 + tail.length;
+    const beforePane = prefixLines.length + metrics.length + 1 + tabs.length + cue.length + 1;
+    const used = beforePane + calendar.length + 1 + tail.length;
     const list = this.days.render(rows, width, Math.max(5, height - used), [
       { key: "day", header: "Day", align: "left", value: (point) => point.day },
       { key: "requests", header: "Req", align: "right", priority: 0, value: (point) => formatCompact(point.requests) },
       { key: "cost", header: "API cost", align: "right", priority: 1, value: (point) => formatEstimatedCost(point.cost, point.unpricedRequests ?? 0) },
       { key: "tokens", header: "Tokens", align: "right", priority: 2, value: (point) => formatCompact(point.totalTokens) }
-    ], this.ctx, "Recorded days");
+    ], this.ctx, `${panePrefix(this.focus === 0)}Recorded days`, { showHint: false });
     const leading = this.focus === 0 ? list : calendar;
     const trailing = this.focus === 0 ? calendar : list;
-    const calendarOffset = prefixLines.length + metrics.length + 1 + tabs.length + (this.focus === 0 ? list.length + 1 : 0);
-    const listOffset = prefixLines.length + metrics.length + 1 + tabs.length + (this.focus === 0 ? 0 : calendar.length + 1);
+    const calendarOffset = beforePane + (this.focus === 0 ? list.length + 1 : 0);
+    const listOffset = beforePane + (this.focus === 0 ? 0 : calendar.length + 1);
     this.ctx.reportHits?.(this.days.lastHits.map((hit) => ({
       ...hit,
       rowStart: hit.rowStart + listOffset,
@@ -3272,7 +3490,7 @@ class SummaryFeature {
       }
     }
     this.ctx.reportHits?.(hits);
-    return [...prefixLines, ...metrics, "", ...tabs, ...leading, "", ...trailing, ...tail];
+    return [...prefixLines, ...metrics, "", ...tabs, ...cue, "", ...leading, "", ...trailing, ...tail];
   }
   get inputMode() {
     return (this.id === "overview" ? this.requests.editing : this.id === "projects" ? this.projects.editing : this.days.editing) ? "text" : "navigation";
@@ -6163,22 +6381,22 @@ var LABEL_WIDTH = 12;
 var VALUE_WIDTH = 12;
 var PLAN_CACHE = new Map;
 var PLAN_CACHE_LIMIT = 512;
-function planLayout(width, rows, preset) {
-  const key = `${width}\x00${rows}\x00${preset}`;
+function planLayout(width, rows, preset, bodyRows) {
+  const key = `${width}\x00${rows}\x00${preset}\x00${bodyRows}`;
   const hit = PLAN_CACHE.get(key);
   if (hit !== undefined)
     return hit;
-  const plan = computePlanLayout(width, rows);
+  const plan = computePlanLayout(width, rows, bodyRows);
   if (PLAN_CACHE.size >= PLAN_CACHE_LIMIT)
     PLAN_CACHE.clear();
   PLAN_CACHE.set(key, plan);
   return plan;
 }
-function computePlanLayout(width, rows) {
+function computePlanLayout(width, rows, bodyRowsArg) {
   const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
   const safeRows = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
   const innerWidth = Math.max(0, safeWidth - HORIZONTAL_INSET);
-  const bodyRows = Math.max(1, safeRows - PANEL_CHROME_ROWS);
+  const bodyRows = Number.isFinite(bodyRowsArg) ? Math.max(1, Math.trunc(bodyRowsArg)) : 1;
   const overflowRows = Math.max(0, PANEL_CHROME_ROWS + 1 - safeRows);
   const breakpoint = BREAKPOINTS.find((row) => innerWidth >= row.minInnerWidth) ?? BREAKPOINTS[0];
   const columnWidth = breakpoint.columns === 2 ? Math.floor((innerWidth - SIDE_INSET) / 2) : innerWidth;
@@ -6328,57 +6546,20 @@ function screenById(id) {
 }
 
 // src/tui/chrome.ts
-import { truncateToWidth as truncateToWidth12, visibleWidth as visibleWidth9 } from "@oh-my-pi/pi-tui";
-
-// src/sync/client.ts
-var PHASE_WORDS = {
-  scan: "Scanning sessions",
-  ingest: "Ingesting sessions",
-  rollup: "Building rollups"
-};
-var BAR_WIDTH = 20;
-function describeSyncProgress(event, width) {
-  if (width <= 0)
-    return "";
-  if (event.type !== "progress")
-    return "";
-  const pct = event.total > 0 ? Math.floor(event.current / event.total * 100) : null;
-  const clamped = pct === null ? null : Math.max(0, Math.min(100, pct));
-  const word = PHASE_WORDS[event.phase];
-  const label = clamped === null ? `${word} \xB7` : `${word} ${clamped}%`;
-  if (Bun.stringWidth(label) >= width) {
-    return clipped(label, width);
-  }
-  const barWidth = Math.min(BAR_WIDTH, width - Bun.stringWidth(label) - 1);
-  if (barWidth < 3)
-    return clipped(label, width);
-  const filled = clamped === null ? 0 : Math.round(barWidth * clamped / 100);
-  const bar = "\u2588".repeat(filled) + "\u2591".repeat(barWidth - filled);
-  return `${label} ${bar}`;
-}
-function clipped(label, width) {
-  let out = "";
-  let used = 0;
-  for (const ch of label) {
-    const w = Bun.stringWidth(ch);
-    if (used + w > width)
-      break;
-    out += ch;
-    used += w;
-  }
-  return out;
-}
+import { truncateToWidth as truncateToWidth12, visibleWidth as visibleWidth10 } from "@oh-my-pi/pi-tui";
 
 // src/tui/responsive.ts
 function framePolicy(width) {
   const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
   const innerWidth = Math.max(0, safeWidth - HORIZONTAL_INSET);
   const row = BREAKPOINTS.find((candidate) => innerWidth >= candidate.minInnerWidth) ?? BREAKPOINTS[0];
-  const sidebar = row.columns === 2 ? "full" : "hidden";
+  const navMode = row.columns === 2 ? "sidebar" : "toolbarRoute";
+  const sidebar = navMode === "sidebar" ? "full" : "hidden";
   const topbar = !row.showFooterHints ? "minimal" : row.columns === 2 ? "full" : "condensed";
   return {
     band: row.name,
     sidebar,
+    navMode,
     topbar,
     columns: row.columns,
     footerHints: row.showFooterHints,
@@ -6387,6 +6568,7 @@ function framePolicy(width) {
 }
 
 // src/tui/tabs.ts
+import { visibleWidth as visibleWidth9 } from "@oh-my-pi/pi-tui";
 var TAB_ICON = {
   overview: "trendUp",
   activity: "calendar",
@@ -6455,25 +6637,60 @@ function tabBarTheme(theme) {
     hint: (text) => theme.fg(TAB_INK.hint, text)
   };
 }
-function buildTabs(preset, theme, activeId) {
-  if (!SCREENS.some((screen) => screen.id === activeId)) {
-    throw new Error(`unknown screen id: ${activeId}`);
+function routeSpans(line, activeId) {
+  if (!SCREENS.some((screen) => screen.id === activeId))
+    return [];
+  if (!line.startsWith("< "))
+    return [];
+  const index = SCREENS.findIndex((screen) => screen.id === activeId);
+  const previous = SCREENS[(index - 1 + SCREENS.length) % SCREENS.length].id;
+  const next = SCREENS[(index + 1) % SCREENS.length].id;
+  const labelStart = visibleWidth9("< ");
+  const labelEnd = labelStart + visibleWidth9(screenById(activeId).label);
+  const nextStart = labelEnd + 1;
+  const painted = visibleWidth9(line);
+  const spans = [];
+  if (painted >= 1)
+    spans.push({ id: previous, start: 0, end: 1, part: "prev" });
+  if (painted > labelStart) {
+    spans.push({ id: activeId, start: labelStart, end: Math.min(painted, labelEnd), part: "label" });
   }
-  return SCREENS.map((screen) => ({
-    id: screen.id,
-    label: `${statsIcon(preset, TAB_ICON[screen.id], theme)} ${screen.label}`,
-    short: TAB_SHORT[preset][screen.id],
-    muted: false
-  }));
+  if (painted > nextStart)
+    spans.push({ id: next, start: nextStart, end: nextStart + 1, part: "next" });
+  return spans;
 }
-var TAB_BAR_INDENT = 1;
+function rawPrefix(line, cells) {
+  let index = 0;
+  let width = 0;
+  while (index < line.length && width < cells) {
+    if (line.charCodeAt(index) === 27) {
+      const end = line.indexOf("m", index + 1);
+      if (end === -1)
+        break;
+      index = end + 1;
+      continue;
+    }
+    const char = String.fromCodePoint(line.codePointAt(index));
+    width += visibleWidth9(char);
+    index += char.length;
+  }
+  return line.slice(0, index);
+}
+function paintRouteHover(theme, line, activeId) {
+  const spans = routeSpans(line.replace(/\x1b\[[0-9;]*m/g, ""), activeId);
+  if (spans.length === 0)
+    return line;
+  const end = Math.max(...spans.map((span) => span.end));
+  const prefix = rawPrefix(line, end);
+  return theme.bg(SELECTION_BG.band, prefix) + line.slice(prefix.length);
+}
 
 // src/tui/chrome.ts
 var JUMP_TIMEOUT_MS = 1200;
 var TOPBAR_CLUSTER_GAP = "  ";
 var TOPBAR_SPACER_MIN = 3;
 function pad2(text, width) {
-  const short = width - visibleWidth9(text);
+  const short = width - visibleWidth10(text);
   return short > 0 ? `${text}${" ".repeat(short)}` : text;
 }
 var PREFIX_WIDTH = 2;
@@ -6507,6 +6724,12 @@ var NAV_GROUPS = Object.entries(GROUPS).map(([heading, ids]) => ({
     return hotkey !== "" ? [{ id: screen.id, label: screen.label, hotkey, icon: TAB_ICON[screen.id] }] : [];
   })
 }));
+function sidebarWidth(preset) {
+  const items = NAV_GROUPS.flatMap((group) => group.items);
+  const iconWidth = Math.max(...items.map((item) => visibleWidth10(statsIcon(preset, item.icon))));
+  const labelWidth = Math.max(...items.map((item) => visibleWidth10(item.label)));
+  return PREFIX_WIDTH + iconWidth + 1 + labelWidth + SIDEBAR_GAP + visibleWidth10(JUMP_KEY_PREFIX) + 1;
+}
 function screenForHotkey(key) {
   if (key.length !== 1)
     return null;
@@ -6552,12 +6775,18 @@ function chipFor(theme, sync) {
   const age = ago(sync.now, sync.lastSyncedAt);
   return age === "" ? `${mark} Live` : `${mark} Live ${theme.fg("dim", age)}`;
 }
+var PROGRESS_PHASE = {
+  scan: "Scan",
+  ingest: "Ingest",
+  rollup: "Rollup"
+};
 function progressLineFor(event, width) {
   if (event === null || event.type !== "progress")
     return "";
-  if (event.phase !== "ingest")
-    return describeSyncProgress({ ...event, current: 0, total: 0 }, width);
-  return describeSyncProgress(event, width);
+  const phase = PROGRESS_PHASE[event.phase];
+  const detail = event.phase === "ingest" && event.total > 0 ? ` ${formatInteger2(event.current)}/${formatInteger2(event.total)}` : " \u2026";
+  const text = `${phase}${detail}`;
+  return visibleWidth10(text) > width ? truncateToWidth12(text, Math.max(0, width)) : text;
 }
 var SIDEBAR_CACHE = new WeakMap;
 var GROUPS_ID = new WeakMap;
@@ -6585,10 +6814,12 @@ function sidebar(theme, preset, activeId, hoveredId, groups = NAV_GROUPS) {
 function computeSidebar(theme, preset, activeId, hoveredId, groups) {
   const activeGroup = groups.find((group) => group.items.some((item) => item.id === activeId));
   const items = groups.flatMap((group) => group.items);
-  const iconWidth = Math.max(...items.map((item) => visibleWidth9(statsIcon(preset, item.icon, theme))));
-  const labelWidth = Math.max(...items.map((item) => visibleWidth9(item.label)));
-  const keyWidth = visibleWidth9(JUMP_KEY_PREFIX) + 1;
-  const width = PREFIX_WIDTH + iconWidth + 1 + labelWidth + SIDEBAR_GAP + keyWidth;
+  const iconWidth = Math.max(...items.map((item) => visibleWidth10(statsIcon(preset, item.icon, theme))));
+  const measuredLabelWidth = Math.max(...items.map((item) => visibleWidth10(item.label)));
+  const keyWidth = visibleWidth10(JUMP_KEY_PREFIX) + 1;
+  const measuredWidth = PREFIX_WIDTH + iconWidth + 1 + measuredLabelWidth + SIDEBAR_GAP + keyWidth;
+  const width = Math.max(sidebarWidth(preset), measuredWidth);
+  const labelWidth = width - (PREFIX_WIDTH + iconWidth + 1 + SIDEBAR_GAP + keyWidth);
   const jump = (key) => theme.fg(SIDEBAR_INK.jumpKey, key);
   const lines = [];
   const tail = " ".repeat(SIDEBAR_GAP);
@@ -6612,6 +6843,7 @@ function computeSidebar(theme, preset, activeId, hoveredId, groups) {
   }
   return { width, lines };
 }
+var SIDEBAR_ZIP_PREFIX = 3;
 function zipSidebar(theme, bodyRows, sidebarLines, sidebarWidth, preset) {
   const gutter = theme.fg("dim", glyph(preset, "columnGap"));
   const height = Math.max(bodyRows.length, sidebarLines.length);
@@ -6624,7 +6856,14 @@ function zipSidebar(theme, bodyRows, sidebarLines, sidebarWidth, preset) {
 var TOPBAR_CACHE = new WeakMap;
 var TOPBAR_CACHE_LIMIT = 512;
 function topbar(theme, opts) {
-  const key = `${opts.range} ${opts.chip} ${opts.freshness} ${opts.innerWidth}`;
+  const key = [
+    opts.screenLabel,
+    opts.range,
+    opts.chip,
+    opts.freshness,
+    opts.progress,
+    opts.innerWidth
+  ].join("\x00");
   let byKey = TOPBAR_CACHE.get(theme);
   if (byKey === undefined)
     TOPBAR_CACHE.set(theme, byKey = new Map);
@@ -6639,42 +6878,77 @@ function topbar(theme, opts) {
 }
 function computeTopbar(theme, opts) {
   const innerWidth = Math.max(0, opts.innerWidth);
-  const mode = framePolicy(innerWidth + HORIZONTAL_INSET).topbar;
+  const policy = framePolicy(innerWidth + HORIZONTAL_INSET);
   const bar = tabBarTheme(theme);
-  const brand = theme.bold(theme.fg("accent", "omp")) + theme.fg("dim", "/") + theme.bold(theme.fg("accent", "stats"));
+  const screen = opts.screenLabel.trim() || "Stats";
+  const label = policy.navMode === "toolbarRoute" ? `${theme.fg("dim", "<")} ${theme.bold(theme.fg("text", screen))} ${theme.fg("dim", ">")}` : theme.bold(theme.fg("text", screen));
   const chip = opts.chip === "" ? "" : theme.bg(SELECTION_BG.band, ` ${opts.chip} `);
+  const freshness = opts.freshness === "" ? "" : theme.fg("dim", opts.freshness);
+  const progress = opts.progress === "" ? "" : theme.fg("dim", opts.progress);
   const tray = (ids) => ids.map((id) => {
     const cell = ` ${rangeMeta(id).label} `;
     return id === opts.range ? bar.activeTab(cell) : bar.inactiveTab(cell);
   }).join("");
   const fullTray = tray(RANGES);
   const oneTray = tray([opts.range]);
+  const layouts = policy.topbar === "full" ? [
+    [label, chip, freshness, progress, fullTray],
+    [label, chip, freshness, fullTray],
+    [label, chip, progress, fullTray],
+    [label, chip, fullTray],
+    [label, freshness, progress, fullTray],
+    [label, progress, fullTray],
+    [label, fullTray],
+    [label, oneTray]
+  ] : policy.topbar === "condensed" ? [
+    [label, chip, progress, fullTray],
+    [label, chip, fullTray],
+    [label, progress, fullTray],
+    [label, fullTray],
+    [label, oneTray]
+  ] : [
+    [label, progress, oneTray],
+    [label, oneTray]
+  ];
   const cluster = (parts) => parts.filter((part) => part !== "").join(TOPBAR_CLUSTER_GAP);
-  const layouts = mode === "full" ? [[chip, opts.freshness, fullTray], [chip, fullTray], [chip, oneTray], [fullTray], [oneTray]] : mode === "condensed" ? [[opts.freshness, fullTray], [fullTray], [oneTray]] : [[oneTray]];
-  const brandWidth = visibleWidth9(brand);
+  const labelWidth = visibleWidth10(label);
   for (const layout of layouts) {
-    const actions = cluster(layout);
-    const actionsWidth = visibleWidth9(actions);
-    if (brandWidth + TOPBAR_SPACER_MIN + actionsWidth > innerWidth)
+    const actions = cluster(layout.slice(1));
+    const actionsWidth = visibleWidth10(actions);
+    if (labelWidth + TOPBAR_SPACER_MIN + actionsWidth > innerWidth)
       continue;
-    const gap = innerWidth - brandWidth - actionsWidth;
-    return `${brand}${" ".repeat(gap)}${actions}`;
+    const gap = innerWidth - labelWidth - actionsWidth;
+    return `${label}${" ".repeat(gap)}${actions}`;
   }
-  const last = `${brand}${" ".repeat(TOPBAR_SPACER_MIN)}${oneTray}`;
-  return visibleWidth9(last) > innerWidth ? truncateToWidth12(last, innerWidth) : last;
+  const last = `${label}${" ".repeat(TOPBAR_SPACER_MIN)}${oneTray}`;
+  return visibleWidth10(last) > innerWidth ? truncateToWidth12(last, innerWidth) : last;
 }
 
 // src/tui/frame.ts
 var MIN_PANEL_ROWS = PANEL_CHROME_ROWS + 1;
-function bodyRows(height, tabRows) {
-  const safe = Number.isFinite(height) ? Math.trunc(height) : MIN_PANEL_ROWS;
-  const frame = Math.max(MIN_PANEL_ROWS, safe);
-  return Math.max(1, frame - PANEL_CHROME_ROWS - Math.max(0, tabRows - 1));
+function integerOr(value, fallback) {
+  return Number.isFinite(value) ? Math.trunc(value) : fallback;
+}
+function rowsForFrame(rows, headerRows) {
+  const totalRows = Math.max(MIN_PANEL_ROWS, integerOr(rows, MIN_PANEL_ROWS));
+  const headers = Math.max(0, integerOr(headerRows, 1));
+  return Math.max(1, totalRows - (PANEL_CHROME_ROWS - 1) - headers);
+}
+function budgetFrame(width, rows, headerRows, preset) {
+  const safeWidth = Math.max(0, integerOr(width, 0));
+  const headers = Math.max(0, integerOr(headerRows, 1));
+  const sidebarCols = framePolicy(safeWidth).navMode === "sidebar" ? sidebarWidth(preset) + SIDEBAR_ZIP_PREFIX : 0;
+  return {
+    topbarRows: headers,
+    stripRows: 0,
+    bodyRows: rowsForFrame(rows, headers),
+    bodyInnerWidth: Math.max(0, safeWidth - HORIZONTAL_INSET - sidebarCols)
+  };
 }
 
 // src/tui/footer.ts
 import { formatKeyHints } from "@oh-my-pi/pi-coding-agent";
-import { visibleWidth as visibleWidth10 } from "@oh-my-pi/pi-tui";
+import { visibleWidth as visibleWidth11 } from "@oh-my-pi/pi-tui";
 function hintsFor(mode, ownsDigits = false) {
   const scroll = { keys: ["up", "down", "home", "end"], label: "scroll" };
   const screen = { keys: ["[", "]", "ctrl+p", "ctrl+n"], label: "screen" };
@@ -6711,14 +6985,14 @@ function footerHints(hints, theme, width = Number.POSITIVE_INFINITY) {
     candidates.push([tail]);
   for (const parts of candidates) {
     const row = theme.fg("dim", parts.map((hint) => `${formatKeyHints(hint.keys)} ${hint.label}`).join(separator));
-    if (visibleWidth10(row) <= width)
+    if (visibleWidth11(row) <= width)
       return [row];
   }
   return [];
 }
 
 // src/tui/mouse.ts
-import { visibleWidth as visibleWidth11 } from "@oh-my-pi/pi-tui";
+import { visibleWidth as visibleWidth12 } from "@oh-my-pi/pi-tui";
 var NO_HIT = { type: "none" };
 function sidebarHit(navRow, groups = NAV_GROUPS) {
   if (!Number.isInteger(navRow) || navRow < 0)
@@ -6743,8 +7017,8 @@ function rangeSpans(line) {
     const found = line.lastIndexOf(cell);
     if (found === -1)
       continue;
-    const start = visibleWidth11(line.slice(0, found));
-    spans.push({ id, start, end: start + visibleWidth11(cell) });
+    const start = visibleWidth12(line.slice(0, found));
+    spans.push({ id, start, end: start + visibleWidth12(cell) });
   }
   return spans;
 }
@@ -6765,16 +7039,16 @@ function hitTest(frame, row, col, hitSidebar = sidebarHit) {
   if (contentRow < frame.topbarRows) {
     if (contentRow !== 0)
       return NO_HIT;
+    for (const span of frame.routeSpans) {
+      if (contentCol >= span.start && contentCol < span.end) {
+        return { type: "screen", id: span.id, via: "route" };
+      }
+    }
     const id = rangeHit(frame.topbar, contentCol);
     return id === null ? NO_HIT : { type: "range", id };
   }
-  const stripLine = contentRow - frame.topbarRows;
-  if (stripLine < frame.stripRows) {
-    const id = frame.tabAt(stripLine, contentCol);
-    return id === undefined ? NO_HIT : { type: "screen", id, via: "strip" };
-  }
-  const bodyRow = contentRow - frame.topbarRows - frame.stripRows;
-  if (bodyRow < 0)
+  const bodyRow = contentRow - frame.topbarRows;
+  if (bodyRow < 0 || bodyRow >= frame.bodyRows)
     return NO_HIT;
   if (frame.sidebarWidth > 0 && contentCol < frame.sidebarWidth) {
     if (bodyRow >= frame.sidebarRows)
@@ -6792,6 +7066,371 @@ function hitTest(frame, row, col, hitSidebar = sidebarHit) {
   return NO_HIT;
 }
 
+// test/fixtures/panel.ts
+var FIXTURE_NOW = Date.UTC(2026, 6, 15, 12, 0, 0);
+var DAY2 = 24 * 60 * 60 * 1000;
+var HOUR2 = 60 * 60 * 1000;
+var dayStart = (daysAgo) => Math.floor((FIXTURE_NOW - daysAgo * DAY2) / DAY2) * DAY2;
+var hourStart = (hoursAgo) => Math.floor((FIXTURE_NOW - hoursAgo * HOUR2) / HOUR2) * HOUR2;
+var AGGREGATE = {
+  totalRequests: 65460,
+  successfulRequests: 64145,
+  failedRequests: 1315,
+  errorRate: 0.0201,
+  totalInputTokens: 47100000,
+  totalOutputTokens: 9400000,
+  totalCacheReadTokens: 1204000000,
+  totalCacheWriteTokens: 12800000,
+  cacheRate: 0.9624,
+  cacheSavings: 0.8142,
+  totalCost: 112.36,
+  unpricedRequests: 4197,
+  totalPremiumRequests: 1.5,
+  avgDuration: 12300,
+  avgTtft: 430,
+  avgTokensPerSecond: 61.2,
+  firstTimestamp: FIXTURE_NOW - 30 * DAY2,
+  lastTimestamp: FIXTURE_NOW
+};
+function modelRow(over) {
+  return { ...AGGREGATE, ...over };
+}
+var BY_MODEL = [
+  modelRow({
+    model: "gpt-5.6-terra",
+    provider: "openrouter",
+    totalRequests: 1280,
+    failedRequests: 4,
+    errorRate: 0.0031,
+    totalCost: 935.72,
+    unpricedRequests: 0,
+    totalCacheReadTokens: 512000000,
+    avgDuration: 9800,
+    cacheRate: 0.961
+  }),
+  modelRow({
+    model: "gemini-3.7-flash-high",
+    provider: "google-antigravity",
+    totalRequests: 4197,
+    failedRequests: 0,
+    errorRate: 0,
+    totalCost: 0,
+    unpricedRequests: 4197,
+    totalCacheReadTokens: 571773459,
+    avgDuration: 14200,
+    cacheRate: 0.955
+  }),
+  modelRow({
+    model: "space-bunny-free",
+    provider: "opencode-go",
+    totalRequests: 36616,
+    failedRequests: 88,
+    errorRate: 0.0024,
+    totalCost: 0,
+    unpricedRequests: 0,
+    totalCacheReadTokens: 120226541,
+    avgDuration: 18600,
+    cacheRate: 0.981
+  })
+];
+var MODEL_SERIES = BY_MODEL.flatMap((m, index) => [0, 1, 2, 3].map((daysAgo) => ({
+  timestamp: dayStart(daysAgo),
+  model: m.model,
+  provider: m.provider,
+  requests: Math.max(1, Math.round(m.totalRequests / 40) - index - daysAgo)
+})));
+var MODEL_PERFORMANCE_SERIES = MODEL_SERIES.map((p) => ({
+  ...p,
+  avgTtft: 430 + p.model.length % 7 * 10,
+  avgTokensPerSecond: 61.2
+}));
+function costPoint(timestamp, model, cost, tokens, unpricedRequests = 0) {
+  return {
+    timestamp,
+    model,
+    provider: "openrouter",
+    cost,
+    unpricedRequests,
+    costInput: cost * 0.1,
+    costOutput: cost * 0.05,
+    costCacheRead: cost * 0.8,
+    costCacheWrite: cost * 0.05,
+    requests: Math.max(1, Math.round(tokens / 1000))
+  };
+}
+var COST_SERIES = [
+  costPoint(dayStart(20), "space-bunny-free", 0.01, 9000000),
+  costPoint(dayStart(0), "gpt-5.6-terra", 42, 1000),
+  costPoint(dayStart(0), "space-bunny-free", 0.02, 4000000),
+  costPoint(dayStart(0), "gemini-3.7-flash-high", 0, 571773459, 4197)
+];
+var TIME_SERIES = [
+  ...Array.from({ length: 29 }, (_, index) => {
+    const requests = 90 + index * 37 % 240;
+    return {
+      timestamp: dayStart(29 - index) + 12 * HOUR2,
+      requests,
+      errors: 1 + index * 7 % 9,
+      tokens: requests * 4000,
+      cost: Math.round(requests * 0.03 * 100) / 100
+    };
+  }),
+  ...Array.from({ length: 24 }, (_, index) => {
+    const requests = 420 - index * 12;
+    return {
+      timestamp: hourStart(23 - index),
+      requests,
+      errors: [4, 2, 9, 1][index % 4],
+      tokens: requests * 90000,
+      cost: Math.round(requests * 0.09 * 100) / 100
+    };
+  })
+];
+var FOLDERS = [
+  {
+    ...AGGREGATE,
+    folder: "/Users/yuzu/Documents/Projects/omp-stats-tui",
+    totalRequests: 31002,
+    totalCost: 74.1,
+    unpricedRequests: 0,
+    lastTimestamp: FIXTURE_NOW - HOUR2
+  },
+  {
+    ...AGGREGATE,
+    folder: "/Users/yuzu/Documents/Projects/other",
+    totalRequests: 18458,
+    totalCost: 31.26,
+    unpricedRequests: 0,
+    lastTimestamp: FIXTURE_NOW - 9 * HOUR2
+  },
+  {
+    ...AGGREGATE,
+    folder: "scratch",
+    totalRequests: 16000,
+    totalCost: 7,
+    unpricedRequests: 4197,
+    lastTimestamp: FIXTURE_NOW - 30 * HOUR2
+  }
+];
+function messageRow(over = {}) {
+  const { usage, ...rest } = over;
+  const cost = usage?.cost ?? {};
+  return {
+    id: 1,
+    sessionFile: "/Users/yuzu/.omp/sessions/a.jsonl",
+    entryId: "e1",
+    folder: "/Users/yuzu/Documents/Projects/omp-stats-tui",
+    model: "gpt-5.6-terra",
+    provider: "openrouter",
+    api: "openai-completions",
+    timestamp: FIXTURE_NOW - 4 * 60000,
+    duration: 12300,
+    ttft: 430,
+    stopReason: "stop",
+    errorMessage: null,
+    agentType: "main",
+    costUnpriced: false,
+    ...rest,
+    usage: {
+      input: 47100,
+      output: 9400,
+      cacheRead: 1204000,
+      cacheWrite: 12800,
+      totalTokens: 1273300,
+      premiumRequests: 0,
+      ...usage,
+      cost: {
+        input: 0.04,
+        output: 0.02,
+        cacheRead: 0.34,
+        cacheWrite: 0.02,
+        total: cost.total ?? 0.42,
+        ...cost
+      }
+    }
+  };
+}
+var RECENT = [
+  messageRow({ id: 1 }),
+  messageRow({
+    id: 2,
+    timestamp: FIXTURE_NOW - 40 * 60000,
+    model: "space-bunny-free",
+    provider: "opencode-go",
+    folder: "scratch",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 1000,
+      cacheWrite: 0,
+      totalTokens: 1000,
+      cost: { total: 0 }
+    },
+    costUnpriced: true
+  }),
+  messageRow({
+    id: 3,
+    timestamp: FIXTURE_NOW - 3 * HOUR2,
+    provider: "google-antigravity",
+    stopReason: "error",
+    errorMessage: "429 Too Many Requests",
+    costUnpriced: true,
+    usage: { cost: { total: 0 } }
+  })
+];
+var ERRORS = RECENT.filter((r) => r.errorMessage !== null);
+var TOOLS = {
+  byTool: [
+    {
+      tool: "read",
+      calls: 4021,
+      errors: 3,
+      argsChars: 88120,
+      resultChars: 412880,
+      totalTokensShare: 90100000,
+      outputTokensShare: 12400000,
+      costShare: 18.4,
+      unpricedRequestsShare: 0,
+      lastUsed: FIXTURE_NOW - 5 * 60000
+    },
+    {
+      tool: "bash",
+      calls: 1884,
+      errors: 41,
+      argsChars: 21400,
+      resultChars: 96220,
+      totalTokensShare: 30400000,
+      outputTokensShare: 4100000,
+      costShare: 6.9,
+      unpricedRequestsShare: 0,
+      lastUsed: FIXTURE_NOW - 2 * 60000
+    },
+    {
+      tool: "grep",
+      calls: 610,
+      errors: 0,
+      argsChars: 9100,
+      resultChars: 51800,
+      totalTokensShare: 8900000,
+      outputTokensShare: 1200000,
+      costShare: 1.1,
+      unpricedRequestsShare: 0,
+      lastUsed: FIXTURE_NOW - HOUR2
+    }
+  ],
+  byToolModel: [
+    {
+      tool: "read",
+      model: "gpt-5.6-terra",
+      provider: "openrouter",
+      calls: 2400,
+      errors: 1,
+      argsChars: 50000,
+      resultChars: 240000,
+      totalTokensShare: 55000000,
+      outputTokensShare: 7500000,
+      costShare: 12.2,
+      unpricedRequestsShare: 0,
+      lastUsed: FIXTURE_NOW - 5 * 60000
+    },
+    {
+      tool: "read",
+      model: "space-bunny-free",
+      provider: "opencode-go",
+      calls: 1621,
+      errors: 2,
+      argsChars: 38120,
+      resultChars: 172880,
+      totalTokensShare: 35100000,
+      outputTokensShare: 4900000,
+      costShare: 6.2,
+      unpricedRequestsShare: 0,
+      lastUsed: FIXTURE_NOW - 5 * 60000
+    }
+  ],
+  series: [
+    { timestamp: hourStart(23), tool: "read", calls: 120, errors: 0 },
+    { timestamp: hourStart(12), tool: "read", calls: 96, errors: 1 },
+    { timestamp: hourStart(23), tool: "bash", calls: 41, errors: 2 },
+    { timestamp: hourStart(12), tool: "bash", calls: 33, errors: 1 },
+    { timestamp: hourStart(23), tool: "grep", calls: 12, errors: 0 },
+    { timestamp: hourStart(12), tool: "grep", calls: 9, errors: 0 }
+  ]
+};
+var PROVIDERS = {
+  providers: [
+    {
+      provider: "openrouter",
+      totalRequests: 1280,
+      failedRequests: 4,
+      models: 1,
+      totalInputTokens: 2100000,
+      totalOutputTokens: 400000,
+      totalCacheReadTokens: 51000000,
+      totalCacheWriteTokens: 500000,
+      totalTokens: 54000000,
+      totalCost: 935.72,
+      unpricedRequests: 0,
+      totalPremiumRequests: 0,
+      avgTokensPerSecond: 61.2
+    },
+    {
+      provider: "google-antigravity",
+      totalRequests: 4197,
+      failedRequests: 0,
+      models: 1,
+      totalInputTokens: 8000000,
+      totalOutputTokens: 1500000,
+      totalCacheReadTokens: 190000000,
+      totalCacheWriteTokens: 2000000,
+      totalTokens: 201500000,
+      totalCost: 0,
+      unpricedRequests: 4197,
+      totalPremiumRequests: 0,
+      avgTokensPerSecond: null
+    },
+    {
+      provider: "opencode-go",
+      totalRequests: 36616,
+      failedRequests: 88,
+      models: 1,
+      totalInputTokens: 37000000,
+      totalOutputTokens: 7500000,
+      totalCacheReadTokens: 963000000,
+      totalCacheWriteTokens: 10300000,
+      totalTokens: 1017800000,
+      totalCost: 0,
+      unpricedRequests: 0,
+      totalPremiumRequests: 1.5,
+      avgTokensPerSecond: 58.4
+    }
+  ],
+  hourly: [
+    { provider: "openrouter", hour: 9, totalTokens: 9400000, outputTokens: 800000, requests: 210 },
+    { provider: "opencode-go", hour: 14, totalTokens: 88000000, outputTokens: 7000000, requests: 3100 }
+  ],
+  series: [
+    { timestamp: dayStart(1), provider: "openrouter", totalTokens: 20000000, cost: 310.4, unpricedRequests: 0, requests: 420 },
+    { timestamp: dayStart(0), provider: "opencode-go", totalTokens: 300000000, cost: 0, unpricedRequests: 0, requests: 9100 }
+  ],
+  insights: [
+    { provider: "openrouter", windowKey: "day", windowLabel: "Daily", accounts: 2, cycles: 12, fractionConsumed: 0.42, estTokensPerWindow: 48000000, peakConcurrentFraction: 1.1, idealAccounts: 2, exhaustedEvents: 0 },
+    { provider: "opencode-go", windowKey: "week", windowLabel: "Weekly", accounts: 1, cycles: 3, fractionConsumed: 0.08, estTokensPerWindow: 900000000, peakConcurrentFraction: 0.31, idealAccounts: 1, exhaustedEvents: 0 }
+  ]
+};
+var DAILY_ACTIVITY = Array.from({ length: 40 }, (_, i) => {
+  const daysAgo = 39 - i;
+  const busy = daysAgo === 12;
+  const requests = busy ? 2004 : i % 7 + 1;
+  return {
+    day: new Date(FIXTURE_NOW - daysAgo * DAY2).toISOString().slice(0, 10),
+    cost: busy ? 611.4 : Math.round(i % 7 * 3.11 * 100) / 100,
+    requests,
+    totalTokens: i % 7 * 1200000,
+    unpricedRequests: i % 7 === 0 ? requests : 0
+  };
+});
+
 // src/tui/panel.ts
 var STATS_OVERLAY_OPTIONS = {
   anchor: "top-left",
@@ -6800,8 +7439,6 @@ var STATS_OVERLAY_OPTIONS = {
   margin: 0,
   fullscreen: true
 };
-var MIN_PANEL_ROWS2 = MIN_PANEL_ROWS;
-var MIN_SIDEBAR_ROWS = 20;
 var EXACT_DIRTY_LIMIT = 96;
 var NO_ROWS = [];
 var SELECTABLE_SCREENS = SCREENS;
@@ -6868,7 +7505,6 @@ class StatsPanel {
   #tui;
   #theme;
   #panel;
-  #tabBar;
   #header;
   #body;
   #footer;
@@ -6892,6 +7528,7 @@ class StatsPanel {
       jumpArmedAt: 0,
       scroll: 0,
       maxScroll: 0,
+      viewportRows: 0,
       data: null,
       error: null,
       identity: "",
@@ -6903,6 +7540,7 @@ class StatsPanel {
       syncEvent: null,
       lastSyncedAt: null,
       syncError: null,
+      readError: null,
       doneCalls: 0,
       hoveredSidebarId: null,
       hoveredStripId: null,
@@ -6914,8 +7552,6 @@ class StatsPanel {
     };
     STATE.set(this, this.#state);
     this.#panel = new OverlayPanel("Stats", "omp.overlay.stats");
-    this.#tabBar = new TabBar("", [], tabBarTheme(this.#theme));
-    this.#tabBar.showHint = false;
     this.#header = new PanelRows;
     this.#header.setHeight(1);
     this.#body = new PanelRows;
@@ -6954,7 +7590,13 @@ class StatsPanel {
     if (feature)
       return feature;
     const ctx = this.#featureContext ??= {
-      reader: this.#reads,
+      reader: {
+        api: (path, params, options) => this.#reads.api(path, params, options),
+        fetch: async (needs, range) => {
+          const fetched = await this.#reads.fetch(needs, range);
+          return "data" in fetched ? fetched : { data: fetched, errors: {} };
+        }
+      },
       theme: this.#theme,
       changed: () => {
         this.#featureRevision++;
@@ -7011,7 +7653,7 @@ class StatsPanel {
         if (this.#superseded(generation))
           return;
         const needs = this.#needs();
-        const data = await this.#reads.fetch(needs, range, (stage) => {
+        const fetched = await this.#reads.fetch(needs, range, (stage) => {
           if (this.#superseded(generation))
             return;
           state.readStage = stage;
@@ -7019,8 +7661,15 @@ class StatsPanel {
         });
         if (this.#superseded(generation))
           return;
-        state.data = data;
-        state.error = null;
+        const settlement = "data" in fetched ? fetched : { data: fetched, errors: {}, freshness: fetched.freshness };
+        state.data = {
+          ...settlement.data,
+          ...settlement.freshness ? { freshness: settlement.freshness } : {}
+        };
+        const failures = Object.entries(settlement.errors ?? {}).filter(([, message]) => typeof message === "string" && message.length > 0).map(([need, message]) => `${need}: ${message}`);
+        const settledData = Object.keys(settlement.data ?? {}).length > 0;
+        state.readError = settledData && failures.length > 0 ? failures.join("; ") : null;
+        state.error = !settledData && failures.length > 0 ? failures.join("; ") : null;
       } catch (error) {
         if (this.#superseded(generation))
           return;
@@ -7084,6 +7733,7 @@ class StatsPanel {
       state.generation,
       state.error ?? "",
       state.syncError ?? "",
+      state.readError ?? "",
       state.readStage,
       event === null ? "" : `${event.type} ${event.phase} ${event.current} ${event.total}`,
       state.lastSyncedAt ?? -1,
@@ -7096,16 +7746,22 @@ class StatsPanel {
     const dirty = this.#state.data?.rollupStatus?.dirtyHours ?? 0;
     return dirty > 0 ? this.#theme.fg(dirty > EXACT_DIRTY_LIMIT ? "warning" : "dim", `${dirty} dirty ${dirty === 1 ? "hour" : "hours"}`) : "";
   }
-  #refreshChrome(frame, width) {
-    const innerWidth = Math.max(1, width - 4);
+  #toolbar(innerWidth) {
+    const state = this.#state;
     const chip = this.#phase() === "error" ? this.#theme.fg("error", `${this.#theme.symbol("status.error")} Read failed`) : chipFor(this.#theme, this.#chromeSync());
-    const top = topbar(this.#theme, { range: this.#state.range, chip, freshness: this.#freshness(), innerWidth });
-    const progress = progressLineFor(this.#state.syncEvent, innerWidth);
-    const topLines = progress === "" ? [top] : [top, progress];
-    const strip = frame.headerLines.slice(frame.topbarRows);
-    frame.topbar = top;
-    frame.topbarRows = topLines.length;
-    frame.headerLines = [...topLines, ...strip];
+    const progress = progressLineFor(state.syncEvent, innerWidth);
+    const top = topbar(this.#theme, {
+      screenLabel: screenById(state.screenId).label,
+      range: state.range,
+      chip,
+      freshness: this.#freshness(),
+      progress,
+      innerWidth
+    });
+    return state.hoveredStripId === null ? top : paintRouteHover(this.#theme, top, state.screenId);
+  }
+  #refreshChrome(frame, width) {
+    frame.topbar = this.#toolbar(Math.max(1, width - HORIZONTAL_INSET));
   }
   #frame(width, rows, preset) {
     const state = this.#state;
@@ -7118,30 +7774,12 @@ class StatsPanel {
       this.#refreshChrome(cached, width);
       return cached;
     }
+    const budget = budgetFrame(width, rows, 1, preset);
+    const top = this.#toolbar(Math.max(1, width - HORIZONTAL_INSET));
     const policy = framePolicy(width);
-    const innerWidth = Math.max(1, width - 4);
-    const freshness = this.#freshness();
-    const chip = this.#phase() === "error" ? this.#theme.fg("error", `${this.#theme.symbol("status.error")} Read failed`) : chipFor(this.#theme, this.#chromeSync());
-    const top = topbar(this.#theme, { range: state.range, chip, freshness, innerWidth });
-    const progress = progressLineFor(state.syncEvent, innerWidth);
-    const topLines = progress === "" ? [top] : [top, progress];
-    const column = policy.sidebar === "full" && rows - (topLines.length - 1) >= MIN_SIDEBAR_ROWS;
-    let strip = NO_ROWS;
-    if (!column && rows > MIN_PANEL_ROWS2) {
-      const tabs = buildTabs(preset, this.#theme, state.screenId);
-      const stripWidth = Math.max(1, width - TAB_BAR_INDENT);
-      const count = stripWidth < 16 ? 1 : stripWidth < 32 ? 3 : stripWidth < 60 ? 5 : tabs.length;
-      const active = tabs.findIndex((tab) => tab.id === state.screenId);
-      const start = Math.max(0, Math.min(tabs.length - count, active - Math.floor(count / 2)));
-      this.#tabBar.setTabs(count === tabs.length ? tabs : tabs.slice(start, start + count), state.screenId);
-      strip = this.#tabBar.render(stripWidth);
-    }
-    const nav = column ? sidebar(this.#theme, preset, state.screenId, state.hoveredSidebarId) : null;
+    const nav = policy.navMode === "sidebar" ? sidebar(this.#theme, preset, state.screenId, state.hoveredSidebarId) : null;
     const sidebarWidth = nav?.width ?? 0;
-    const headerLines = [...topLines, ...strip];
-    const body = bodyRows(rows, headerLines.length);
-    const sidebarCols = column ? sidebarWidth + 3 : 0;
-    const plan = { ...planLayout(Math.max(MIN_USABLE_WIDTH, width - sidebarCols), rows, preset), bodyRows: body };
+    const plan = planLayout(budget.bodyInnerWidth + HORIZONTAL_INSET, rows, preset, budget.bodyRows);
     const source = this.#bodyLines(plan, preset);
     state.source = source;
     const frame = {
@@ -7149,9 +7787,7 @@ class StatsPanel {
       theme: this.#theme,
       data: state.data,
       liveStatus: this.#liveStatus,
-      headerLines,
-      topbarRows: topLines.length,
-      stripRows: strip.length,
+      budget,
       topbar: top,
       nav,
       sidebarWidth,
@@ -7174,30 +7810,31 @@ class StatsPanel {
     }
     const preset = this.#theme.getSymbolPreset();
     const frame = this.#frame(width, rows, preset);
-    const { plan, nav } = frame;
+    const { plan, nav, budget } = frame;
     state.maxScroll = Math.max(0, state.source.length - plan.bodyRows);
+    state.viewportRows = plan.bodyRows;
     state.scroll = Math.max(0, Math.min(state.scroll, state.maxScroll));
-    const tabBar = this.#tabBar;
+    const topbarLine = stripAnsi(frame.topbar);
     state.mouse = {
-      topbarRows: frame.topbarRows,
-      stripRows: frame.stripRows,
+      topbarRows: budget.topbarRows,
+      stripRows: budget.stripRows,
       sidebarWidth: frame.sidebarWidth,
-      sidebarRows: nav === null ? 0 : nav.lines.length,
-      topbar: stripAnsi(frame.topbar),
-      tabAt: (line, col) => tabBar.tabAt(line, col)?.id,
+      sidebarRows: nav === null ? 0 : Math.min(nav.lines.length, budget.bodyRows),
+      bodyRows: budget.bodyRows,
+      topbar: topbarLine,
+      routeSpans: routeSpans(topbarLine, state.screenId),
       bodyScroll: state.scroll,
       bodyHits: state.bodyHits
     };
-    state.title = `Stats \xB7 ${screenById(state.screenId).label}`;
+    state.title = "Stats";
     this.#panel.title = state.title;
-    this.#header.setLines(frame.headerLines);
-    this.#header.setHeight(frame.headerLines.length);
+    this.#header.setLines([frame.topbar]);
+    this.#header.setHeight(budget.topbarRows);
     const visible = state.source.slice(state.scroll, state.scroll + plan.bodyRows);
-    this.#body.setLines(nav === null ? visible : zipSidebar(this.#theme, visible, nav.lines, frame.sidebarWidth, preset));
-    const navHeight = nav === null ? 0 : nav.lines.length;
-    const bodyHeight = Math.max(1, rows - PANEL_CHROME_ROWS - (frame.headerLines.length - 1));
-    this.#body.setHeight(Math.min(Math.max(plan.bodyRows, navHeight), bodyHeight));
-    this.#footer.setLines([this.#footerLine(plan, Math.max(1, width - 4))]);
+    const navLines = nav === null ? NO_ROWS : nav.lines.slice(0, budget.bodyRows);
+    this.#body.setLines(nav === null ? visible : zipSidebar(this.#theme, visible, navLines, frame.sidebarWidth, preset));
+    this.#body.setHeight(budget.bodyRows);
+    this.#footer.setLines([this.#footerLine(plan, Math.max(1, width - HORIZONTAL_INSET))]);
     return this.#panel.render(width);
   }
   #phase() {
@@ -7219,6 +7856,8 @@ class StatsPanel {
     const notices = [];
     if (state.syncError)
       notices.push(this.#theme.fg("warning", `Stats service failed; retained cached data. ${stripTerminalSequences2(state.syncError)}`));
+    if (state.readError)
+      notices.push(this.#theme.fg("warning", `Read failed; retained cached data. ${stripTerminalSequences2(state.readError)}`));
     if (data.freshness?.pendingSessions) {
       notices.push(this.#theme.fg("warning", `${data.freshness.pendingSessions} transcript files have un-ingested changes. Press s to sync.`));
     }
@@ -7252,11 +7891,11 @@ class StatsPanel {
       { keys: ["ctrl+p", "ctrl+n"], label: "screen" }
     ] : hintsFor(mode, this.#indexOf(state.screenId) >= DIGITS.length);
     const scrollPosition = state.maxScroll > 0 ? `${state.scroll + 1}\u2013${Math.min(state.source.length, state.scroll + plan.bodyRows)}/${state.source.length}` : "";
-    const position = visibleWidth12(scrollPosition) + 12 <= width ? scrollPosition : "";
-    const reserve = position ? visibleWidth12(position) + 2 : 0;
+    const position = visibleWidth13(scrollPosition) + 12 <= width ? scrollPosition : "";
+    const reserve = position ? visibleWidth13(position) + 2 : 0;
     const hintWidth = Math.max(0, width - reserve);
     const [row = ""] = footerHints(hints, this.#theme, hintWidth);
-    return position ? row + " ".repeat(Math.max(2, width - visibleWidth12(row) - visibleWidth12(position))) + this.#theme.fg("dim", position) : row;
+    return position ? row + " ".repeat(Math.max(2, width - visibleWidth13(row) - visibleWidth13(position))) + this.#theme.fg("dim", position) : row;
   }
   handleInput(data) {
     const state = this.#state;
@@ -7293,7 +7932,7 @@ class StatsPanel {
         this.#finish();
         return;
       case "scroll":
-        this.#scrollBy(action.viewport ? action.viewport * Math.max(1, state.maxScroll) : action.rows ?? 0);
+        this.#scrollBy(action.viewport ? action.viewport * Math.max(1, state.viewportRows) : action.rows ?? 0);
         return;
       case "scrollTo":
         state.scroll = action.edge === "top" ? 0 : state.maxScroll;
@@ -7345,12 +7984,10 @@ class StatsPanel {
       return true;
     if (event.motion) {
       const hit = hitTest(frame, event.row, event.col);
-      if (hit.type === "screen" && hit.via === "strip") {
-        this.#tabBar.setHoverTab(hit.id);
+      if (hit.type === "screen" && hit.via === "route") {
         state.hoveredStripId = hit.id;
         state.hoveredSidebarId = null;
       } else {
-        this.#tabBar.setHoverTab(null);
         state.hoveredStripId = null;
         state.hoveredSidebarId = hit.type === "screen" && hit.via === "sidebar" ? hit.id : null;
       }
@@ -7385,7 +8022,6 @@ class StatsPanel {
       return;
     if (state.screenId === "traces" && screen.id !== "traces")
       this.#traceOrigin = undefined;
-    this.#tabBar.setHoverTab(null);
     state.hoveredStripId = null;
     state.hoveredSidebarId = null;
     state.screenId = screen.id;

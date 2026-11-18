@@ -1,9 +1,9 @@
-import { getKeybindings, matchesKey, routeSgrMouseInput, TabBar, type Component, type SgrMouseEvent, type TUI } from "@oh-my-pi/pi-tui";
+import { getKeybindings, matchesKey, routeSgrMouseInput, type Component, type SgrMouseEvent, type TUI } from "@oh-my-pi/pi-tui";
 import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { ensureThemeSync, theme as activeTheme, type Theme } from "@oh-my-pi/pi-tui/theme";
 
-import type { DataNeed, PanelData } from "../data/api";
+import type { DataNeed, FetchSettlement, PanelData } from "../data/api";
 import { StatsReadClient } from "../data/client";
 import { copyToClipboard } from "@oh-my-pi/pi-natives";
 import { createCoreFeature } from "./features/core";
@@ -18,8 +18,8 @@ import { DEFAULT_RANGE, nextRange, RANGES, type Range } from "../data/ranges";
 import type { SyncEvent } from "../sync/client";
 import type { SymbolPreset } from "./glyphs";
 import { statsIcon } from "./icons";
-// `MIN_USABLE_WIDTH` floors the narrowed body plan — see `render`.
-import { MIN_USABLE_WIDTH, planLayout, type LayoutPlan } from "./layout";
+// `HORIZONTAL_INSET` is added back when the budget's body width reaches `planLayout`.
+import { HORIZONTAL_INSET, planLayout, type LayoutPlan } from "./layout";
 import { SCREENS, screenById, type Screen, type ScreenId } from "./screens/types";
 import {
 	JUMP_TIMEOUT_MS,
@@ -33,11 +33,11 @@ import {
 	type Sidebar,
 } from "./chrome";
 import { framePolicy } from "./responsive";
-import { TAB_BAR_INDENT, buildTabs, tabBarTheme } from "./tabs";
-import { MIN_PANEL_ROWS as FRAME_MIN_PANEL_ROWS, bodyRows } from "./frame";
-import { PANEL_CHROME_ROWS } from "./panel-constants";
+import { paintRouteHover, routeSpans } from "./tabs";
+import { budgetFrame, MIN_PANEL_ROWS as FRAME_MIN_PANEL_ROWS, type FrameBudget } from "./frame";
 import { footerHints, hintsFor, type HintMode, type PanelHint } from "./footer";
 import { hitTest, type MouseFrame } from "./mouse";
+import { fixtureReader } from "../../test/fixtures/panel";
 
 /**
  * THE MOUNT SEAM.
@@ -85,13 +85,6 @@ export const STATS_OVERLAY_OPTIONS = {
 
 /** The shortest terminal the panel will paint: the chrome plus one body row. */
 export const MIN_PANEL_ROWS = FRAME_MIN_PANEL_ROWS;
-
-/**
- * Shortest terminal that still gets the full grouped sidebar: its nav rows plus
- * the topbar, the divider, the footer, one body row and the two borders. Below
- * this the sidebar degrades to the tab strip rather than overflowing the frame.
- */
-const MIN_SIDEBAR_ROWS = 20;
 /**
  * Past this many dirty hours the host stops unioning dirty hours with the
  * facts and returns stale rows with holes in them, so the chrome escalates from
@@ -108,13 +101,15 @@ export const EXACT_DIRTY_LIMIT = 96;
 
 const NO_ROWS: readonly string[] = [];
 
+type PanelFetch = PanelData | FetchSettlement;
+
 /**
  * The reads the panel and its features share. Production is one
  * `StatsReadClient` worker child; a test injects a stub so the controller path
  * (`#feature()`) is reachable without spawning the worker.
  */
 export interface PanelReads {
-	fetch(needs: readonly DataNeed[], range: Range, stage?: (stage: ReadStage) => void): Promise<PanelData>;
+	fetch(needs: readonly DataNeed[], range: Range, stage?: (stage: ReadStage) => void): Promise<PanelFetch>;
 	api<T>(path: string, params?: Record<string, string>, options?: StatsApiOptions): Promise<T>;
 	subscribe(status: (status: LiveStatus) => void, error?: (error: Error) => void): () => void;
 	requestSync(): Promise<LiveStatus>;
@@ -325,6 +320,8 @@ interface PanelState {
 	jumpArmedAt: number;
 	scroll: number;
 	maxScroll: number;
+	/** Visible body rows from the last render; page keys scroll by this many. */
+	viewportRows: number;
 	data: PanelData | null;
 	error: string | null;
 	identity: string;
@@ -338,11 +335,13 @@ interface PanelState {
 	/** Wall clock of the last settled sync, for the Live chip's relative age (`s`/`done`). */
 	lastSyncedAt: number | null;
 	syncError: string | null;
+	/** Per-need read failures that sit beside successful data, shown as a notice. */
+	readError: string | null;
 	/** `done()` calls so far. The mount promise must resolve exactly once. */
 	doneCalls: number;
-	/** Screen id under the pointer, or null. Painted with the host's `hoverTab` token. */
+	/** Screen id under the pointer in the sidebar, or null. Painted as a hover band. */
 	hoveredSidebarId: string | null;
-	/** Strip tab under the pointer, mirrored from the TabBar (which keeps its own private). */
+	/** Route-widget span under the pointer, or null. Painted with the host's hover thumb. */
 	hoveredStripId: string | null;
 	/** Last frame's geometry for the mouse router. Null until the first render. */
 	mouse: MouseFrame | null;
@@ -369,9 +368,8 @@ interface FrameCache {
 	theme: Theme;
 	data: PanelData | null;
 	liveStatus: LiveStatus | undefined;
-	headerLines: readonly string[];
-	topbarRows: number;
-	stripRows: number;
+	/** The single row/inner-width budget; no second row formula exists. */
+	budget: FrameBudget;
 	topbar: string;
 	nav: Sidebar | null;
 	sidebarWidth: number;
@@ -391,7 +389,6 @@ export class StatsPanel implements Component {
 	readonly #tui: TUI;
 	#theme: Theme;
 	readonly #panel: OverlayPanel;
-	readonly #tabBar: TabBar;
 	readonly #header: PanelRows;
 	readonly #body: PanelRows;
 	readonly #footer: PanelRows;
@@ -425,6 +422,7 @@ export class StatsPanel implements Component {
 			jumpArmedAt: 0,
 			scroll: 0,
 			maxScroll: 0,
+			viewportRows: 0,
 			data: null,
 			error: null,
 			identity: "",
@@ -436,6 +434,7 @@ export class StatsPanel implements Component {
 			syncEvent: null,
 			lastSyncedAt: null,
 			syncError: null,
+			readError: null,
 			doneCalls: 0,
 			hoveredSidebarId: null,
 			hoveredStripId: null,
@@ -448,10 +447,6 @@ export class StatsPanel implements Component {
 		STATE.set(this, this.#state);
 
 		this.#panel = new OverlayPanel("Stats", "omp.overlay.stats");
-		this.#tabBar = new TabBar("", [], tabBarTheme(this.#theme));
-		// The strip folds its own hints into the footer, so it must not spend a
-		// cell on `(tab to cycle)`.
-		this.#tabBar.showHint = false;
 		this.#header = new PanelRows();
 		this.#header.setHeight(1);
 		this.#body = new PanelRows();
@@ -501,8 +496,16 @@ export class StatsPanel implements Component {
 		const id = this.#state.screenId;
 		let feature = this.#features.get(id);
 		if (feature) return feature;
+		// Features consume the same settlement the panel does, including errors.
 		const ctx = this.#featureContext ??= {
-			reader: this.#reads,
+			reader: {
+				api: (path, params, options) => this.#reads.api(path, params, options),
+				fetch: async (needs, range) => {
+					const fetched = await this.#reads.fetch(needs, range);
+					// Bare data is only for legacy test stubs; worker reads carry errors.
+					return "data" in fetched ? fetched : { data: fetched, errors: {} };
+				},
+			},
 			theme: this.#theme,
 			// `changed` is the feature's own "my state moved" signal, and the body is
 			// a function of that state — so it is the one callback that must also
@@ -563,15 +566,29 @@ export class StatsPanel implements Component {
 					const feature = this.#feature();
 					await feature?.load(range);
 					if (this.#superseded(generation)) return;
-				const needs = this.#needs();
-				const data = await this.#reads.fetch(needs, range, stage => {
+					const needs = this.#needs();
+					const fetched = await this.#reads.fetch(needs, range, stage => {
+						if (this.#superseded(generation)) return;
+						state.readStage = stage;
+						this.#changed();
+					});
 					if (this.#superseded(generation)) return;
-					state.readStage = stage;
-					this.#changed();
-				});
-					if (this.#superseded(generation)) return;
-					state.data = data;
-					state.error = null;
+					const settlement: FetchSettlement = "data" in fetched
+						? fetched : { data: fetched, errors: {}, freshness: fetched.freshness };
+					// A partial answer is still an answer: keep what settled and
+					// name the needs that did not instead of reading them as zero.
+					state.data = {
+						...settlement.data,
+						...(settlement.freshness ? { freshness: settlement.freshness } : {}),
+					};
+					const failures = Object.entries(settlement.errors ?? {})
+						.filter(([, message]) => typeof message === "string" && message.length > 0)
+						.map(([need, message]) => `${need}: ${message}`);
+					const settledData = Object.keys(settlement.data ?? {}).length > 0;
+					// A failed need beside a good one is a scoped notice; with no
+					// data at all the read failure is the whole screen's answer.
+					state.readError = settledData && failures.length > 0 ? failures.join("; ") : null;
+					state.error = !settledData && failures.length > 0 ? failures.join("; ") : null;
 				} catch (error) {
 					if (this.#superseded(generation)) return;
 					// Initialization/read failures are not empty usage.
@@ -649,9 +666,9 @@ export class StatsPanel implements Component {
 	 * - `error`, `syncError`, `syncEvent`, `lastSyncedAt`. The worker subscription
 	 *   writes these and repaints WITHOUT a generation bump; they drive the chip,
 	 *   the progress line and the body's notices.
-	 * - `hoveredSidebarId`, `hoveredStripId`. Mouse motion repaints without a bump,
-	 *   and the sidebar paints the hover band. `hoveredStripId` mirrors the
-	 *   `TabBar`'s own hover, which is the strip's painted state.
+	 * - `hoveredSidebarId`, `hoveredStripId`. Mouse motion repaints without a bump:
+	 *   the sidebar paints its hover band and the route widget its `selectedBg`
+	 *   thumb, both derived from these ids.
 	 * - `#featureRevision`. The body is a function of the FEATURE's own state —
 	 *   focus, search, selection, calendar page, async payload — which no panel
 	 *   field mirrors. The feature context's `changed` is the only signal that state
@@ -679,7 +696,7 @@ export class StatsPanel implements Component {
 		// with it — never the cached body.
 		return [
 			width, rows, state.screenId, state.range, preset, state.generation,
-			state.error ?? "", state.syncError ?? "", state.readStage,
+			state.error ?? "", state.syncError ?? "", state.readError ?? "", state.readStage,
 			event === null ? "" : `${event.type} ${event.phase} ${event.current} ${event.total}`,
 			state.lastSyncedAt ?? -1,
 			state.hoveredSidebarId, state.hoveredStripId,
@@ -704,23 +721,35 @@ export class StatsPanel implements Component {
 	}
 
 	/**
+	 * The one toolbar row. Progress is compacted INTO this row, so a sync can
+	 * never add a header row or change the body budget. A hovered route widget
+	 * gets the host's `selectedBg` thumb without a second route label.
+	 */
+	#toolbar(innerWidth: number): string {
+		const state = this.#state;
+		const chip = this.#phase() === "error"
+			? this.#theme.fg("error", `${this.#theme.symbol("status.error")} Read failed`)
+			: chipFor(this.#theme, this.#chromeSync());
+		const progress = progressLineFor(state.syncEvent, innerWidth);
+		const top = topbar(this.#theme, {
+			screenLabel: screenById(state.screenId).label,
+			range: state.range,
+			chip,
+			freshness: this.#freshness(),
+			progress,
+			innerWidth,
+		});
+		return state.hoveredStripId === null ? top : paintRouteHover(this.#theme, top, state.screenId);
+	}
+
+	/**
 	 * Recompute the clock-reading chrome over a cache hit, without recomposing
 	 * the body. `#frameKey` carries no clock, so a bare minute tick lands here:
 	 * the Live chip's `ago` advances while `source`, `plan` and `nav` stay the
 	 * same reference — and `composes` does not move.
 	 */
 	#refreshChrome(frame: FrameCache, width: number): void {
-		const innerWidth = Math.max(1, width - 4);
-		const chip = this.#phase() === "error"
-			? this.#theme.fg("error", `${this.#theme.symbol("status.error")} Read failed`)
-			: chipFor(this.#theme, this.#chromeSync());
-		const top = topbar(this.#theme, { range: this.#state.range, chip, freshness: this.#freshness(), innerWidth });
-		const progress = progressLineFor(this.#state.syncEvent, innerWidth);
-		const topLines = progress === "" ? [top] : [top, progress];
-		const strip = frame.headerLines.slice(frame.topbarRows);
-		frame.topbar = top;
-		frame.topbarRows = topLines.length;
-		frame.headerLines = [...topLines, ...strip];
+		frame.topbar = this.#toolbar(Math.max(1, width - HORIZONTAL_INSET));
 	}
 
 	/**
@@ -745,90 +774,33 @@ export class StatsPanel implements Component {
 			return cached;
 		}
 
+		// ONE budget, one header row, zero strip rows. `budgetFrame` also removes
+		// the sidebar column from the body's width, so the plan below only needs
+		// to add back the overlay insets it subtracts for itself.
+		const budget = budgetFrame(width, rows, 1, preset);
+		const top = this.#toolbar(Math.max(1, width - HORIZONTAL_INSET));
 		const policy = framePolicy(width);
-		const innerWidth = Math.max(1, width - 4);
-
-		const freshness = this.#freshness();
-
-		// THE TOPBAR is the chrome's first row (web parity: Shell.tsx's fixed
-		// topbar), plus the thin progress line while a sync streams — the bar the
-		// web paints under that topbar. The tab strip is NOT gone: below the
-		// sidebar's width it becomes the nav row (see below).
-		const chip = this.#phase() === "error"
-			? this.#theme.fg("error", `${this.#theme.symbol("status.error")} Read failed`)
-			: chipFor(this.#theme, this.#chromeSync());
-		const top = topbar(this.#theme, { range: state.range, chip, freshness, innerWidth });
-		const progress = progressLineFor(state.syncEvent, innerWidth);
-		const topLines = progress === "" ? [top] : [top, progress];
-
-		// WIDE GETS THE SIDEBAR COLUMN; EVERYTHING NARROWER GETS THE STRIP.
-		// The web's medium band keeps a 64px icon rail beside the panel, but in a
-		// terminal that rail is a whole column of width spent on one row of
-		// glyphs, and the strip ALREADY collapses itself to those same one-cell
-		// `TAB_SHORT` forms when the width runs out (`TabBar`'s collapse order).
-		// One rule, no second nav grammar.
-		//
-		// A terminal shorter than the chrome keeps NO nav row at all: a row the
-		// frame cannot afford pushes the bottom border off the screen, which is
-		// the one failure a `render(width)`-only assertion never catches.
-		// The progress line is chrome too: decide the nav column AFTER it is known,
-		// from the rows left below the topbar. Keeping the column on a 20-row
-		// syncing frame let the nav's own height push the bottom border off screen.
-		const column = policy.sidebar === "full" && rows - (topLines.length - 1) >= MIN_SIDEBAR_ROWS;
-		let strip: readonly string[] = NO_ROWS;
-		if (!column && rows > MIN_PANEL_ROWS) {
-			const tabs = buildTabs(preset, this.#theme, state.screenId);
-			const stripWidth = Math.max(1, width - TAB_BAR_INDENT);
-			// A narrow viewport shows the active route and its neighbours, not two
-			// rows of twelve anonymous icons. Keyboard jumps/cycling retain all routes.
-			const count = stripWidth < 16 ? 1 : stripWidth < 32 ? 3 : stripWidth < 60 ? 5 : tabs.length;
-			const active = tabs.findIndex(tab => tab.id === state.screenId);
-			const start = Math.max(0, Math.min(tabs.length - count, active - Math.floor(count / 2)));
-			this.#tabBar.setTabs(count === tabs.length ? tabs : tabs.slice(start, start + count), state.screenId);
-			strip = this.#tabBar.render(stripWidth);
-		}
-		const nav = column ? sidebar(this.#theme, preset, state.screenId, state.hoveredSidebarId) : null;
+		// The nav is chosen by WIDTH alone. A short terminal can no longer flip
+		// to an extra strip row: that second grammar changed the body height
+		// mid-resize and let a progress line push the bottom border off screen.
+		const nav = policy.navMode === "sidebar"
+			? sidebar(this.#theme, preset, state.screenId, state.hoveredSidebarId)
+			: null;
 		const sidebarWidth = nav?.width ?? 0;
-
-		// `bodyRows` is the same one row arithmetic `/settings` uses: one for the
-		// chrome row that replaced the header, one more per wrap.
-		const headerLines = [...topLines, ...strip];
-		const body = bodyRows(rows, headerLines.length);
-		// THE BODY IS PLANNED AT THE WIDTH IT WILL BE DRAWN IN. When a nav column
-		// exists it is zipped BESIDE the body by `zipSidebar`, whose prefix is
-		// `sidebarWidth + 3` cells — the sidebar, a space, the gutter, a space. The
-		// plan used the overlay's full inner width anyway, so every body row was
-		// drawn wider than the room it had and `PanelRows` truncated the excess:
-		// 21 cells lost off the right of every line, which is where the stray `…`
-		// at the end of the stat rows came from.
-		//
-		// The number is the ZIP'S OWN prefix width, not a guessed gutter — the
-		// plan and the composition have to agree on it, or the same cut returns at
-		// a different size. `band.ts` treats `plan.innerWidth` as a hard ceiling
-		// and responds by DROPPING COLUMNS BY PRIORITY rather than overflowing,
-		// so narrowing here degrades honestly instead of silently clipping.
-		//
-		// `Math.max(MIN_USABLE_WIDTH, …)`: a terminal narrower than the nav would
-		// otherwise plan a negative inner width. Only the BODY plan narrows —
-		// `this.#panel.render(width)` still gets the raw width, and the progress
-		// line above already used the full inner width, because both are chrome
-		// rows and both stay full-bleed.
-		const sidebarCols = column ? sidebarWidth + 3 : 0;
-		const plan = { ...planLayout(Math.max(MIN_USABLE_WIDTH, width - sidebarCols), rows, preset), bodyRows: body };
+		// The plan consumes the budget's body width, NOT the overlay's: when a
+		// nav column exists it is zipped BESIDE the body with a `sidebarWidth + 3`
+		// prefix, and planning at full width silently truncated every body row.
+		const plan = planLayout(budget.bodyInnerWidth + HORIZONTAL_INSET, rows, preset, budget.bodyRows);
 
 		// The BODY is the only thing that scrolls, and it is sliced as plain
-		// full-width lines. The nav column is attached AFTER the slice
-		// (`zipSidebar`), which is what pins it: a frame region recomputed from
-		// width and screen must never be a function of scroll. It used to be
-		// zipped in here, which put the nav inside the scrolled document and made
-		// `Usage` and `Overview` scroll off the top of the frame.
+		// full-width lines. The nav is attached AFTER the slice, so a frame region
+		// recomputed from width and screen is never a function of scroll.
 		const source = this.#bodyLines(plan, preset);
 		state.source = source;
 
 		const frame: FrameCache = {
 			key, theme: this.#theme, data: state.data, liveStatus: this.#liveStatus,
-			headerLines, topbarRows: topLines.length, stripRows: strip.length,
-			topbar: top, nav, sidebarWidth, plan, source,
+			budget, topbar: top, nav, sidebarWidth, plan, source,
 			bodyHits: state.bodyHits, featureHits: state.featureHits,
 		};
 		this.#frameCache = frame;
@@ -847,53 +819,43 @@ export class StatsPanel implements Component {
 		// below receives the preset; none of them branch on it.
 		const preset = this.#theme.getSymbolPreset();
 		const frame = this.#frame(width, rows, preset);
-		const { plan, nav } = frame;
+		const { plan, nav, budget } = frame;
 
 		state.maxScroll = Math.max(0, state.source.length - plan.bodyRows);
+		state.viewportRows = plan.bodyRows;
 		// Clamped HERE, not in the key handler, so a terminal that shrank
 		// between two keypresses cannot leave the view scrolled past its end.
 		state.scroll = Math.max(0, Math.min(state.scroll, state.maxScroll));
-		// The routers hit-test against THIS frame, exactly as `/settings` reads
-		// its `#tabRowStart` bookkeeping: strip zones come from the `TabBar`'s
-		// own last render, sidebar rows from `NAV_GROUPS`, range segments from
-		// the stripped topbar row, and body spans from the focused feature.
-		const tabBar = this.#tabBar;
+		// The router hit-tests against THIS frame: range segments and route-widget
+		// spans come from the stripped toolbar row, sidebar rows from NAV_GROUPS,
+		// and body spans from the focused feature. `bodyRows` is the same budget
+		// the body is painted at, so a hit in the footer cannot reach hidden rows.
+		const topbarLine = stripAnsi(frame.topbar);
 		state.mouse = {
-			topbarRows: frame.topbarRows,
-			stripRows: frame.stripRows,
+			topbarRows: budget.topbarRows,
+			stripRows: budget.stripRows,
 			sidebarWidth: frame.sidebarWidth,
-			sidebarRows: nav === null ? 0 : nav.lines.length,
-			topbar: stripAnsi(frame.topbar),
-			tabAt: (line, col) => tabBar.tabAt(line, col)?.id,
+			sidebarRows: nav === null ? 0 : Math.min(nav.lines.length, budget.bodyRows),
+			bodyRows: budget.bodyRows,
+			topbar: topbarLine,
+			routeSpans: routeSpans(topbarLine, state.screenId),
 			bodyScroll: state.scroll,
 			bodyHits: state.bodyHits,
 		};
 
-		// THE TITLE ANSWERS "WHICH PAGE", NEVER "WHICH WINDOW". It used to read
-		// `Stats · <range>` while the topbar one row below carried the
-		// `omp/stats` wordmark AND the range's active pill — so the window was
-		// named twice and the page was named nowhere, which is why the two
-		// chrome regions read as one awkward block.
-		//
-		// The range is not lost by moving it: the topbar's segmented control
-		// shows the active window in every mode down to `minimal`, which keeps
-		// `brand + active range` (chrome.ts's topbar). Host parity for the shape
-		// is `/usage`, whose panel title is `Usage · Details` — panel, then
-		// section (usage-dashboard.ts:913).
-		state.title = `Stats · ${screenById(state.screenId).label}`;
+		// The border names the WINDOW only. The toolbar's single label names the
+		// route; repeating it here made two chrome regions read as one block.
+		state.title = "Stats";
 		this.#panel.title = state.title;
-		this.#header.setLines(frame.headerLines);
-		this.#header.setHeight(frame.headerLines.length);
+		this.#header.setLines([frame.topbar]);
+		this.#header.setHeight(budget.topbarRows);
 		const visible = state.source.slice(state.scroll, state.scroll + plan.bodyRows);
-		this.#body.setLines(nav === null ? visible : zipSidebar(this.#theme, visible, nav.lines, frame.sidebarWidth, preset));
-		// At least as tall as the nav: `zipSidebar` may have added rows to keep the
-		// whole nav visible, and `setHeight` would clip them straight back off.
-		// Capped at the frame's body budget so the nav floor can never spend the
-		// divider, footer or bottom border's rows.
-		const navHeight = nav === null ? 0 : nav.lines.length;
-		const bodyHeight = Math.max(1, rows - PANEL_CHROME_ROWS - (frame.headerLines.length - 1));
-		this.#body.setHeight(Math.min(Math.max(plan.bodyRows, navHeight), bodyHeight));
-		this.#footer.setLines([this.#footerLine(plan, Math.max(1, width - 4))]);
+		// A nav taller than the short frame is truncated to the body budget: the
+		// divider, footer and bottom border must never be pushed off screen.
+		const navLines = nav === null ? NO_ROWS : nav.lines.slice(0, budget.bodyRows);
+		this.#body.setLines(nav === null ? visible : zipSidebar(this.#theme, visible, navLines, frame.sidebarWidth, preset));
+		this.#body.setHeight(budget.bodyRows);
+		this.#footer.setLines([this.#footerLine(plan, Math.max(1, width - HORIZONTAL_INSET))]);
 		return this.#panel.render(width);
 	}
 
@@ -927,6 +889,8 @@ export class StatsPanel implements Component {
 		const notices: string[] = [];
 		if (state.syncError) notices.push(this.#theme.fg("warning",
 			`Stats service failed; retained cached data. ${stripTerminalSequences(state.syncError)}`));
+		if (state.readError) notices.push(this.#theme.fg("warning",
+			`Read failed; retained cached data. ${stripTerminalSequences(state.readError)}`));
 		if (data.freshness?.pendingSessions) {
 			notices.push(this.#theme.fg("warning",
 				`${data.freshness.pendingSessions} transcript files have un-ingested changes. Press s to sync.`));
@@ -1027,7 +991,9 @@ export class StatsPanel implements Component {
 				this.#finish();
 				return;
 			case "scroll":
-				this.#scrollBy(action.viewport ? action.viewport * Math.max(1, state.maxScroll) : (action.rows ?? 0));
+				this.#scrollBy(action.viewport
+					? action.viewport * Math.max(1, state.viewportRows)
+					: (action.rows ?? 0));
 				return;
 			case "scrollTo":
 				state.scroll = action.edge === "top" ? 0 : state.maxScroll;
@@ -1073,13 +1039,11 @@ export class StatsPanel implements Component {
 	 * The mouse router: clicks, wheel and motion over the last frame.
 	 *
 	 * Shape copied from `settings-selector.ts:1224-1275`: wheel scrolls the
-	 * body from anywhere; motion arms hover (strip tab via the TabBar's own
-	 * `setHoverTab`, sidebar row via state both painted on the next render);
-	 * a left click on a hit selects it through the SAME `#selectScreen` and
-	 * range paths the keys use. Releases and non-left buttons are consumed
-	 * and ignored — swallowing a click the panel does not own would eat it,
-	 * but every SGR report IS owned here, and returning false would hand a
-	 * click prefix to the keymap. Anything off every hit area is inert.
+	 * body from anywhere; motion arms hover (the route widget's `selectedBg`
+	 * thumb or the sidebar row's band, both painted on the next render); a left
+	 * click on a hit selects it through the SAME `#selectScreen` and range paths
+	 * the keys use. Releases and non-left buttons are consumed and ignored —
+	 * every SGR report is owned here. Anything off every hit area is inert.
 	 */
 	#routeMouse(event: SgrMouseEvent): boolean {
 		const state = this.#state;
@@ -1091,12 +1055,10 @@ export class StatsPanel implements Component {
 		if (frame === null) return true;
 		if (event.motion) {
 			const hit = hitTest(frame, event.row, event.col);
-			if (hit.type === "screen" && hit.via === "strip") {
-				this.#tabBar.setHoverTab(hit.id);
+			if (hit.type === "screen" && hit.via === "route") {
 				state.hoveredStripId = hit.id;
 				state.hoveredSidebarId = null;
 			} else {
-				this.#tabBar.setHoverTab(null);
 				state.hoveredStripId = null;
 				state.hoveredSidebarId = hit.type === "screen" && hit.via === "sidebar" ? hit.id : null;
 			}
@@ -1128,9 +1090,8 @@ export class StatsPanel implements Component {
 		if (screen.id === state.screenId) return;
 		if (state.screenId === "traces" && screen.id !== "traces") this.#traceOrigin = undefined;
 		// The pointer no longer points at what the old highlight meant, so a
-		// hover pill left on the old tab would lie — `/settings` clears on
+		// hover thumb left on the old route would lie — `/settings` clears on
 		// select the same way.
-		this.#tabBar.setHoverTab(null);
 		state.hoveredStripId = null;
 		state.hoveredSidebarId = null;
 		state.screenId = screen.id;
@@ -1220,11 +1181,34 @@ export interface PanelTestState {
  * answers every fetch and every API path, so `#feature()` resolves a real
  * controller and the body is the production render path.
  */
+const STUB_NEED_PATHS: Record<DataNeed, string> = {
+	overview: "/api/stats/overview",
+	modelDashboard: "/api/stats/model-dashboard",
+	costs: "/api/stats/costs",
+	folders: "/api/stats/folders",
+	recent: "/api/stats/recent",
+	errors: "/api/stats/errors",
+	tools: "/api/stats/tools",
+	providers: "/api/stats/providers",
+	gain: "/api/stats/gain",
+	dailyActivity: "dailyActivity",
+	rollupStatus: "rollupStatus",
+};
+
 function stubReads(data: PanelData | undefined): PanelReads {
+	const read = fixtureReader(data);
 	return {
-		fetch: async () => data ?? {},
-		api: async <T>(path: string): Promise<T> =>
-			((data as unknown as Record<string, unknown> | undefined)?.[path.split("/").pop() ?? ""] ?? []) as T,
+		fetch: async needs => {
+			const entries = await Promise.all(needs.map(async need =>
+				[need, await read(STUB_NEED_PATHS[need], {})] as const));
+			return {
+				data: Object.fromEntries(entries) as Partial<PanelData>,
+				errors: {},
+				freshness: data?.freshness,
+			};
+		},
+		api: async <T>(path: string, params?: Record<string, string>): Promise<T> =>
+			await read(path, params ?? {}) as T,
 		subscribe: () => () => {},
 		requestSync: async () => ({}) as LiveStatus,
 		close: () => {},

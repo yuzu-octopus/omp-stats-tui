@@ -106,7 +106,7 @@ test("the headline cost carries the corrected unpriced count", async () => {
 function featureContext(data: PanelData): FeatureContext {
 	return {
 		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
-		reader: { fetch: async () => data, async api<T>(): Promise<T> { return [] as unknown as T; } },
+		reader: { fetch: async () => ({ data, errors: {} }), async api<T>(): Promise<T> { return [] as unknown as T; } },
 	};
 }
 

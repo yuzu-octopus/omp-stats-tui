@@ -6,14 +6,15 @@
  * `settings-selector.ts:635-636`). Somebody has to turn a (row, col) into a
  * screen or a range, and that somebody must read the SAME structures the frame
  * is painted from — `NAV_GROUPS` for the sidebar rows, `rangeMeta` labels for
- * the topbar segments, `TabBar.tabAt` for the strip — so a relabelled screen
- * or a reordered range moves its own hit area with no edit here.
+ * the topbar segments, and the route widget's measured spans for the toolbar's
+ * `< Label >` — so a relabelled screen or a reordered range moves its own hit
+ * area with no edit here.
  *
  * Coordinate contract (copied from the host's own routers, not invented):
  * `OverlayPanel` draws exactly one top-border row and insets content two
  * columns (`overlay-box.ts:207-212`, `row()`), so content row = row - 1 and
- * content col = col - 2. The topbar is always content row 0; a progress line
- * under it (`topLines[1]`) is chrome, never a target.
+ * content col = col - 2. The toolbar is always content row 0; the retired tab
+ * strip and progress row are not rows at all.
  *
  * PURE: no theme, no terminal, no data. The panel records the frame in
  * `render` and hit-tests in `handleInput`; hover state and selection live
@@ -26,21 +27,27 @@ import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { rangeMeta } from "@oh-my-pi/omp-stats/client/data/range";
 import { NAV_GROUPS, type NavGroup } from "./chrome";
 import { RANGES, type Range } from "../data/ranges";
+import type { RouteSpan } from "./tabs";
 
 export type { SgrMouseEvent };
 
 /**
  * The last frame's geometry, recorded per render. `topbar` is the STRIPPED
- * topbar row (ANSI escapes are zero-width, so raw indices would miss); `tabAt`
- * is the strip's own hit-test over its last render.
+ * toolbar row (ANSI escapes are zero-width, so raw indices would miss);
+ * `routeSpans` is the toolbar's measured `< Label >` hit area, empty when the
+ * wide band owns the sidebar. `bodyRows` is the painted body height from the
+ * budget: rows below it are divider/footer/border, not scrollable document.
  */
 export interface MouseFrame {
 	topbarRows: number;
+	/** Retained for callers; always 0 in production now that the strip is gone. */
 	stripRows: number;
 	sidebarWidth: number;
 	sidebarRows: number;
+	/** Visible body rows, straight from `budgetFrame`. */
+	bodyRows: number;
 	topbar: string;
-	tabAt: (line: number, col: number) => string | undefined;
+	routeSpans: readonly RouteSpan[];
 	/** Body scroll offset: document rows hidden above the viewport. */
 	bodyScroll?: number;
 	/** Feature-reported hit spans in body-document rows. */
@@ -49,7 +56,7 @@ export interface MouseFrame {
 
 export type MouseHit =
 	| { type: "none" }
-	| { type: "screen"; id: string; via: "strip" | "sidebar" }
+	| { type: "screen"; id: string; via: "route" | "sidebar" }
 	| { type: "range"; id: Range }
 	| { type: "feature"; action: FeatureHitAction };
 
@@ -108,7 +115,7 @@ export function rangeSpans(line: string): RangeSpan[] {
 	return spans;
 }
 
-/** Which range owns a topbar column, or null for brand, chip, gaps, freshness. */
+/** Which range owns a toolbar column, or null for route label, chip, gaps, freshness. */
 export function rangeHit(line: string, col: number): Range | null {
 	if (!Number.isInteger(col) || col < 0) return null;
 	for (const span of rangeSpans(line)) {
@@ -119,13 +126,11 @@ export function rangeHit(line: string, col: number): Range | null {
 
 /**
  * Route overlay-relative 0-based (row, col) to a target. Regions in frame
- * order: top border (row 0) is inert; the topbar is content row 0 and a
- * progress row under it is inert chrome; the strip routes through the TabBar's
- * own zones; the sidebar routes only inside its width — a hidden sidebar
- * (`sidebarWidth 0`) leaves no dead click zone. The body routes through the
- * feature-reported spans, whose rows are document rows: the scroll offset is
- * added back so a click lands on the row the user sees. A hit outside every
- * span is inert body text.
+ * order: top border (row 0) is inert; the one toolbar row routes to a range
+ * segment or a route-widget bracket; the sidebar routes only inside its width;
+ * the body routes through feature-reported spans, whose rows are document rows
+ * with the scroll offset added back. A click below the painted body, or outside
+ * every span, is inert.
  *
  * `hitSidebar` is injected so the geometry serves a nav that is not the screen
  * registry: it defaults to {@link sidebarHit} over `NAV_GROUPS`, and a caller can
@@ -145,16 +150,16 @@ export function hitTest(
 	if (contentRow < 0 || contentCol < 0) return NO_HIT;
 	if (contentRow < frame.topbarRows) {
 		if (contentRow !== 0) return NO_HIT;
+		for (const span of frame.routeSpans) {
+			if (contentCol >= span.start && contentCol < span.end) {
+				return { type: "screen", id: span.id, via: "route" };
+			}
+		}
 		const id = rangeHit(frame.topbar, contentCol);
 		return id === null ? NO_HIT : { type: "range", id };
 	}
-	const stripLine = contentRow - frame.topbarRows;
-	if (stripLine < frame.stripRows) {
-		const id = frame.tabAt(stripLine, contentCol);
-		return id === undefined ? NO_HIT : { type: "screen", id, via: "strip" };
-	}
-	const bodyRow = contentRow - frame.topbarRows - frame.stripRows;
-	if (bodyRow < 0) return NO_HIT;
+	const bodyRow = contentRow - frame.topbarRows;
+	if (bodyRow < 0 || bodyRow >= frame.bodyRows) return NO_HIT;
 	if (frame.sidebarWidth > 0 && contentCol < frame.sidebarWidth) {
 		if (bodyRow >= frame.sidebarRows) return NO_HIT;
 		const id = hitSidebar(bodyRow);

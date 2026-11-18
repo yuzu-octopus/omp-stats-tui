@@ -389,20 +389,40 @@ test("the lexer reads a colour token from a live module, by line", () => {
 	// Named, not aggregate: a lexer regression should name the site it lost,
 	// not print a shorter offender list and let the reader guess.
 	//
-	// The fixture is `fg("accent")` and NOT the former `bg("selectedBg")`. That
-	// token was the only `bg()` literal left in the tree, so routing the
-	// selection band through `SELECTION_BG.band` (see `src/tui/palette.ts`)
-	// deleted the fixture and took this self-test down with it. An `fg()` site is
-	// the better fixture anyway: it exercises the same lexer path, and it is
-	// stable rather than being the one literal a colour-role refactor removes.
-	const chrome = colourArgumentLiterals("src/tui/chrome.ts").filter(site => site.token === "accent");
-	expect(chrome.length, "chrome.ts lost the accent foreground sites").toBe(4);
+	// The fixture counts BOTH spellings the shell now uses: literal `accent`
+	// in the status chip and role-resolved `SIDEBAR_INK.iconActive` on the
+	// selected nav icon. The role still resolves to `accent` through the live
+	// palette, so deleting every accent site drops the count to zero and fails.
+	const file = "src/tui/chrome.ts";
+	const literal = colourArgumentLiterals(file).filter(site => site.token === "accent");
+	const code = lexedFor(file).code;
+	const roleTables = { PALETTE, SIDEBAR_INK, TAB_INK } as const;
+	const roleSites = Object.entries(roleTables).flatMap(([table, roles]) =>
+		Object.entries(roles)
+			.filter(([, token]) => token === "accent")
+			.flatMap(([role]) => {
+				const expression = `${table}.${role}`;
+				const pattern = new RegExp(
+					`\\.\\s*fg\\s*\\(\\s*${expression.replace(/\./g, "\\.")}\\s*,`,
+					"g",
+				);
+				return [...code.matchAll(pattern)].map(match => ({
+					label: expression,
+					offset: (match.index ?? 0) + match[0].indexOf(expression),
+				}));
+			}),
+	);
+	const chrome = [
+		...literal.map(site => ({ label: site.token, offset: site.offset })),
+		...roleSites,
+	];
+	expect(chrome.length, "chrome.ts lost the accent foreground sites").toBe(3);
 	// Line numbers are deliberately NOT pinned: chrome.ts gains lines on every
 	// refactor and a pinned list fails on each one. What must hold is that every
-	// reported offset really lands on a line carrying an `accent` literal.
-	const chromeSource = readSource("src/tui/chrome.ts").split("\n");
+	// reported offset really lands on a line carrying its accent spelling.
+	const chromeSource = readSource(file).split("\n");
 	for (const site of chrome) {
-		expect(chromeSource[lineOf("src/tui/chrome.ts", site.offset) - 1]).toContain("accent");
+		expect(chromeSource[lineOf(file, site.offset) - 1], `site ${site.label}`).toContain(site.label);
 	}
 });
 

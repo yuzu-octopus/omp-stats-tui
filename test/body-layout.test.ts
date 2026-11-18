@@ -29,18 +29,19 @@ import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 
 import { renderBands, type BandRenderOptions, type Column } from "../src/tui/band";
 import { renderRankedBars } from "../src/tui/charts/sparkline";
-import { planLayout } from "../src/tui/layout";
+import { HORIZONTAL_INSET, planLayout } from "../src/tui/layout";
 import { glyphsFor } from "../src/tui/glyphs";
 import type { PanelData } from "../src/data/api";
 import { FIXTURE_NOW, liveData, type ProviderDashboardFixture } from "./fixtures/panel";
-import { sidebar } from "../src/tui/chrome";
-import { bodyRows } from "../src/tui/frame";
+import { budgetFrame } from "../src/tui/frame";
+import { SELECTION_BG } from "../src/tui/palette";
 import type { FeatureContext, FeatureController } from "../src/tui/features/types";
 import { createSummaryFeature } from "../src/tui/features/core/summary";
 import { createAnalyticsFeature } from "../src/tui/features/core/analytics";
 import { createRequestsFeature } from "../src/tui/features/core/requests";
 import { createProvidersFeature } from "../src/tui/features/providers";
 import { messageRow } from "./fixtures/panel";
+import { focusTabs, metricRail, sideBySide } from "../src/tui/features/presentation";
 
 ensureThemeSync();
 
@@ -445,7 +446,7 @@ function fillData(): PanelData {
 function productionScreens(data: PanelData): [string, FeatureController][] {
 	const make = (api: (path: string) => unknown): FeatureContext => ({
 		theme, now: () => FIXTURE_NOW, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
-		reader: { api: async <T>(path: string) => api(path) as T, fetch: async () => data },
+		reader: { api: async <T>(path: string) => api(path) as T, fetch: async () => ({ data, errors: {} }) },
 	});
 	const recentOnly = make(path => (path === "/api/stats/recent" ? data.recent : data.errors));
 	return [
@@ -464,11 +465,10 @@ function productionScreens(data: PanelData): [string, FeatureController][] {
 /** The body width and height the panel hands a feature at this frame size. */
 function frameBudget(width: number, rows: number): { inner: number; height: number } {
 	const preset = theme.getSymbolPreset();
-	const column = width >= 84 && rows >= 20;
-	const nav = sidebar(theme, preset, "overview");
+	const budget = budgetFrame(width, rows, 1, preset);
 	return {
-		inner: planLayout(Math.max(20, width - (column ? nav.width + 3 : 0)), rows, preset).innerWidth,
-		height: Math.max(1, bodyRows(rows, column ? 1 : 2)),
+		inner: planLayout(budget.bodyInnerWidth + HORIZONTAL_INSET, rows, preset, budget.bodyRows).innerWidth,
+		height: budget.bodyRows,
 	};
 }
 
@@ -478,7 +478,12 @@ test("2.1: production bodies fill a 40-row frame and never exceed the frame widt
 		await feature.load("30d");
 		for (const width of [40, 60, 100, 150]) {
 			const { inner, height } = frameBudget(width, 40);
-			const lines = feature.render(inner, height);
+			let lines: readonly string[];
+			try {
+				lines = feature.render(inner, height);
+			} catch (error) {
+				throw new Error(`render failed for ${name} @ ${width}`, { cause: error });
+			}
 			for (const line of lines) expect(visibleWidth(line), `${name} @ ${width}`).toBeLessThanOrEqual(inner);
 			if (width === 100) {
 				const blank = Math.max(0, height - lines.length);
@@ -487,4 +492,117 @@ test("2.1: production bodies fill a 40-row frame and never exceed the frame widt
 		}
 		feature.dispose();
 	}
+});
+
+// ─── Compact layout primitives ───────────────────────────────────────────────
+
+const RAIL_WIDTHS = [40, 80, 100, 160] as const;
+
+function railCtx(): { ctx: FeatureContext; bgTokens: string[] } {
+	const bgTokens: string[] = [];
+	const themeStub = {
+		fg: (_color: string, text: string) => `\x1b[38;5;7m${text}\x1b[0m`,
+		bg: (color: string, text: string) => {
+			bgTokens.push(color);
+			return `\x1b[48;5;4m${text}\x1b[0m`;
+		},
+		bold: (text: string) => `\x1b[1m${text}\x1b[0m`,
+	} as unknown as FeatureContext["theme"];
+	return {
+		bgTokens,
+		ctx: {
+			theme: themeStub,
+			now: () => FIXTURE_NOW,
+			changed() {},
+			copy: async () => {},
+			openTrace() {},
+			openScreen() {},
+			reader: { api: async <T>(): Promise<T> => undefined as T, fetch: async () => ({ data: liveData(), errors: {} }) },
+		},
+	};
+}
+
+test("rail: measured pairs fit 40/80/100/160 and move from two columns to three", () => {
+	const { ctx } = railCtx();
+	const tiles = [
+		{ label: "Req", value: "12,345", hint: "1,234 failed" },
+		{ label: "Tok", value: "26.8B" },
+		{ label: "Cost", value: "$22.85", hint: "34,870 unpriced" },
+		{ label: "Err", value: "1.7%" },
+		{ label: "Cache", value: "42.1%" },
+		{ label: "Fresh", value: "2m" },
+	];
+	for (const width of RAIL_WIDTHS) {
+		const lines = metricRail(ctx, width, tiles);
+		expect(lines.length, `rail height @ ${width}`).toBe(2);
+		for (const line of lines) {
+			expect(typeof line, `rail line @ ${width}`).toBe("string");
+			expect(Array.isArray(line), `rail line @ ${width}`).toBe(false);
+			expect(visibleWidth(line), `rail width @ ${width}`).toBeLessThanOrEqual(width);
+		}
+		const text = plain(lines.join("\n"));
+		expect(text, `priced hint @ ${width}`).toContain("34,870 unpriced");
+		if (width >= 80) {
+			expect(text, `sixth pair @ ${width}`).toContain("Fresh");
+		} else {
+			expect(text, "overflow count @ 40").toContain("+2");
+			expect(text, "tail dropped @ 40").not.toContain("Cache");
+		}
+	}
+	expect(metricRail(ctx, 100, tiles, { maxRows: 1 }).length).toBe(1);
+});
+
+test("rail: a caveat in a dropped tail tile stays visible, whole", () => {
+	const { ctx } = railCtx();
+	const tiles = Array.from({ length: 7 }, (_, index) => index === 6
+		? { label: "Cost", value: "N/A · 34,870 unpriced", hint: "34,870 unpriced" }
+		: { label: `Tile${index}`, value: `${index}` });
+	for (const width of RAIL_WIDTHS) {
+		const lines = metricRail(ctx, width, tiles);
+		const text = plain(lines.join("\n"));
+		for (const line of lines) {
+			expect(typeof line, `caveat rail line @ ${width}`).toBe("string");
+			expect(Array.isArray(line), `caveat rail line @ ${width}`).toBe(false);
+			expect(visibleWidth(line), `caveat rail @ ${width}`).toBeLessThanOrEqual(width);
+		}
+		expect(text, `caveat @ ${width}`).toContain("34,870 unpriced");
+		expect(text, `caveat not clipped @ ${width}`).not.toContain("34,870 unr");
+		expect(text, `overflow count @ ${width}`).toMatch(/\+\d/);
+	}
+});
+
+test("side-by-side: a two-cell gutter at 80+, one blank stack below 80", () => {
+	const { ctx } = railCtx();
+	const left = ["left-one", "left-two"];
+	const right = ["right-one"];
+	for (const width of RAIL_WIDTHS) {
+		const lines = sideBySide(ctx, width, left, right);
+		for (const line of lines) {
+			expect(typeof line, `side line @ ${width}`).toBe("string");
+			expect(Array.isArray(line), `side line @ ${width}`).toBe(false);
+			expect(visibleWidth(line), `side width @ ${width}`).toBeLessThanOrEqual(width);
+		}
+		if (width < 80) {
+			expect(lines.length, "stacked row count @ 40").toBe(4);
+			expect(lines[2], "one blank between stacked blocks").toBe("");
+		} else {
+			const leftWidth = Math.floor((width - 2) / 2);
+			expect(lines.length, `parallel row count @ ${width}`).toBe(2);
+			expect(visibleWidth(lines[0]!), `full width @ ${width}`).toBe(width);
+			expect(plain(lines[0]!).slice(leftWidth, leftWidth + 2), `gutter @ ${width}`).toBe("  ");
+		}
+	}
+	const skewed = sideBySide(ctx, 100, left, right, { leftRatio: 0.25 });
+	expect(plain(skewed[0]!).slice(24, 26), "leftRatio 0.25 at 100").toBe("  ");
+});
+
+test("focus tabs: the active pill carries a plain > and the host selection band", () => {
+	const { ctx, bgTokens } = railCtx();
+	for (const width of RAIL_WIDTHS) {
+		const lines = focusTabs(ctx, width, ["Req", "Chart", "Src"], 1);
+		const text = plain(lines.join("\n"));
+		for (const line of lines) expect(visibleWidth(line), `tabs width @ ${width}`).toBeLessThanOrEqual(width);
+		expect(text, `marker @ ${width}`).toContain("> Chart");
+	}
+	expect(bgTokens).toContain(SELECTION_BG.band);
 });

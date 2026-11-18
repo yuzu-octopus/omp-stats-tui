@@ -94,7 +94,7 @@ function context(entryReader?: (file: string, id: string) => Promise<unknown>): 
 	return {
 		theme, now: () => START + 110_000, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
 		reader: {
-			fetch: async () => ({}),
+			fetch: async () => ({ data: {}, errors: {} }),
 			async api<T>(path: string, params?: Record<string, string>): Promise<T> {
 				if (path === "/api/session/trace") return (params?.file === ROOT ? nestedTrace() : childTrace(params!.file!)) as T;
 				if (path === "/api/session/entry") {
@@ -545,7 +545,7 @@ function brokenContext(): FeatureContext {
 	return {
 		theme, now: () => START + 110_000, changed() {}, copy: async () => {}, openTrace() {}, openScreen() {},
 		reader: {
-			fetch: async () => ({}),
+			fetch: async () => ({ data: {}, errors: {} }),
 			async api<T>(): Promise<T> { return {} as T; },
 		},
 	};

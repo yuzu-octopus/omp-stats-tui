@@ -14,8 +14,9 @@
  */
 
 import { test, expect } from "bun:test";
-import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme";
-
+import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
+import { chipFor, progressLineFor, sidebar, topbar } from "../src/tui/chrome";
+import { budgetFrame } from "../src/tui/frame";
 import { BREAKPOINTS, HORIZONTAL_INSET, planLayout } from "../src/tui/layout";
 import { __testing, SELECTABLE_SCREENS } from "../src/tui/panel";
 import { framePolicy } from "../src/tui/responsive";
@@ -44,40 +45,24 @@ test("every breakpoint row owns the total widths that map to it", () => {
 	}
 });
 
-test("chrome modes per band, pinned for the chrome to build against", () => {
+test("chrome modes and nav location per band, pinned for the shell to build against", () => {
 	expect(framePolicy(120)).toMatchObject({
-		band: "wide",
-		sidebar: "full",
-		topbar: "full",
-		columns: 2,
-		footerHints: true,
+		band: "wide", sidebar: "full", navMode: "sidebar", topbar: "full", columns: 2, footerHints: true,
 	});
-	expect(framePolicy(100)).toMatchObject({ band: "wide", sidebar: "full", topbar: "full" });
-	expect(framePolicy(84)).toMatchObject({ band: "wide", sidebar: "full" });
-	expect(framePolicy(83)).toMatchObject({ band: "medium", sidebar: "hidden", topbar: "condensed" });
+	expect(framePolicy(100)).toMatchObject({ band: "wide", sidebar: "full", navMode: "sidebar" });
+	expect(framePolicy(84)).toMatchObject({ band: "wide", sidebar: "full", navMode: "sidebar" });
+	expect(framePolicy(83)).toMatchObject({ band: "medium", sidebar: "hidden", navMode: "toolbarRoute", topbar: "condensed" });
 	expect(framePolicy(60)).toMatchObject({
-		band: "medium",
-		sidebar: "hidden",
-		topbar: "condensed",
-		columns: 1,
-		footerHints: true,
+		band: "medium", sidebar: "hidden", navMode: "toolbarRoute", topbar: "condensed", columns: 1, footerHints: true,
 	});
-	expect(framePolicy(48)).toMatchObject({ band: "medium", sidebar: "hidden" });
-	expect(framePolicy(47)).toMatchObject({ band: "narrow", sidebar: "hidden", topbar: "condensed" });
+	expect(framePolicy(48)).toMatchObject({ band: "medium", navMode: "toolbarRoute" });
+	expect(framePolicy(47)).toMatchObject({ band: "narrow", sidebar: "hidden", navMode: "toolbarRoute" });
 	expect(framePolicy(40)).toMatchObject({
-		band: "narrow",
-		sidebar: "hidden",
-		topbar: "condensed",
-		columns: 1,
-		footerHints: true,
+		band: "narrow", sidebar: "hidden", navMode: "toolbarRoute", topbar: "condensed", columns: 1, footerHints: true,
 	});
-	expect(framePolicy(34)).toMatchObject({ band: "narrow", sidebar: "hidden" });
+	expect(framePolicy(34)).toMatchObject({ band: "narrow", navMode: "toolbarRoute" });
 	expect(framePolicy(33)).toMatchObject({
-		band: "tiny",
-		sidebar: "hidden",
-		topbar: "minimal",
-		columns: 1,
-		footerHints: false,
+		band: "tiny", sidebar: "hidden", navMode: "toolbarRoute", topbar: "minimal", columns: 1, footerHints: false,
 	});
 });
 
@@ -85,13 +70,60 @@ test("the policy never disagrees with planLayout about the fields they share", (
 	// The no-second-convention test: bands, columns, footer hints and the narrow
 	// flag come from layout.ts's table, so a retune there flows through here.
 	for (let width = 1; width <= 200; width++) {
-		const plan = planLayout(width, 40, "unicode");
+		const plan = planLayout(width, 40, "unicode", budgetFrame(width, 40, 1, "unicode").bodyRows);
 		const policy = framePolicy(width);
 		expect(policy.band, `w=${width}`).toBe(plan.breakpoint);
 		expect(policy.columns, `w=${width}`).toBe(plan.columns);
 		expect(policy.footerHints, `w=${width}`).toBe(plan.showFooterHints);
 		expect(policy.tooNarrow, `w=${width}`).toBe(plan.tooNarrow);
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Budget: one header row, one body calculation, no nav clipped by short frames
+// ---------------------------------------------------------------------------
+
+test("the budget spends exactly one header row and no strip at every acceptance size", () => {
+	for (const width of [40, 60, 84, 100, 120]) {
+		for (const rows of [20, 24, 30, 40]) {
+			const budget = budgetFrame(width, rows, 1, "unicode");
+			const where = `w=${width} h=${rows}`;
+			expect(budget.topbarRows, where).toBe(1);
+			expect(budget.stripRows, where).toBe(0);
+			expect(budget.bodyRows, where).toBe(rows - 5);
+			const navCols =
+				framePolicy(width).navMode === "sidebar"
+					? sidebar(theme, "unicode", "overview").width + 3
+					: 0;
+			expect(budget.bodyInnerWidth, where).toBe(width - HORIZONTAL_INSET - navCols);
+		}
+	}
+});
+
+test("the full sidebar fits from 20 rows, and compact progress cannot spend a body row", () => {
+	const navRows = sidebar(theme, "unicode", "overview").lines.length;
+	for (let rows = 20; rows <= 40; rows++) {
+		const budget = budgetFrame(100, rows, 1, "unicode");
+		expect(budget.bodyRows, `h=${rows}`).toBeGreaterThanOrEqual(navRows);
+	}
+
+	const event = { type: "progress", phase: "ingest", current: 25, total: 100 } as const;
+	const quiet = budgetFrame(100, 40, 1, "unicode");
+	const busy = budgetFrame(100, 40, 1, "unicode");
+	expect(busy).toEqual(quiet);
+	const row = topbar(theme, {
+		screenLabel: "Overview",
+		range: "24h",
+		chip: chipFor(theme, {
+			syncing: true, live: true, current: 25, total: 100, determinate: true,
+			error: null, dirtyHours: 0, lastSyncedAt: null, now: 0,
+		}),
+		freshness: "",
+		progress: progressLineFor(event, 96),
+		innerWidth: 96,
+	});
+	expect(strip(row)).not.toContain("\n");
+	expect(strip(row)).toContain("Ingest 25/100");
 });
 
 test("widening the terminal only ever restores chrome, never takes it away", () => {
@@ -125,6 +157,9 @@ for (const width of [40, 60, 80, 100, 120]) {
 			);
 		}
 		expect(plain.filter(row => row.includes("├")).length, `w=${width} dividers`).toBe(1);
+		// The single toolbar row is the only route label in chrome.
+		expect(plain[1], `w=${width} toolbar`).toContain("Overview");
+		expect(plain[1], `w=${width} toolbar`).not.toContain("omp/stats");
 	});
 }
 

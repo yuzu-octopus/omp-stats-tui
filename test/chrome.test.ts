@@ -47,6 +47,7 @@ import {
 	topbar,
 	zipSidebar,
 	type NavGroup,
+	type TopbarOptions,
 } from "../src/tui/chrome";
 import { SELECTION_BG, SIDEBAR_INK, TAB_INK } from "../src/tui/palette";
 import { __testing, SELECTABLE_SCREENS, panelAction } from "../src/tui/panel";
@@ -650,189 +651,147 @@ test("ago reads like the web's relative age", () => {
 	expect(ago(1_000_000, 1_000_000 - 2 * 86_400_000)).toBe("2d ago");
 });
 
-// ─── progress line: Shell.tsx three-state, indeterminate by phase ────────────
+// ─── compact progress: one short run, phases kept distinct ───────────────────
 
-test("progress line is determinate only for ingest with a known total", () => {
+test("compact progress is determinate only for ingest with a known total", () => {
 	const ingest: SyncEvent = { type: "progress", phase: "ingest", current: 25, total: 100 };
-	expect(progressLineFor(ingest, 60)).toContain("25%");
-	const scan: SyncEvent = { type: "progress", phase: "scan", current: 0, total: 0 };
-	const scanLine = progressLineFor(scan, 60);
-	expect(scanLine).not.toContain("NaN");
-	expect(scanLine).not.toMatch(/\d+%/);
+	expect(strip(progressLineFor(ingest, 40))).toBe("Ingest 25/100");
+	const scan: SyncEvent = { type: "progress", phase: "scan", current: 5, total: 0 };
+	expect(strip(progressLineFor(scan, 40))).toBe("Scan …");
 	// Rollup carries a remaining count, not a denominator: indeterminate by phase.
 	const rollup: SyncEvent = { type: "progress", phase: "rollup", current: 0, total: 50 };
-	const rollupLine = progressLineFor(rollup, 60);
-	expect(rollupLine).not.toMatch(/\d+%/);
-	expect(rollupLine).toMatch(/[a-z]/i);
+	expect(strip(progressLineFor(rollup, 40))).toBe("Rollup …");
+	expect(progressLineFor(null, 40)).toBe("");
 });
 
-test("progress line is hidden for settled states and always fits", () => {
-	expect(progressLineFor(null, 60)).toBe("");
-	for (const width of [0, 1, 3, 8, 10, 12, 20, 60, 100]) {
-		const line = progressLineFor({ type: "progress", phase: "ingest", current: 1, total: 2 }, width);
-		expect(visibleWidth(strip(line)), `w=${width}`).toBeLessThanOrEqual(width);
+test("compact progress never exceeds the width it is given", () => {
+	const event: SyncEvent = { type: "progress", phase: "ingest", current: 1234, total: 10000 };
+	for (let width = 1; width <= 40; width++) {
+		expect(visibleWidth(progressLineFor(event, width)), `w=${width}`).toBeLessThanOrEqual(width);
 	}
 });
 
-// ─── topbar: the web's three-region topbar ────────────────────────────────────
+// ─── toolbar: one row, one screen label, one action cluster ──────────────────
 //
-// Shell.tsx's `<header class="topbar">` is THREE regions, not one run of
-// words: `.topbar-brand`, a `flex: 1` `.topbar-spacer`, then
-// `.topbar-actions` holding the LiveChip and the `Segmented` range control.
-// The spacer is the whole mechanism — it is what stops the chip reading as
-// part of the wordmark. In a terminal there is no flexbox, so the spacer has
-// to be PAINTED: the brand sits left, the action cluster sits right, and the
-// gap between them is what separates the two. Every test below is about that
-// gap and about the cluster reading as two widgets rather than one sentence.
+// The old header was a wordmark with a cluster and the screen was named again
+// in the border and in a twelve-tab strip. The toolbar below has ONE route
+// label. The painted gap between it and the controls is the terminal port of
+// `.topbar-spacer { flex: 1 }` (styles.css:453-455); the chip is an enclosed
+// `.live-chip` surface and the range is one `.segmented` control.
 
-test("topbar at 96 paints the brand left and the action cluster right, with a real gap between", () => {
-	// The bug this fixes: `omp/stats  ● Live   1h  24h …` — one left-aligned
-	// run, so the chip reads as the tail of the wordmark. The web separates them
-	// with `flex: 1` (styles.css:453-455); the terminal has to spend real cells
-	// on the same gap.
-	const row = topbar(theme, { range: "24h", chip: chipFor(theme, idle()), freshness: "", innerWidth: 96 });
+const toolbar = (over: Partial<TopbarOptions> = {}): string => {
+	const options: TopbarOptions = {
+		screenLabel: "Overview",
+		range: "24h",
+		chip: chipFor(theme, idle()),
+		freshness: "",
+		progress: "",
+		innerWidth: 96,
+	};
+	return topbar(theme, Object.assign(options, over));
+};
+
+test("the toolbar names the screen once, flush left, with a real gap before the controls", () => {
+	const row = toolbar();
 	const plain = strip(row);
-	expect(plain).toContain("omp/stats");
+	expect(plain.startsWith("Overview")).toBe(true);
+	expect(plain.match(/Overview/g)).toHaveLength(1);
+	expect(plain).not.toContain("omp/stats");
 	expect(plain).toContain("Live");
 	for (const label of ["1h", "24h", "7d", "30d", "90d", "All"]) expect(plain).toContain(label);
-	// Brand flush left, and the chip is nowhere near it: the gap between the
-	// wordmark and the cluster is at least three cells, which is what the web's
-	// 12px topbar gap buys on screen.
-	expect(plain.startsWith("omp/stats")).toBe(true);
-	const gap = visibleWidth(plain.slice(plain.indexOf("omp/stats") + "omp/stats".length).split("●")[0] ?? "");
-	expect(gap).toBeGreaterThanOrEqual(3);
-	expect(visibleWidth(row)).toBeLessThanOrEqual(96);
+	expect(plain.slice("Overview".length)).toMatch(/^ {3,}/);
+	expect(visibleWidth(row)).toBe(96);
 });
 
-test("the live chip is an enclosed surface and the brand is naked text", () => {
-	// The web's own rule for what makes a control read as a control: the brand
-	// has NO enclosure, while `.live-chip` is filled + bordered + full-pill
-	// radius (styles.css:1596-1598). A terminal has no border-radius, so the
-	// faithful form of "this is a surface" is a BACKGROUND. Before the fix both
-	// were plain foreground runs, which is exactly why the chip read as the
-	// tail of the wordmark.
-	const row = topbar(theme, { range: "24h", chip: chipFor(theme, idle()), freshness: "", innerWidth: 96 });
+test("the screen label is naked bold text and the status chip is an enclosed surface", () => {
+	const row = toolbar();
 	const chipBg = row.indexOf("\x1b[48;");
 	expect(chipBg).toBeGreaterThan(-1);
-	// Everything before the chip's surface is the wordmark and its spacer, and
-	// carries no background at all.
+	// Everything before the chip is the route label and its spacer: no surface.
 	expect(row.slice(0, chipBg)).not.toContain("\x1b[48;");
-	expect(strip(row.slice(0, chipBg))).toMatch(/^omp\/stats\s+$/);
-	// The chip's surface is the chip's OWN padding, so it is a box rather than a
-	// coloured word: one cell of background on each side of the label.
+	expect(row).toContain(theme.bold(theme.fg("text", "Overview")));
 	expect(row).toContain(theme.bg("selectedBg", ` ${chipFor(theme, idle())} `));
-	// And the wordmark itself is the brightest thing on the bar, with only the
-	// slash dropped a step (styles.css:432, :441-445).
-	expect(row).toContain(theme.bold(theme.fg("accent", "omp")));
-	expect(row).toContain(theme.fg("dim", "/"));
-	expect(row).toContain(theme.bold(theme.fg("accent", "stats")));
+	// Accent is spent on the sidebar's active icon, not on a second route label.
+	expect(row).not.toContain(theme.fg("accent", "omp"));
 });
 
 test("the range control reads as ONE control: uniform inactive styling and a single active pill", () => {
-	// Defect 3. Before: the active pill was the only thing that looked
-	// different, so the six labels read as five words plus one button. The
-	// web's `Segmented` (styles.css:1057-1103) is a container with a shared
-	// background and one raised thumb — in a terminal, the honest equivalent is
-	// a uniform inactive style on every segment plus exactly one filled pill,
-	// with the segments packed tight enough to read as a group.
-	const row = topbar(theme, { range: "24h", chip: chipFor(theme, idle()), freshness: "", innerWidth: 96 });
-	const plain = strip(row);
-	// Exactly one selectedBg pill belongs to the RANGE control. The chip has its
-	// own surface now, so the pill count is asserted against the segment run
-	// alone by asking for the row with no chip.
-	const bare = topbar(theme, { range: "24h", chip: "", freshness: "", innerWidth: 96 });
-	const pills = bare.split(ACTIVE_BG).length - 1;
+	const row = toolbar({ chip: "", freshness: "" });
+	const pills = row.split(ACTIVE_BG).length - 1;
 	expect(pills).toBe(1);
-	// Every inactive segment is styled identically — one style, applied to all
-	// five, never a per-segment special case.
 	const inactive = ["1h", "7d", "30d", "90d", "All"].map(label => theme.fg(TAB_INK.inactive, ` ${label} `));
-	for (const styled of inactive) expect(bare, styled).toContain(styled);
-	// The active one is the pill, and it carries its label.
-	expect(plain).toContain(" 24h ");
-	// Tight packing: the six segments are one run, not six space-separated
-	// words. A single space separates them and nothing else.
-	expect(plain).toMatch(/ 1h\s+24h\s+7d\s+30d\s+90d\s+All /);
+	for (const styled of inactive) expect(row, styled).toContain(styled);
+	expect(strip(row)).toContain(" 24h ");
+	expect(strip(row)).toMatch(/ 1h\s+24h\s+7d\s+30d\s+90d\s+All /);
 });
 
-test("the chip drops before the range control when width runs out, mirroring topbar-hide-narrow", () => {
-	// The web hides `.live-chip` (styles.css:455 wraps it in
-	// `.topbar-hide-narrow`) but keeps the range control, because the range IS
-	// the window you are looking at. Order of sacrifice is therefore fixed:
-	// freshness, then chip, then segments — never the reverse.
-	const full = topbar(theme, { range: "24h", chip: chipFor(theme, idle()), freshness: "3 dirty hours", innerWidth: 96 });
-	expect(strip(full)).toMatch(/3 dirty hours/);
-	expect(strip(full)).toMatch(/Live/);
-	// Squeeze until the chip cannot fit: the range control survives.
-	for (const width of [70, 60, 56, 50, 44, 40]) {
-		const row = topbar(theme, { range: "24h", chip: chipFor(theme, idle()), freshness: "", innerWidth: width });
-		const plain = strip(row);
-		expect(visibleWidth(row), `w=${width}`).toBeLessThanOrEqual(width);
-		expect(plain, `w=${width}`).toContain("omp/stats");
-		expect(plain, `w=${width}`).toMatch(/1h|24h|7d|30d|90d|All/);
-	}
-	// And at 56 the chip is gone while the brand and the control remain.
-	const narrow = topbar(theme, { range: "24h", chip: chipFor(theme, idle()), freshness: "", innerWidth: 56 });
-	expect(strip(narrow)).not.toContain("Live");
-	expect(strip(narrow)).toContain("24h");
-	expect(strip(narrow)).toContain("omp/stats");
+test("the toolbar's route widget replaces the sidebar below the wide band", () => {
+	const wide = strip(toolbar({ innerWidth: 96 }));
+	expect(wide.startsWith("Overview")).toBe(true);
+	expect(wide).not.toContain("< Overview >");
+
+	const narrow = strip(toolbar({ innerWidth: 40 }));
+	expect(narrow.startsWith("< Overview >")).toBe(true);
+	expect(narrow).toContain("24h");
+	// The six-segment tray collapses to its active member, never two nav rows.
+	expect(narrow).not.toContain(" 1h ");
+	expect(narrow).not.toContain("omp/stats");
 });
 
-test("the topbar never clips at any width from 1 to 200", async () => {
-	// The acceptance criterion, stated as a sweep rather than four samples: a
-	// row that overflows is torn by `OverlayPanel.row`'s padToWidth and the
-	// right-hand control is the thing that disappears.
+test("sync progress is compacted into the same one row and never owns one", () => {
+	const event: SyncEvent = { type: "progress", phase: "ingest", current: 25, total: 100 };
+	const before = toolbar();
+	const during = toolbar({
+		chip: chipFor(theme, idle({ syncing: true, current: 25, total: 100, determinate: true })),
+		progress: progressLineFor(event, 96),
+	});
+	expect(strip(before)).not.toContain("Ingest");
+	expect(strip(during)).toContain("Ingest 25/100");
+	expect(strip(during)).toContain("Overview");
+	expect(visibleWidth(during)).toBe(96);
+	expect(visibleWidth(during)).toBe(visibleWidth(before));
+});
+
+test("the toolbar never clips at any width from 1 to 200", () => {
 	for (let width = 1; width <= 200; width++) {
 		for (const range of ["1h", "24h", "7d", "30d", "90d", "all"] as const) {
-			for (const chip of [chipFor(theme, idle()), chipFor(theme, idle({ syncing: true, current: 25, total: 100, determinate: true })), ""]) {
+			for (const chip of [
+				chipFor(theme, idle()),
+				chipFor(theme, idle({ syncing: true, current: 25, total: 100, determinate: true })),
+				"",
+			]) {
 				for (const freshness of ["", "96 dirty hours"]) {
-					const row = topbar(theme, { range, chip, freshness, innerWidth: width });
-					expect(visibleWidth(row), `w=${width} range=${range}`).toBeLessThanOrEqual(width);
+					for (const progress of ["", "Ingest 25/100"]) {
+						const row = toolbar({ range, chip, freshness, progress, innerWidth: width });
+						expect(visibleWidth(row), `w=${width} range=${range}`).toBeLessThanOrEqual(width);
+					}
 				}
 			}
 		}
 	}
-	// The real frame at the four widths the brief names, with a chip, a sync in
-	// flight, and a large freshness string all at once.
-	let assertedRows = 0;
-	for (const width of [40, 60, 100, 150]) {
-		const panel = __testing.makePanel({ data: liveData(), rows: 40 });
-		await __testing.settled(panel);
-		for (const row of panel.render(width)) {
-			assertedRows++;
-			expect(visibleWidth(row), `w=${width}`).toBeLessThanOrEqual(width);
-		}
-	}
-	expect(assertedRows).toBeGreaterThan(0);
 });
 
-// ─── frame: sidebar + topbar + body + footer, one divider ─────────────────────
+// ─── frame: toolbar + body + footer, one divider ─────────────────────────────
 
-test("frame composes topbar, sidebar, body and footer with exactly one divider at 60 and 100", async () => {
+test("frame composes one toolbar row, the body and the footer with exactly one divider", async () => {
 	for (const width of [60, 100]) {
 		const panel = __testing.makePanel({ data: liveData(), rows: 40 });
 		await __testing.settled(panel);
 		const frame = panel.render(width);
 		const plain = frame.map(strip);
 		expect(frame.length, `width=${width}`).toBe(40);
-		// Exactly one divider row: split at 100, plain at 60. Borders use
-		// corners, never tees, and no body emits a rule (G5), so one is exact.
 		expect(plain.filter(r => /[├┤┬┴┼]/.test(r)), `width=${width}`).toHaveLength(1);
 		for (const row of frame) expect(visibleWidth(row), `width=${width}`).toBeLessThanOrEqual(width);
-		expect(plain.slice(0, 3).join("\n"), `width=${width}`).toContain("omp/stats");
+		// Content row 0 is the toolbar, and it is the only route label in chrome.
+		expect(plain[1]).toContain("Overview");
+		expect(plain[1]).not.toContain("omp/stats");
 		expect(plain[plain.length - 2]).toContain("close");
 	}
-	// Wide gets the grouped sidebar COLUMN; below that width the nav is the
-	// strip row, which TabBar collapses to one-cell shorts on its own.
 	const wide = __testing.makePanel({ data: liveData(), rows: 40 });
 	await __testing.settled(wide);
 	const widePlain = wide.render(100).map(strip);
-	// The nav is a COLUMN, so each heading/row starts its own frame row.
 	expect(widePlain.some(r => r.replace(/^│ /, "").trimStart().startsWith("Usage"))).toBe(true);
 	expect(widePlain.some(r => /Overview/.test(r) && /G O/.test(r))).toBe(true);
-	const medium = __testing.makePanel({ data: liveData(), rows: 40 });
-	await __testing.settled(medium);
-	const mediumPlain = medium.render(60).map(strip);
-	expect(mediumPlain.some(r => /Overview/.test(r))).toBe(true);
 });
 
 // ─── g-prefix keymap ──────────────────────────────────────────────────────────

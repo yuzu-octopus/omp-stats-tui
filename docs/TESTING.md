@@ -111,7 +111,7 @@ bun test
 bun run build
 ```
 
-Latest observed suite: **705 passed, 0 failed, 45 files** (see [AGENTS.md §Testing & QA](../AGENTS.md#testing--qa) for the live count), 80,988 assertions. Production build and the dependency-patch check passed. After integrating current maintainer `main`, the UI was reviewed again on the compiled host at **40x30, 100x40 and 160x45** across all twelve routes; initialization was excluded from the settled-body review. Representative light/Unicode, dark/ASCII and custom/Nerd reviews also passed, including observed custom ANSI colors.
+Latest observed suite: **735 passed, 0 failed, 46 files** (see [AGENTS.md §Testing & QA](../AGENTS.md#testing--qa) for the live count), 88,370 assertions. Production build and the dependency-patch check passed. After integrating current maintainer `main`, the UI was reviewed again on the compiled host at **40x30, 100x40 and 160x45** across all twelve routes; initialization was excluded from the settled-body review. Representative light/Unicode, dark/ASCII and custom/Nerd reviews also passed, including observed custom ANSI colors.
 
 **Panel body tests exercise production controllers.** `__testing.makePanel` builds a stub `PanelReads` from `state.data` (its `fetch` returns the fixture and its `api` serves it by URL suffix), so `#feature()` resolves a real `FeatureController` and `makePanel({ data })` renders the production body. A test that wants the loading or error phase passes `reads` explicitly.
 

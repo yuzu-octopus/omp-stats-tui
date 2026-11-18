@@ -17,6 +17,15 @@ export function fields(value: unknown, prefix = ""): string[] {
 	return Object.entries(value).flatMap(([key, item]) => fields(item, prefix ? `${prefix}.${key}` : key));
 }
 
+/** Textual focus marker survives narrow wrapped tab strips and theme changes. */
+export function panePrefix(active: boolean): string {
+	return active ? "> " : "  ";
+}
+
+/** Heading for a switchable pane: the active one is named even without color. */
+export function paneHeading(ctx: FeatureContext, width: number, title: string, meta = "", active = false): string {
+	return sectionHeading(ctx, width, `${panePrefix(active)}${title}`, meta, active);
+}
 export type SortValue = string | number | null | undefined;
 export type Sorters<T> = Record<string, (row: T) => SortValue>;
 export interface ListColumn<T> extends Omit<Column, "cell"> {
@@ -77,7 +86,7 @@ export class ListState<T> {
 		if (data === "a") { this.reveal = Infinity; return true; }
 		return false;
 	}
-	render(rows: readonly T[], width: number, height: number, columns: readonly ListColumn<T>[], ctx: FeatureContext, title: string): string[] {
+	render(rows: readonly T[], width: number, height: number, columns: readonly ListColumn<T>[], ctx: FeatureContext, title: string, options: { showHint?: boolean } = {}): string[] {
 		const search = this.editing ? [`Search: ${this.search || "—"}  · Enter/Esc finish · Ctrl-U clear`] : this.search ? [`Search: ${this.search}`] : [];
 		const searchLines = wrap(search, width);
 		if (!rows.length) {
@@ -101,13 +110,14 @@ export class ListState<T> {
 			colEnd: width,
 			action: { type: "selectRow", key: this.key(row) },
 		}));
-		return [sectionHeading(ctx, width, title, `${start + 1}–${start + count}/${rows.length} · ${this.sort} ${this.descending ? "↓" : "↑"}`),
-			...searchLines, ...dataTable(ctx, width, "", columns, records, index - start),
-			...wrap([ctx.theme.fg("dim", "/ search · j/k select · Enter inspect · o/O sort · +/a reveal")], width)];
+	return [sectionHeading(ctx, width, title, `${start + 1}–${start + count}/${rows.length} · ${this.sort} ${this.descending ? "↓" : "↑"}`),
+		...searchLines, ...dataTable(ctx, width, "", columns, records, index - start),
+		...(options.showHint === false ? [] : wrap([ctx.theme.fg("dim", "/ search · j/k select · Enter inspect, o/O sort · +/a reveal")], width))];
 	}
 }
 
 export interface CoreSeries { key: string; label: string; values: readonly (number | null)[]; }
+export interface ChartRenderOptions extends TimeSeriesOptions { showHint?: boolean; }
 export class ChartState {
 	mode = 0;
 	seriesIndex = 0;
@@ -154,10 +164,11 @@ export class ChartState {
 	}
 	/** Key of the legend-selected series, for click-to-inspect actions. */
 	get selectedKey(): string | null { return this.selectedSeries; }
-	render(ctx: FeatureContext, width: number, buckets: readonly number[], series: readonly CoreSeries[], options: TimeSeriesOptions = {}): string[] {
+	render(ctx: FeatureContext, width: number, buckets: readonly number[], series: readonly CoreSeries[], options: ChartRenderOptions = {}): string[] {
 		this.reconcile(buckets, series.map(row => row.key));
+		const { showHint = true, ...chartOptions } = options;
 		return [...renderTimeSeries(ctx, buckets, series, width, this.point, {
-			...options, hidden: this.hidden, selectedKey: series[this.seriesIndex]?.key,
-		}), ...wrap([ctx.theme.fg("dim", "m mode · n legend · v visibility · ,/. point")], width)];
+			...chartOptions, hidden: this.hidden, selectedKey: series[this.seriesIndex]?.key,
+		}), ...(showHint ? wrap([ctx.theme.fg("dim", "m mode · n legend · v visibility · ,/. point")], width) : [])];
 	}
 }

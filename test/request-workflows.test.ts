@@ -240,8 +240,8 @@ test("timing-less request rows read em-dash latency, never NaN or 0ms", async ()
 	const p95Label = lines.findIndex(line => line.includes("p95 latency"));
 	expect(medianLabel).toBeGreaterThan(-1);
 	expect(p95Label).toBeGreaterThan(-1);
-	expect(lines[medianLabel + 1] ?? "").toContain("\u2014");
-	expect(lines[p95Label + 1] ?? "").toContain("\u2014");
+	expect(lines[medianLabel]).toContain("\u2014");
+	expect(lines[p95Label]).toContain("\u2014");
 	expect(text).not.toContain("NaN");
 	expect(text).not.toMatch(/0ms|0\.0s/);
 	feature.dispose();
@@ -257,4 +257,47 @@ test("a non-array 200 payload becomes a defined error state instead of throwing 
 		expect(text).toContain("l retry");
 		feature.dispose();
 	}
+});
+
+test("request rail keeps the unpriced caveat and emits one contextual cue", async () => {
+	const usage = row(1).usage;
+	const rows = [row(1, { costUnpriced: true, usage: { ...usage, cost: { ...usage.cost, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } })];
+	const feature = createRequestsFeature("requests", context(async <T>() => rows as T));
+	await feature.load("24h");
+	const text = feature.render(100, 30).join("\n");
+	expect(text).toContain("1 unpriced");
+	expect(text).toContain("> Request log");
+	expect(text.match(/Keys:/g)?.length).toBe(1);
+	expect(text).not.toContain("/ search · j/k select · Enter inspect, o/O sort · +/a reveal");
+	feature.dispose();
+});
+
+test("error panes mark only the active heading and keep one cue", async () => {
+	const failures = [row(1, { stopReason: "error", errorMessage: "first failure" })];
+	const feature = createRequestsFeature("errors", context(async <T>() => failures as T));
+	await feature.load("24h");
+	let text = feature.render(100, 30).join("\n");
+	expect(text).toContain("> Error signatures");
+	expect(text).not.toContain("> Affected models");
+	expect(text.match(/Keys:/g)?.length).toBe(1);
+	feature.handleInput("\r");
+	text = feature.render(100, 30).join("\n");
+	expect(text).toContain("  Expanded signature");
+	feature.handleInput("\t");
+	text = feature.render(100, 30).join("\n");
+	expect(text).toContain("> Affected models");
+	expect(text).not.toContain("> Error signatures");
+	expect(text.match(/Keys:/g)?.length).toBe(1);
+	feature.dispose();
+});
+
+test("request inspector marks the selected section and keeps its money caveat", async () => {
+	const inspector = new RequestDetails(context(async <T>() => payload(7) as T));
+	await inspector.open(row(7));
+	const text = inspector.render(120)!.join("\n");
+	expect(text).toContain("> Request #7");
+	expect(text).toContain("> Output message");
+	expect(text).toContain("  Billing components");
+	expect(text).toContain("unpriced requests: 0");
+	expect(text.match(/n section · v/g)?.length).toBe(1);
 });

@@ -1,5 +1,5 @@
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
-import type { DataNeed, PanelData } from "../../data/api";
+import type { DataNeed, FetchSettlement, PanelData } from "../../data/api";
 import type { Range } from "../../data/ranges";
 
 export interface StatsApiOptions {
@@ -8,7 +8,7 @@ export interface StatsApiOptions {
 }
 export interface FeatureReader {
 	api<T>(path: string, params?: Record<string, string>, options?: StatsApiOptions): Promise<T>;
-	fetch(needs: readonly DataNeed[], range: Range): Promise<PanelData>;
+	fetch(needs: readonly DataNeed[], range: Range): Promise<FetchSettlement>;
 }
 /** What a body hit does when clicked. Features own the semantics. */
 export type FeatureHitAction =

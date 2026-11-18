@@ -25,6 +25,7 @@ import { expect, test } from "bun:test";
 import { SCREENS } from "../src/tui/screens/types";
 import { __testing, SELECTABLE_SCREENS } from "../src/tui/panel";
 import { NAV_GROUPS, screenForHotkey, sidebar } from "../src/tui/chrome";
+import { budgetFrame } from "../src/tui/frame";
 import { hitTest } from "../src/tui/mouse";
 import type { ScreenId } from "../src/tui/screens/types";
 import { ensureThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
@@ -40,14 +41,14 @@ import { liveData } from "./fixtures/panel";
 const ANSI = /\x1b\[[0-9;]*m/g;
 const strip = (s: string): string => s.replace(ANSI, "");
 
-/** The nav column of one frame row: exactly NAV_WIDTH cells after the leading `│ `. */
+/** The nav column of one frame row: exactly NAV_WIDTH cells after the leading `│ `.
+ * Slicing a FIXED width rather than searching for the next `│` matters: a body row with no
+ * gutter of its own makes the next `│` a hundred cells away, which reads as a
+ * changed nav column when nothing about the nav moved. */
 function navColumn(row: string): string | null {
 	const plain = strip(row);
 	if (!plain.startsWith("│ ")) return null;
-	// The topbar shares the frame's left edge but is not nav, and counting it
-	// pushes the LAST nav row out of the comparison — which is exactly the row
-	// this test exists to catch. Excluded by content, not by index.
-	return plain.includes("omp/stats") ? null : plain.slice(2, 2 + NAV_WIDTH);
+	return plain.slice(2, 2 + NAV_WIDTH);
 }
 
 /** The nav's own height, from NAV_GROUPS: one heading row per group, plus its screens. */
@@ -58,8 +59,13 @@ const NAV_LINES = NAV_GROUPS.reduce((n, g) => n + 1 + g.items.length, 0);
 async function sidebarColumn(screenId: ScreenId, width: number, rows: number): Promise<readonly string[]> {
 	const panel = __testing.makePanel({ data: liveData(), screenId, rows });
 	await __testing.settled(panel);
+	// Top border + the one toolbar row are chrome, not nav. The old filter
+	// looked for the wordmark, which the single-toolbar shell no longer paints;
+	// using the frame budget keeps the nav window aligned with what is drawn.
+	const chromeRows = 1 + budgetFrame(width, rows, 1, theme.getSymbolPreset()).topbarRows;
 	return panel
 		.render(width)
+		.slice(chromeRows)
 		.map(navColumn)
 		.filter((c): c is string => c !== null)
 		.slice(0, NAV_LINES);

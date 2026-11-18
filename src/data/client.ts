@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 declare const __STATS_READ_WORKER__: string;
 import { spawnStatsWorker, type StatsWorkerProcess } from "../workers/process";
-import type { DataNeed, PanelData } from "./api";
+import type { DataNeed, FetchSettlement } from "./api";
 import type { DataWorkerRequest, DataWorkerResponse, ReadStage } from "./protocol";
 import type { Range } from "./ranges";
 import type { StatsApiOptions } from "../tui/features/types";
@@ -32,8 +32,8 @@ export class StatsReadClient {
 		this.#spawn = spawn;
 	}
 
-	fetch(needs: readonly DataNeed[], range: Range, stage?: (stage: ReadStage) => void): Promise<PanelData> {
-		return this.#request({ type: "fetch", needs, range }, stage) as Promise<PanelData>;
+	fetch(needs: readonly DataNeed[], range: Range, stage?: (stage: ReadStage) => void): Promise<FetchSettlement> {
+		return this.#request({ type: "fetch", needs, range }, stage) as Promise<FetchSettlement>;
 	}
 
 	api<T>(path: string, params: Record<string, string> = {}, options: StatsApiOptions = {}): Promise<T> {
@@ -55,9 +55,12 @@ export class StatsReadClient {
 	#request(input: RequestInput, stage?: (stage: ReadStage) => void): Promise<unknown> {
 		if (this.#closed) return Promise.reject(new Error("Stats panel closed"));
 		try {
-			if (!this.#child) {
-				const child = this.#spawn();
+			let child = this.#child;
+			if (!child) {
+				child = this.#spawn();
 				this.#child = child;
+				this.#live = undefined;
+				this.#serviceError = undefined;
 				this.#stderr = "";
 				this.#malformedLines = 0;
 				this.#writeError = undefined;
@@ -66,7 +69,7 @@ export class StatsReadClient {
 			const id = ++this.#sequence;
 			const result = Promise.withResolvers<unknown>();
 			this.#pending.set(id, { resolve: result.resolve, reject: result.reject, stage });
-			void this.#write(this.#child, { ...input, id });
+			void this.#write(child, { ...input, id });
 			return result.promise;
 		} catch (error) {
 			return Promise.reject(error);

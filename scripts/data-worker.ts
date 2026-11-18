@@ -55,10 +55,11 @@ async function scanPendingSessions(): Promise<void> {
 	for (let start = 0; start < files.length; start += 128) {
 		const batch = files.slice(start, start + 128);
 		const cursors = getFileOffsets(batch);
-		const stats = await Promise.all(batch.map(file => stat(file)));
+		const stats = await Promise.all(batch.map(file => stat(file).catch(() => null)));
 		for (let index = 0; index < batch.length; index++) {
 			const cursor = cursors.get(batch[index]);
-			if (!cursor || cursor.parserState?.size !== stats[index].size || cursor.lastModified !== stats[index].mtimeMs) pending++;
+			const info = stats[index];
+			if (!info || !cursor || cursor.parserState?.size !== info.size || cursor.lastModified !== info.mtimeMs) pending++;
 		}
 	}
 	pendingSessions = pending;
@@ -83,17 +84,24 @@ live.subscribe(status => {
 	});
 	maybeScanPendingSessions();
 });
-let initialized = false;
-for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
-	const request = JSON.parse(line) as DataWorkerRequest;
+let initialization: Promise<void> | undefined;
+/** Concurrent requests share one init: only the first one owns the stage message. */
+function ensureInitialized(id: number): Promise<void> {
+	initialization ??= (async () => {
+		await emit({ id, stage: "initializing" });
+		await initDb();
+		await mkdir(getSessionsDir(), { recursive: true });
+		live.start();
+	})().catch(error => {
+		initialization = undefined;
+		throw error;
+	});
+	return initialization;
+}
+
+async function handleRequest(request: DataWorkerRequest): Promise<void> {
 	try {
-		if (!initialized) {
-			await emit({ id: request.id, stage: "initializing" });
-			await initDb();
-			await mkdir(getSessionsDir(), { recursive: true });
-			live.start();
-			initialized = true;
-		}
+		await ensureInitialized(request.id);
 		await emit({ id: request.id, stage: "reading" });
 		let data: unknown;
 		if (request.type === "fetch") {
@@ -104,21 +112,22 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
 			payload.freshness = { records: getMessageCount(), pendingSessions, observedAt: pendingSessionsScannedAt };
 			await emit({ id: request.id, data: payload });
 			maybeScanPendingSessions();
-			continue;
-		} else if (request.type === "sync") {
+			return;
+		}
+		if (request.type === "sync") {
 			live.requestSync();
 			data = live.status();
 		} else {
 			const url = new URL(request.path, "http://localhost");
 			if (url.pathname === "/api/status") {
 				await emit({ id: request.id, data: live.status() });
-				continue;
+				return;
 			}
 			if (url.pathname === "/api/sync") {
 				if (request.method !== "POST") throw new Error("POST required");
 				live.requestSync();
 				await emit({ id: request.id, data: live.status() });
-				continue;
+				return;
 			}
 			for (const [key, value] of Object.entries(request.params)) url.searchParams.set(key, value);
 			// `url.toString()`, not the `URL`: with `lib: ESNext` (no DOM) Bun's
@@ -133,6 +142,17 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
 		await emit({ id: request.id, error: error instanceof Error ? error.message : String(error) });
 	}
 }
+
+const handlers = new Set<Promise<void>>();
+for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+	const request = JSON.parse(line) as DataWorkerRequest;
+	// Each request gets its own handler: a delayed API reply must not stall a
+	// later fetch or status, but EOF still drains every outstanding reply.
+	const handler = handleRequest(request).catch(error => { console.error(error); });
+	handlers.add(handler);
+	void handler.then(() => { handlers.delete(handler); });
+}
+await Promise.all(handlers);
 live.stop();
 await pendingOutput;
 process.exit(0);

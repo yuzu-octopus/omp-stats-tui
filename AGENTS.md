@@ -200,7 +200,7 @@ Supporting source worth knowing:
 
 ## Testing & QA
 
-**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **705 pass / 0 fail across 45 files** (the live number; update it in the same commit as any suite change). Full TypeScript checking passes (`bun run check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
+**Runner: `bun test`.** Test consumer-visible behaviour, boundaries and transitions; avoid source-text, forwarding and incidental implementation snapshots. Real subprocess tests must reap their children. Current state: **735 pass / 0 fail across 46 files** (the live number; update it in the same commit as any suite change). Full TypeScript checking passes (`bun run check`, exit 0); do not repeat the roadmap's old 19 diagnostics as current.
 
 **Unit-testable:**
 

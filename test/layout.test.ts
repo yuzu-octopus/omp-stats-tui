@@ -5,9 +5,9 @@ import {
 	WIDTH_FIELDS,
 	COLUMN_PARTITION_FIELDS,
 } from "../src/tui/layout";
+import { budgetFrame } from "../src/tui/frame";
 import { PANEL_CHROME_ROWS } from "../src/tui/panel-constants";
 import type { SymbolPreset } from "../src/tui/glyphs";
-
 const PRESETS: SymbolPreset[] = ["unicode", "nerd", "ascii"];
 
 /** Every width a plan could plausibly be asked for, boundary-heavy. */
@@ -28,7 +28,7 @@ test("THE WIDTH INVARIANT: nothing is ever allocated past the terminal edge", ()
 	// would double-count and prove nothing.
 	for (const preset of PRESETS) {
 		for (const width of sweep(10, 400)) {
-			const p = planLayout(width, 24, preset);
+			const p = planLayout(width, 24, preset, budgetFrame(width, 24, 1, preset).bodyRows);
 			const where = `${preset} w=${width}`;
 
 			expect(p.innerWidth, where).toBeLessThanOrEqual(p.width);
@@ -46,7 +46,7 @@ test("THE WIDTH INVARIANT: nothing is ever allocated past the terminal edge", ()
 test("every returned width is a non-negative integer at every width", () => {
 	for (const preset of PRESETS) {
 		for (const width of sweep(10, 400)) {
-			const p = planLayout(width, 24, preset);
+			const p = planLayout(width, 24, preset, budgetFrame(width, 24, 1, preset).bodyRows);
 			for (const key of WIDTH_FIELDS) {
 				expect(Number.isInteger(p[key]), `${preset} w=${width} ${key}`).toBe(true);
 				expect(p[key], `${preset} w=${width} ${key}`).toBeGreaterThanOrEqual(0);
@@ -58,7 +58,7 @@ test("every returned width is a non-negative integer at every width", () => {
 test("a sub-terminal width is legal: at least one column of content survives", () => {
 	for (const preset of PRESETS) {
 		for (const width of [1, 2, 5, 9, 10, 19]) {
-			const p = planLayout(width, 24, preset);
+			const p = planLayout(width, 24, preset, budgetFrame(width, 24, 1, preset).bodyRows);
 			expect(p.tooNarrow, `${preset} w=${width}`).toBe(true);
 			expect(p.columns, `${preset} w=${width}`).toBe(1);
 			expect(p.innerWidth, `${preset} w=${width}`).toBeGreaterThanOrEqual(0);
@@ -76,7 +76,7 @@ test("each breakpoint row produces its documented decisions, walked from the tab
 	// case per threshold, which stops being maintained at the fifth.
 	for (const row of BREAKPOINTS) {
 		const width = row.minInnerWidth + 4; // +4 undoes the overlay panel's insets
-		const p = planLayout(width, 40, "unicode");
+		const p = planLayout(width, 40, "unicode", budgetFrame(width, 40, 1, "unicode").bodyRows);
 		expect(p.columns, `${row.name} columns`).toBe(row.columns);
 		expect(p.compact, `${row.name} compact`).toBe(row.compact);
 		expect(p.showFooterHints, `${row.name} footer hints`).toBe(row.showFooterHints);
@@ -98,8 +98,8 @@ test("the breakpoint table is ordered so the first matching row wins, and covers
 test("dropped regions and the reason for them are both visible to a caller", () => {
 	// "Degrade, never tear": a caller must be able to say what it lost and why,
 	// not discover it by measuring a truncated string.
-	const wide = planLayout(200, 40, "unicode");
-	const narrow = planLayout(40, 24, "unicode");
+	const wide = planLayout(200, 40, "unicode", budgetFrame(200, 40, 1, "unicode").bodyRows);
+	const narrow = planLayout(40, 24, "unicode", budgetFrame(40, 24, 1, "unicode").bodyRows);
 	expect(wide.dropped).toEqual([]);
 	expect(narrow.dropped.length).toBeGreaterThan(0);
 	for (const drop of narrow.dropped) {
@@ -116,7 +116,7 @@ test("widening the terminal only ever restores things, never takes them away", (
 	let previousDropped = Number.POSITIVE_INFINITY;
 	let previousColumns = 0;
 	for (const width of sweep(20, 300)) {
-		const p = planLayout(width, 30, "unicode");
+		const p = planLayout(width, 30, "unicode", budgetFrame(width, 30, 1, "unicode").bodyRows);
 		expect(p.dropped.length, `w=${width}`).toBeLessThanOrEqual(previousDropped);
 		previousDropped = p.dropped.length;
 		expect(p.columns, `w=${width}`).toBeGreaterThanOrEqual(previousColumns);
@@ -127,7 +127,7 @@ test("widening the terminal only ever restores things, never takes them away", (
 });
 
 test("a wide terminal gets two columns and a full-height bar chart", () => {
-	const p = planLayout(200, 50, "unicode");
+	const p = planLayout(200, 50, "unicode", budgetFrame(200, 50, 1, "unicode").bodyRows);
 	expect(p.columns).toBe(2);
 	expect(p.compact).toBe(false);
 	expect(p.barHeight).toBeGreaterThanOrEqual(12);
@@ -135,11 +135,11 @@ test("a wide terminal gets two columns and a full-height bar chart", () => {
 });
 
 test("an 80-column terminal drops to one column", () => {
-	expect(planLayout(80, 24, "unicode").columns).toBe(1);
+	expect(planLayout(80, 24, "unicode", budgetFrame(80, 24, 1, "unicode").bodyRows).columns).toBe(1);
 });
 
 test("a 40-column terminal is still a valid plan with every width at least one", () => {
-	const p = planLayout(40, 24, "unicode");
+	const p = planLayout(40, 24, "unicode", budgetFrame(40, 24, 1, "unicode").bodyRows);
 	for (const key of ["innerWidth", "labelWidth", "valueWidth", "barWidth", "sparkWidth"] as const) {
 		expect(p[key], key).toBeGreaterThanOrEqual(1);
 	}
@@ -147,7 +147,7 @@ test("a 40-column terminal is still a valid plan with every width at least one",
 });
 
 test("a 20x10 terminal degrades rather than returning negatives", () => {
-	const p = planLayout(20, 10, "unicode");
+	const p = planLayout(20, 10, "unicode", budgetFrame(20, 10, 1, "unicode").bodyRows);
 	for (const key of ["innerWidth", "labelWidth", "valueWidth", "barWidth", "sparkWidth"] as const) {
 		expect(p[key], key).toBeGreaterThanOrEqual(1);
 	}
@@ -157,7 +157,7 @@ test("a 20x10 terminal degrades rather than returning negatives", () => {
 
 test("body rows clamp to the terminal and the overflow is reported, not hidden", () => {
 	for (const rows of [10, 24, 40, 100]) {
-		const p = planLayout(120, rows, "unicode");
+		const p = planLayout(120, rows, "unicode", budgetFrame(120, rows, 1, "unicode").bodyRows);
 		expect(p.bodyRows).toBeLessThanOrEqual(rows);
 		expect(p.requestedRows).toBe(rows);
 		// Comfortably tall: nothing is missing.
@@ -166,17 +166,17 @@ test("body rows clamp to the terminal and the overflow is reported, not hidden",
 	// A terminal too short for its own chrome plus a one-row body still yields a
 	// usable body, and says how much was lost rather than rendering a sliver.
 	for (const rows of [1, 3, 5, 6]) {
-		const p = planLayout(120, rows, "unicode");
+		const p = planLayout(120, rows, "unicode", budgetFrame(120, rows, 1, "unicode").bodyRows);
 		expect(p.bodyRows, `rows=${rows}`).toBe(1);
 		expect(p.overflowRows, `rows=${rows}`).toBe(PANEL_CHROME_ROWS + 1 - rows);
 	}
 	// PANEL_CHROME_ROWS + 1 is exactly the shortest renderable panel.
-	expect(planLayout(120, PANEL_CHROME_ROWS + 1, "unicode").overflowRows).toBe(0);
+	expect(planLayout(120, PANEL_CHROME_ROWS + 1, "unicode", budgetFrame(120, PANEL_CHROME_ROWS + 1, 1, "unicode").bodyRows).overflowRows).toBe(0);
 });
 
 test("a bar chart taller than the body is clamped to the body and flagged", () => {
-	const roomy = planLayout(200, 50, "unicode");
-	const cramped = planLayout(200, 12, "unicode");
+	const roomy = planLayout(200, 50, "unicode", budgetFrame(200, 50, 1, "unicode").bodyRows);
+	const cramped = planLayout(200, 12, "unicode", budgetFrame(200, 12, 1, "unicode").bodyRows);
 	expect(roomy.barHeight).toBeGreaterThan(cramped.barHeight);
 	expect(cramped.barHeight).toBeLessThanOrEqual(cramped.bodyRows);
 	expect(cramped.dropped.map(d => d.region)).toContain("barHeight");
@@ -185,9 +185,9 @@ test("a bar chart taller than the body is clamped to the body and flagged", () =
 test("the ascii preset does not change the layout's geometry, only its glyphs", () => {
 	for (const width of [20, 40, 80, 120, 200]) {
 		for (const rows of [10, 24, 40]) {
-			const u = planLayout(width, rows, "unicode");
-			const a = planLayout(width, rows, "ascii");
-			const n = planLayout(width, rows, "nerd");
+			const u = planLayout(width, rows, "unicode", budgetFrame(width, rows, 1, "unicode").bodyRows);
+			const a = planLayout(width, rows, "ascii", budgetFrame(width, rows, 1, "ascii").bodyRows);
+			const n = planLayout(width, rows, "nerd", budgetFrame(width, rows, 1, "nerd").bodyRows);
 			expect(a).toEqual(u);
 			expect(n).toEqual(u);
 		}
@@ -195,23 +195,23 @@ test("the ascii preset does not change the layout's geometry, only its glyphs", 
 });
 
 test("the heatmap week count is driven by inner width, clamped to 53", () => {
-	expect(planLayout(200, 40, "unicode").heatWeeks).toBeLessThanOrEqual(53);
-	expect(planLayout(60, 24, "unicode").heatWeeks).toBeLessThan(
-		planLayout(200, 40, "unicode").heatWeeks,
+	expect(planLayout(200, 40, "unicode", budgetFrame(200, 40, 1, "unicode").bodyRows).heatWeeks).toBeLessThanOrEqual(53);
+	expect(planLayout(60, 24, "unicode", budgetFrame(60, 24, 1, "unicode").bodyRows).heatWeeks).toBeLessThan(
+		planLayout(200, 40, "unicode", budgetFrame(200, 40, 1, "unicode").bodyRows).heatWeeks,
 	);
-	expect(planLayout(10, 24, "unicode").heatWeeks).toBeGreaterThanOrEqual(4);
+	expect(planLayout(10, 24, "unicode", budgetFrame(10, 24, 1, "unicode").bodyRows).heatWeeks).toBeGreaterThanOrEqual(4);
 });
 
 test("footer hints are suppressed when there is nothing to scroll", () => {
-	expect(planLayout(200, 50, "unicode").showFooterHints).toBe(true);
-	expect(planLayout(30, 24, "unicode").showFooterHints).toBe(false);
+	expect(planLayout(200, 50, "unicode", budgetFrame(200, 50, 1, "unicode").bodyRows).showFooterHints).toBe(true);
+	expect(planLayout(30, 24, "unicode", budgetFrame(30, 24, 1, "unicode").bodyRows).showFooterHints).toBe(false);
 });
 
 test("heatWeeks and sparkWidth are monotone non-decreasing in width", () => {
 	let weeks = 0;
 	let spark = 0;
 	for (const width of sweep(20, 300)) {
-		const p = planLayout(width, 30, "unicode");
+		const p = planLayout(width, 30, "unicode", budgetFrame(width, 30, 1, "unicode").bodyRows);
 		expect(p.heatWeeks, `w=${width}`).toBeGreaterThanOrEqual(weeks);
 		weeks = p.heatWeeks;
 		expect(p.sparkWidth, `w=${width}`).toBeLessThanOrEqual(p.innerWidth + 1);

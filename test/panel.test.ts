@@ -10,14 +10,13 @@ import {
 } from "../src/tui/panel";
 import type { LiveStatus } from "@oh-my-pi/omp-stats/shared-types";
 import type { PanelAction, PanelReads, PanelTestState, StatsPanel } from "../src/tui/panel";
-import { DATA_NEEDS, type DataNeed, type PanelData } from "../src/data/api";
+import { DATA_NEEDS, type DataNeed, type FetchSettlement, type PanelData } from "../src/data/api";
 import { DEFAULT_RANGE, RANGES, nextRange, rangeLabel } from "../src/data/ranges";
 import { SCREENS } from "../src/tui/screens/types";
 import { SELECTABLE_SCREENS } from "../src/tui/panel";
 import type { ScreenId } from "../src/tui/screens/types";
 import { glyphsFor } from "../src/tui/glyphs";
 import type { Range } from "../src/data/ranges";
-import { TAB_SHORT } from "../src/tui/tabs";
 import { SIDE_INSET } from "../src/tui/layout";
 import { liveData } from "./fixtures/panel";
 import { rangeMeta } from "@oh-my-pi/omp-stats/client/data/range";
@@ -172,10 +171,10 @@ function dataFor(over: Partial<PanelData> = {}): PanelData {
 
 /** Records what the panel asked for, and answers with real-shaped data. */
 function spyFetch(asked: Range[], needsLog: DataNeed[][] = []) {
-	return async (needs: readonly DataNeed[], range: Range): Promise<PanelData> => {
+	return async (needs: readonly DataNeed[], range: Range): Promise<FetchSettlement> => {
 		asked.push(range);
 		needsLog.push([...needs]);
-		return dataFor();
+		return { data: dataFor(), errors: {} };
 	};
 }
 
@@ -184,12 +183,13 @@ function spyFetch(asked: Range[], needsLog: DataNeed[][] = []) {
  * `SummaryFeature` asks for, plus the `rollupStatus` the panel always asks for.
  */
 function stubReader(over: Partial<PanelData> = {}): PanelReads {
+	const data: PanelData = {
+		overview: { overall: overall(), byAgentType: [], timeSeries: [] },
+		rollupStatus: { dirtyHours: 0, dirtySessions: 0 },
+		...over,
+	};
 	return {
-		fetch: async () => ({
-			overview: { overall: overall(), byAgentType: [], timeSeries: [] },
-			rollupStatus: { dirtyHours: 0, dirtySessions: 0 },
-			...over,
-		}),
+		fetch: async () => ({ data, errors: {} }),
 		api: async <T>() => [] as unknown as T,
 		subscribe: () => () => {},
 		requestSync: async () => {
@@ -409,17 +409,23 @@ test("the arrows are THE screen switch; `tab` is the alias and `r`/`R` keeps the
  * chrome (topbar + sidebar) is present, exactly one divider separates body
  * from footer, the footer shows the real hints, and NO row exceeds the width.
  */
-test("the composed frame at width 100: topbar + sidebar, body, divider, footer, all within width", async () => {
+test("the composed frame at width 100: toolbar + sidebar, body, divider, footer, all within width", async () => {
 	const width = 100;
 	const panel = __testing.makePanel({ data: dataFor(), range: "30d", rows: 40, now: () => FIXTURE_NOW });
 	await __testing.settled(panel);
 	const plain = panel.render(width).map(stripAnsi);
 
 	expect(plain.length, `the frame must fill the terminal`).toBe(40);
-	// The topbar: brand + range segment (Shell.tsx), and the sidebar column
-	// beside the body carrying the active screen.
-	expect(plain[1]).toContain("omp/stats");
+	// The toolbar carries the one authoritative screen label; the border says
+	// only `Stats`, and the sidebar column still carries the active screen.
+	expect(plain[0]).toContain("Stats");
+	expect(plain[1]).toContain("Overview");
+	expect(plain[1]).not.toContain("omp/stats");
 	expect(plain.some(row => /Overview/.test(row) && /G O/.test(row))).toBe(true);
+	const frame = __testing.debugFrame(panel)!;
+	expect(frame.topbarRows).toBe(1);
+	expect(frame.stripRows).toBe(0);
+	expect(frame.bodyRows).toBe(35);
 	for (const row of plain) {
 		expect(Bun.stringWidth(row), `width=${width} row=${JSON.stringify(row.slice(0, 60))}`).toBeLessThanOrEqual(width);
 	}
@@ -441,13 +447,11 @@ test("the composed frame at width 100: topbar + sidebar, body, divider, footer, 
 	expect(footer).toContain("screens");
 	expect(footer).toContain("range");
 	expect(footer).toContain("close");
-	// The TITLE names the page (`Stats · <screen>`), and the RANGE lives only in
-	// the topbar's segmented control. The old contract had the title carrying
-	// the range while the topbar one row below carried both the wordmark and
-	// the range's active pill — the window was named twice and the page not at
-	// all.
-	expect(plain[0]).toContain("Overview");
+	// The border names only the window. The range and the route both live in
+	// the toolbar, once each: the label is not repeated in the title or a strip.
+	expect(plain[0]).not.toContain("Overview");
 	expect(plain[0]).not.toContain("30 days");
+	expect(plain[1]).toContain("Overview");
 	expect(plain[1]).toContain("30d");
 });
 
@@ -499,19 +503,22 @@ test("scroll position tracks the visible window and resize while preserving clos
 	}
 });
 
-test("the composed frame at width 60: the nav becomes the strip row and everything still fits", async () => {
+test("the composed frame at width 60: the toolbar owns the route and the body keeps its rows", async () => {
 	const width = 60;
 	const panel = __testing.makePanel({ data: dataFor(), range: "30d", rows: 40, screenId: "costs", now: () => FIXTURE_NOW });
 	await __testing.settled(panel);
 	const plain = panel.render(width).map(stripAnsi);
 
 	expect(plain.length).toBe(40);
-	// Below the sidebar's width the nav is the strip row, and `TabBar` collapses
-	// it to the one-cell `TAB_SHORT` forms — the icon rail the web keeps beside
-	// its panel at the same breakpoint, without costing a column of width.
-	expect(plain[1]).toContain("omp/stats");
-	expect(plain[2]).toContain("Costs");
-	expect(plain[2]).toContain(TAB_SHORT.unicode.models);
+	// Below the sidebar's width the bracketed label IS the nav. There is no
+	// strip row: the route widget and the controls share the one toolbar row.
+	expect(plain[1].replace(/^[^<]*/, "").startsWith("< Costs >")).toBe(true);
+	const frame = __testing.debugFrame(panel)!;
+	expect(frame.topbarRows).toBe(1);
+	expect(frame.stripRows).toBe(0);
+	expect(frame.bodyRows).toBe(35);
+	expect(frame.sidebarRows).toBe(0);
+	expect(frame.routeSpans.map(span => span.part)).toEqual(["prev", "label", "next"]);
 	for (const row of plain) {
 		expect(Bun.stringWidth(row), `width=${width} row=${JSON.stringify(row.slice(0, 60))}`).toBeLessThanOrEqual(width);
 	}
@@ -632,8 +639,8 @@ test("scrolling the body does not move the sidebar's hit rows either", async () 
 	// the router still resolves rows against the scrolled list, a click lands on
 	// the wrong screen. `mouse.ts` derives nav rows from `NAV_GROUPS`, so this
 	// holds only while the painted column does too.
-	// rows 24, not something smaller: `MIN_SIDEBAR_ROWS` is 20, so a shorter
-	// terminal hides the nav column entirely and this test would be vacuous.
+	// Rows 24 leave the full nav inside the body budget (15 rows); the nav is
+	// chosen by WIDTH alone now, so this test cannot go vacuous on a short frame.
 	// `#selectScreen` also resets scroll to 0, so this scrolls FIRST and clicks
 	// second, which is the order the bug appeared in.
 	const panel = makePanel({ data: dataFor(), rows: 24, screenId: "costs" });
@@ -794,14 +801,61 @@ test("above EXACT_DIRTY_LIMIT the header escalates: past it the host stops union
 	expect(EXACT_DIRTY_LIMIT).toBe(96);
 });
 
-test("the active range is named by the topbar control, not by the title", async () => {
+test("a failed rollupStatus beside settled data stays a notice, not an error screen", async () => {
+	const partial = dataFor();
+	const panel = makePanel({
+		reads: readsWith(async () => ({
+			data: partial,
+			errors: { rollupStatus: "rollup status: database is not initialised" },
+		})),
+	});
+	await __testing.settled(panel);
+	const state = __testing.debugState(panel);
+	expect(state.error).toBeNull();
+	expect(state.readError).toContain("rollupStatus");
+	expect(__testing.debugPhase(panel)).toBe("ready");
+	expect(state.data?.overview).toEqual(partial.overview);
+	const body = __testing.debugBody(panel).join("\n");
+	expect(body).toContain("Read failed; retained cached data.");
+	expect(body).toContain("rollup status: database is not initialised");
+	expect(body).toContain("Uncached input");
+});
+
+test("a rollupStatus-only settlement failure is still a whole-screen error", async () => {
+	const panel = makePanel({
+		reads: readsWith(async () => ({
+			data: {},
+			errors: { rollupStatus: "rollup status: database is not initialised" },
+		})),
+	});
+	await __testing.settled(panel);
+	expect(__testing.debugState(panel).error).toContain("rollup status: database is not initialised");
+	expect(__testing.debugPhase(panel)).toBe("error");
+	expect(__testing.debugBody(panel).join("\n")).toContain("database is not initialised");
+});
+
+test("dirty hours and pending transcripts survive the settlement into the frame", async () => {
+	const data = liveData({
+		rollupStatus: { dirtyHours: 3, dirtySessions: 1 },
+		freshness: { records: 120, pendingSessions: 2, observedAt: FIXTURE_NOW },
+	});
+	const panel = makePanel({ reads: readsWith(async () => ({ data, errors: {} })) });
+	await __testing.settled(panel);
+	expect(__testing.debugHeader(panel)).toContain("3 dirty hours");
+	const body = stripAnsi(__testing.debugState(panel).source.join("\n"));
+	expect(body).toContain("2 transcript files have un-ingested changes. Press s to sync.");
+});
+
+test("the active range and route are named by the toolbar, not by the border", async () => {
 	// The window is never ambiguous, but it is named ONCE and by the control
 	// that changes it: the segmented range control's active pill, which
-	// survives every topbar mode down to `minimal` (`brand + active range`).
+	// survives every topbar mode down to `minimal`.
 	const panel = makePanel({ data: dataFor(), range: "7d" });
 	await __testing.settled(panel);
 	const topbar = stripAnsi(panel.render(120)[1]!);
 	expect(topbar).toContain(rangeMeta("7d").label);
+	expect(topbar).toContain("Overview");
+	expect(__testing.debugTitle(panel)).toBe("Stats");
 	expect(__testing.debugTitle(panel)).not.toContain(rangeLabel("7d"));
 });
 
@@ -909,6 +963,27 @@ test("home and end reach the two ends and stop there", async () => {
 	expect(__testing.debugScroll(panel)).toBe(__testing.debugMaxScroll(panel));
 	panel.handleInput(HOME);
 	panel.render(120);
+	expect(__testing.debugScroll(panel)).toBe(0);
+});
+
+test("PGDN and PGUP move by the visible body rows, not the whole document", async () => {
+	// Eight rows leave a 3-row viewport against the 10-row request body, so two
+	// page steps cannot reach the end: the old `maxScroll`-as-page-size bug
+	// would land at the bottom on the first press.
+	const panel = makePanel({ data: liveData(), rows: 8, screenId: "requests" });
+	await __testing.settled(panel);
+	panel.render(120);
+	const state = __testing.debugState(panel);
+	const page = state.viewportRows;
+	expect(page).toBeGreaterThan(1);
+	expect(state.maxScroll).toBeGreaterThan(page * 2);
+	panel.handleInput(PGDN);
+	expect(__testing.debugScroll(panel)).toBe(page);
+	panel.handleInput(PGDN);
+	expect(__testing.debugScroll(panel)).toBe(Math.min(page * 2, state.maxScroll));
+	panel.handleInput(PGUP);
+	expect(__testing.debugScroll(panel)).toBe(Math.min(page, state.maxScroll));
+	panel.handleInput(PGUP);
 	expect(__testing.debugScroll(panel)).toBe(0);
 });
 
@@ -1039,7 +1114,7 @@ test("a bare minute tick does not recompose, but the chrome's relative time stil
 });
 
 
-test("a 20-row frame stays 20 rows when the sync progress line appears", async () => {
+test("compact sync detail stays inside the one toolbar row and keeps the body fixed", async () => {
 	let status: ((value: LiveStatus) => void) | undefined;
 	const reads: PanelReads = {
 		...stubReader(),
@@ -1048,14 +1123,20 @@ test("a 20-row frame stays 20 rows when the sync progress line appears", async (
 	const panel = __testing.makePanel({ reads, rows: 20, now: () => FIXTURE_NOW });
 	await __testing.settled(panel);
 	// Idle, the sidebar fits exactly at the 20-row boundary.
-	expect(panel.render(100).length).toBe(20);
+	const idle = panel.render(100);
+	expect(idle.length).toBe(20);
+	const before = __testing.debugFrame(panel)!;
 	status?.({
 		version: 1,
 		indexingHours: 0,
 		sync: { phase: "syncing", current: 3, total: 10, processed: 3, lastSyncedAt: null, error: null },
 	});
 	const lines = panel.render(100);
-	expect(lines.length, "the progress row must not push the bottom border off").toBe(20);
+	const during = __testing.debugFrame(panel)!;
+	expect(lines.length, "the compact progress must not push the bottom border off").toBe(20);
+	expect(during.topbarRows).toBe(1);
+	expect(during.stripRows).toBe(0);
+	expect(during.bodyRows).toBe(before.bodyRows);
 	expect(lines.join("\n")).toContain("Syncing");
 });
 
@@ -1063,7 +1144,7 @@ test("a worker error keeps the cached figures and states the retained-data warni
 	let fail: ((error: Error) => void) | undefined;
 	const reads: PanelReads = {
 		...stubReader(),
-		fetch: async () => dataFor(),
+		fetch: async () => ({ data: dataFor(), errors: {} }),
 		subscribe: (_status, error) => { fail = error; return () => {}; },
 	};
 	const panel = __testing.makePanel({ reads, rows: 24, now: () => FIXTURE_NOW });
@@ -1078,11 +1159,36 @@ test("a worker error keeps the cached figures and states the retained-data warni
 	expect(__testing.debugPhase(panel)).toBe("ready");
 });
 
+test("a healthy live status clears a previous service error", async () => {
+	let status: ((value: LiveStatus) => void) | undefined;
+	let fail: ((error: Error) => void) | undefined;
+	const reads: PanelReads = {
+		...stubReader(),
+		subscribe: (onStatus, onError) => {
+			status = onStatus;
+			fail = onError;
+			return () => {};
+		},
+	};
+	const panel = makePanel({ reads });
+	await __testing.settled(panel);
+	fail?.(new Error("worker pipe closed"));
+	expect(__testing.debugState(panel).syncError).toBe("worker pipe closed");
+	status?.({
+		version: 1,
+		indexingHours: 0,
+		sync: { phase: "idle", current: 0, total: 0, processed: 1, lastSyncedAt: FIXTURE_NOW, error: null },
+	});
+	expect(__testing.debugState(panel).syncError).toBeNull();
+	panel.render(100);
+	expect(stripAnsi(__testing.debugState(panel).source.join("\n"))).not.toContain("Stats service failed");
+});
+
 test("a click reaches a feature hit through a notice row and a scrolled body", async () => {
 	let fail: ((error: Error) => void) | undefined;
 	const data = liveData();
 	const reads: PanelReads = {
-		fetch: async () => data,
+		fetch: async () => ({ data, errors: {} }),
 		api: async <T>(path: string): Promise<T> =>
 			(path.endsWith("/recent") ? [...data.recent ?? []] : []) as unknown as T,
 		subscribe: (_status, error) => { fail = error; return () => {}; },
@@ -1106,7 +1212,7 @@ test("a click reaches a feature hit through a notice row and a scrolled body", a
 	const lines = panel.render(width);
 	const frame = __testing.debugFrame(panel)!;
 	const bodyStart = 1 + frame.topbarRows + frame.stripRows;
-	const bodyHeight = lines.length - bodyStart - 3; // divider + footer + bottom border
+	const bodyHeight = frame.bodyRows;
 	const visible = frame.bodyHits!.filter(h =>
 		h.action.type === "selectRow" &&
 		h.rowStart - frame.bodyScroll! >= 0 && h.rowStart - frame.bodyScroll! < bodyHeight);
